@@ -2,11 +2,11 @@ import streamlit as st
 import requests
 import os
 import pandas as pd
+from collections import Counter
 
 CLIENT_ID = os.environ["CLIENT_ID"]
 CLIENT_SECRET = os.environ["CLIENT_SECRET"]
 
-# --- Authentification ---
 def get_token(scope):
     url = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire"
     payload = {
@@ -20,89 +20,76 @@ def get_token(scope):
     r.raise_for_status()
     return r.json()["access_token"]
 
-SCOPE_STATS = "api_stats-offres-demandes-emploiv1 offresetdemandesemploi"
+SCOPE_OFFRES = "api_offresdemploiv2 o2dsoffre"
 
-# --- API Offres d'emploi (liste d'offres) ---
-def chercher_offres(mots_cles, departement, secteur_naf=None):
-    token = get_token("api_offresdemploiv2 o2dsoffre")
+def chercher_offres(mots_cles, departement, secteur_naf=None, range_str="0-19"):
+    token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"motsCles": mots_cles, "departement": departement, "range": "0-19"}
+    params = {"motsCles": mots_cles, "departement": departement, "range": range_str}
     if secteur_naf:
         params["secteurActivite"] = secteur_naf
     r = requests.get(url, headers=headers, params=params)
     if r.status_code not in (200, 206):
         st.error(f"Erreur API Offres {r.status_code} : {r.text}")
-        return []
-    return r.json().get("resultats", [])
+        return [], 0
+    data = r.json()
+    total = 0
+    content_range = r.headers.get("Content-Range", "")
+    if "/" in content_range:
+        try:
+            total = int(content_range.split("/")[-1])
+        except ValueError:
+            total = 0
+    return data.get("resultats", []), total
 
-# --- API Marché du travail : demandeurs d'emploi inscrits (DE_1) ---
-def stat_demandeurs(code_departement, code_rome):
-    token = get_token(SCOPE_STATS)
-    url = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi/v1/indicateur/stat-demandeurs"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json"}
-    body = {
-        "codeTypeTerritoire": "DEP",
-        "codeTerritoire": code_departement,
-        "codeTypeActivite": "ROME",
-        "codeActivite": code_rome,
-        "codeTypePeriode": "TRIMESTRE",
-        "codeTypeNomenclature": "CATCAND",
-        "dernierePeriode": True,
-        "sansCaracteristiques": True
-    }
-    r = requests.post(url, headers=headers, json=body)
-    if r.status_code not in (200, 206):
-        st.error(f"Erreur API Marché du travail {r.status_code} : {r.text}")
-        return None
-    return r.json()
+def analyser_tendances(mots_cles, departement, secteur_naf=None, max_offres=150):
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
-# --- API Marché du travail : tension du recrutement (PERSP_2) ---
-def stat_tension_recrutement(code_departement, code_rome):
-    token = get_token(SCOPE_STATS)
-    url = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi/v1/indicateur/stat-perspective-employeur"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json"}
-    body = {
-        "codeTypeTerritoire": "DEP",
-        "codeTerritoire": code_departement,
-        "codeTypeActivite": "ROME",
-        "codeActivite": code_rome,
-        "codeTypePeriode": "ANNEE",
-        "codeTypeNomenclature": "TYPE_TENSION",
-        "dernierePeriode": True
-    }
-    r = requests.post(url, headers=headers, json=body)
-    if r.status_code not in (200, 206):
-        st.error(f"Erreur API Tension recrutement {r.status_code} : {r.text}")
-        return None
-    return r.json()
+    toutes_offres = []
+    debut = 0
+    taille_page = 50
+    while debut < max_offres:
+        fin = min(debut + taille_page - 1, max_offres - 1)
+        params = {"departement": departement, "range": f"{debut}-{fin}"}
+        if mots_cles:
+            params["motsCles"] = mots_cles
+        if secteur_naf:
+            params["secteurActivite"] = secteur_naf
+        r = requests.get(url, headers=headers, params=params)
+        if r.status_code not in (200, 206):
+            if debut == 0:
+                st.error(f"Erreur API Offres {r.status_code} : {r.text}")
+                return [], Counter(), Counter()
+            break
+        data = r.json()
+        resultats = data.get("resultats", [])
+        if not resultats:
+            break
+        toutes_offres.extend(resultats)
+        debut += taille_page
+        if len(resultats) < taille_page:
+            break
 
-# --- API Marché du travail : offres enregistrées (OFF_1) ---
-def stat_offres_enregistrees(code_departement, code_rome):
-    token = get_token(SCOPE_STATS)
-    url = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi/v1/indicateur/stat-offres"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json"}
-    body = {
-        "codeTypeTerritoire": "DEP",
-        "codeTerritoire": code_departement,
-        "codeTypeActivite": "ROME",
-        "codeActivite": code_rome,
-        "codeTypePeriode": "TRIMESTRE",
-        "codeTypeNomenclature": "ORIGINEOFF",
-        "dernierePeriode": True,
-        "sansCaracteristiques": True
-    }
-    r = requests.post(url, headers=headers, json=body)
-    if r.status_code not in (200, 206):
-        st.error(f"Erreur API Offres enregistrées {r.status_code} : {r.text}")
-        return None
-    return r.json()
+    compteur_metiers = Counter()
+    compteur_secteurs = Counter()
+    for o in toutes_offres:
+        metier = o.get("romeLibelle") or o.get("appellationlibelle")
+        secteur = o.get("secteurActiviteLibelle")
+        if metier:
+            compteur_metiers[metier] += 1
+        if secteur:
+            compteur_secteurs[secteur] += 1
+
+    return toutes_offres, compteur_metiers, compteur_secteurs
 
 st.set_page_config(page_title="Aide Conseil Emploi", layout="centered")
 st.title("🎯 Aide Conseil Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
-tab1, tab2, tab3 = st.tabs(["📋 Offres d'emploi", "🔥 Tension du recrutement", "👥 Demandeurs d'emploi"])
+tab1, tab2 = st.tabs(["📋 Offres d'emploi", "📊 Tendances de recrutement"])
 
 with tab1:
     mots = st.text_input("Mots-clés", value="data")
@@ -115,11 +102,11 @@ with tab1:
 
     if st.button("Chercher des offres"):
         with st.spinner("Recherche en cours..."):
-            resultats = chercher_offres(mots, departement, secteur_naf.strip() or None)
+            resultats, total = chercher_offres(mots, departement, secteur_naf.strip() or None)
         if not resultats:
             st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
         else:
-            st.success(f"{len(resultats)} offres trouvées")
+            st.success(f"{len(resultats)} offres affichées sur {total} au total")
             for o in resultats:
                 entreprise = o.get("entreprise", {}).get("nom", "N/C")
                 lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
@@ -127,88 +114,43 @@ with tab1:
 
 with tab2:
     st.write(
-        "L'indicateur de **tension** mesure la difficulté des entreprises à recruter sur un métier : "
-        "plus la tension est élevée, plus ce métier est recherché et difficile à pourvoir pour les employeurs."
+        "Découvrez quels **métiers** et quels **secteurs** recrutent le plus actuellement, "
+        "en analysant les offres réellement publiées sur le territoire choisi."
     )
-    code_rome_t = st.text_input(
-        "Code ROME du métier (ex: M1805 = Études et développement informatique)",
-        value="M1805", key="rome_tension"
-    )
-    departement_t = st.text_input("Département (ex: 13)", value="13", key="dep_tension")
+    mots_t = st.text_input("Mots-clés (optionnel, laissez vide pour tout voir)", value="", key="mots_tendance")
+    departement_t = st.text_input("Département (ex: 13)", value="13", key="dep_tendance")
+    secteur_t = st.text_input("Secteur NAF, optionnel (2 chiffres)", value="", key="secteur_tendance")
 
-    if st.button("Voir la tension du recrutement"):
-        with st.spinner("Récupération des statistiques..."):
-            data_tension = stat_tension_recrutement(departement_t, code_rome_t)
-            data_offres = stat_offres_enregistrees(departement_t, code_rome_t)
+    if st.button("Analyser les tendances de recrutement"):
+        with st.spinner("Analyse des offres en cours (peut prendre quelques secondes)..."):
+            offres, compteur_metiers, compteur_secteurs = analyser_tendances(
+                mots_t.strip(), departement_t, secteur_t.strip() or None
+            )
 
-        if data_tension:
-            valeurs = data_tension.get("listeValeursParPeriode", [])
-            if not valeurs:
-                st.warning("Aucune donnée de tension disponible pour ce métier/département.")
-            else:
-                libelle_metier = valeurs[0].get("libActivite", code_rome_t)
-                libelle_territoire = valeurs[0].get("libTerritoire", departement_t)
-                libelle_periode = valeurs[0].get("libPeriode", "")
-                st.subheader(f"📍 {libelle_metier}")
-                st.caption(f"{libelle_territoire} — {libelle_periode}")
+        if not offres:
+            st.warning("Aucune offre trouvée pour ces critères.")
+        else:
+            st.success(f"{len(offres)} offres analysées")
 
-                for v in valeurs:
-                    lib_nomenclature = v.get("libNomenclature", "")
-                    nombre = v.get("valeurPrincipaleNombre")
-                    taux = v.get("valeurPrincipaleTaux")
-                    st.metric(lib_nomenclature, nombre if nombre is not None else taux)
-
-        if data_offres:
-            valeurs_o = data_offres.get("listeValeursParPeriode", [])
-            total_offres = next((v for v in valeurs_o if v.get("codeNomenclature") == "ENSEMBLE"), None)
-            if total_offres:
-                st.markdown("---")
-                st.metric(
-                    "Offres enregistrées sur la période",
-                    f"{total_offres['valeurPrincipaleNombre']:,}".replace(",", " ")
+            st.markdown("### 🧑‍💼 Métiers les plus recherchés")
+            if compteur_metiers:
+                df_metiers = pd.DataFrame(
+                    compteur_metiers.most_common(10), columns=["Métier", "Nombre d'offres"]
                 )
-            elif valeurs_o:
-                st.markdown("---")
-                st.markdown("**Détail des offres par origine**")
-                lignes_o = [{
-                    "Origine": v.get("libNomenclature", ""),
-                    "Nombre d'offres": v.get("valeurPrincipaleNombre", 0)
-                } for v in valeurs_o]
-                st.dataframe(pd.DataFrame(lignes_o), hide_index=True, use_container_width=True)
-
-with tab3:
-    st.write("Consultez le nombre de demandeurs d'emploi inscrits pour un métier (code ROME) et un département.")
-    code_rome = st.text_input(
-        "Code ROME du métier (ex: M1805 = Études et développement informatique)",
-        value="M1805", key="rome_de"
-    )
-    departement2 = st.text_input("Département (ex: 13)", value="13", key="dep_de")
-
-    if st.button("Voir les demandeurs d'emploi"):
-        with st.spinner("Récupération des statistiques..."):
-            data = stat_demandeurs(departement2, code_rome)
-
-        if data:
-            valeurs = data.get("listeValeursParPeriode", [])
-            if not valeurs:
-                st.warning("Aucune donnée disponible pour ce métier/département.")
+                st.dataframe(df_metiers, hide_index=True, use_container_width=True)
+                st.bar_chart(df_metiers.set_index("Métier")["Nombre d'offres"])
             else:
-                libelle_metier = valeurs[0].get("libActivite", code_rome)
-                libelle_territoire = valeurs[0].get("libTerritoire", departement2)
-                libelle_periode = valeurs[0].get("libPeriode", "")
+                st.info("Pas assez de données sur les métiers pour ces critères.")
 
-                st.subheader(f"📍 {libelle_metier}")
-                st.caption(f"{libelle_territoire} — {libelle_periode}")
-
-                total = next((v for v in valeurs if v.get("codeNomenclature") == "ABCDEFG"), None)
-                actifs = next((v for v in valeurs if v.get("codeNomenclature") == "ABC"), None)
-
-                col1, col2 = st.columns(2)
-                if total:
-                    col1.metric("Total demandeurs d'emploi", f"{total['valeurPrincipaleNombre']:,}".replace(",", " "))
-                if actifs:
-                    col2.metric(
-                        "En recherche active (A+B+C)",
-                        f"{actifs['valeurPrincipaleNombre']:,}".replace(",", " "),
-                        f"{actifs['valeurSecondairePourcentage']}% du total"
-                    )
+            st.markdown("### 🏭 Secteurs qui recrutent le plus")
+            if compteur_secteurs:
+                df_secteurs = pd.DataFrame(
+                    compteur_secteurs.most_common(10), columns=["Secteur d'activité", "Nombre d'offres"]
+                )
+                st.dataframe(df_secteurs, hide_index=True, use_container_width=True)
+                st.bar_chart(df_secteurs.set_index("Secteur d'activité")["Nombre d'offres"])
+            else:
+                st.info(
+                    "Le secteur d'activité n'est renseigné que sur une partie des offres "
+                    "(environ 20% selon la documentation), les résultats peuvent être partiels."
+                )
