@@ -24,7 +24,9 @@ def chercher_offres(mots_cles, commune="13055"):
     headers = {"Authorization": f"Bearer {token}"}
     params = {"motsCles": mots_cles, "commune": commune, "range": "0-19"}
     r = requests.get(url, headers=headers, params=params)
-    r.raise_for_status()
+    if r.status_code != 200:
+        st.error(f"Erreur API {r.status_code} : {r.text}")
+        return []
     return r.json().get("resultats", [])
 
 st.set_page_config(page_title="Aide Conseil Emploi")
@@ -37,10 +39,4 @@ if st.button("Chercher"):
     with st.spinner("Recherche en cours..."):
         resultats = chercher_offres(mots)
     if not resultats:
-        st.warning("Aucune offre trouvée.")
-    else:
-        st.success(f"{len(resultats)} offres trouvées")
-        for o in resultats:
-            entreprise = o.get("entreprise", {}).get("nom", "N/C")
-            lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
-            st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu}")
+        st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
