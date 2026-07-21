@@ -33,7 +33,7 @@ def chercher_offres(mots_cles, departement):
 
 # --- API Marché du travail : dynamique de l'emploi (DYN_1) ---
 def stat_dynamique_emploi(code_departement, code_rome):
-    scope = "api_stats-offres-demandes-emploiv1"
+    scope = "api_stats-offres-demandes-emploiv1 offresetdemandesemploi"
     token = get_token(scope)
     url = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi/v1/indicateur/stat-dynamique-emploi"
     headers = {
@@ -79,11 +79,15 @@ with tab1:
 
 with tab2:
     st.write("Consultez le dynamisme de l'emploi pour un métier (code ROME) et un département.")
-    code_rome = st.text_input("Code ROME du métier (ex: M1805 = Études et développement informatique)", value="M1805")
+    code_rome = st.text_input(
+        "Code ROME du métier (ex: M1805 = Études et développement informatique)",
+        value="M1805"
+    )
     departement2 = st.text_input("Département (ex: 13)", value="13", key="dep2")
 
     if st.button("Voir les tendances"):
         with st.spinner("Récupération des statistiques..."):
             data = stat_dynamique_emploi(departement2, code_rome)
         if data:
+            st.success("Statistiques récupérées")
             st.json(data)
