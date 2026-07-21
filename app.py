@@ -2,8 +2,8 @@ import streamlit as st
 import requests
 import os
 
-CLIENT_ID = os.environ["CLIENT_ID"]
-CLIENT_SECRET = os.environ["CLIENT_SECRET"]
+CLIENT_ID = os.environ["PAR_aideconseillechercheu_467a5502cfd022b25b0a7af6b5de4b7921d3758c89c193fb9dc172f59d64c759"]
+CLIENT_SECRET = os.environ["eb787e22c71d75d0e4e9d343dfd2f48269802403b84bca13753448a9c8518b1a"]
 
 def get_token():
     url = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire"
@@ -18,13 +18,16 @@ def get_token():
     r.raise_for_status()
     return r.json()["access_token"]
 
-def chercher_offres(mots_cles, commune="13055"):
+def chercher_offres(mots_cles, commune):
     token = get_token()
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
     params = {"motsCles": mots_cles, "commune": commune, "range": "0-19"}
     r = requests.get(url, headers=headers, params=params)
-    if r.status_code != 200:
+    if r.status_code not in (200, 206):
         st.error(f"Erreur API {r.status_code} : {r.text}")
         return []
     return r.json().get("resultats", [])
@@ -34,9 +37,19 @@ st.title("🎯 Aide Conseil Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
 mots = st.text_input("Mots-clés", value="data")
+commune = st.text_input(
+    "Code INSEE commune (test : 33063 = Bordeaux officiel doc, 13055 = Marseille)",
+    value="33063"
+)
 
 if st.button("Chercher"):
     with st.spinner("Recherche en cours..."):
-        resultats = chercher_offres(mots)
+        resultats = chercher_offres(mots, commune)
     if not resultats:
         st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
+    else:
+        st.success(f"{len(resultats)} offres trouvées")
+        for o in resultats:
+            entreprise = o.get("entreprise", {}).get("nom", "N/C")
+            lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
+            st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu}")
