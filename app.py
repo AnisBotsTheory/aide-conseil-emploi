@@ -18,18 +18,13 @@ def get_token():
     r.raise_for_status()
     return r.json()["access_token"]
 
-def chercher_offres(mots_cles, commune):
+def chercher_offres(mots_cles, commune="13055"):
     token = get_token()
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {token}"}
     params = {"motsCles": mots_cles, "commune": commune, "range": "0-19"}
     r = requests.get(url, headers=headers, params=params)
-    if r.status_code not in (200, 206):
-        st.error(f"Erreur API {r.status_code} : {r.text}")
-        return []
+    r.raise_for_status()
     return r.json().get("resultats", [])
 
 st.set_page_config(page_title="Aide Conseil Emploi")
@@ -37,16 +32,12 @@ st.title("🎯 Aide Conseil Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
 mots = st.text_input("Mots-clés", value="data")
-commune = st.text_input(
-    "Code INSEE commune (test : 33063 = Bordeaux officiel doc, 13055 = Marseille)",
-    value="33063"
-)
 
 if st.button("Chercher"):
     with st.spinner("Recherche en cours..."):
-        resultats = chercher_offres(mots, commune)
+        resultats = chercher_offres(mots)
     if not resultats:
-        st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
+        st.warning("Aucune offre trouvée.")
     else:
         st.success(f"{len(resultats)} offres trouvées")
         for o in resultats:
