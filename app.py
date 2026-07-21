@@ -31,11 +31,11 @@ def chercher_offres(mots_cles, departement):
         return []
     return r.json().get("resultats", [])
 
-# --- API Marché du travail : dynamique de l'emploi (DYN_1) ---
-def stat_dynamique_emploi(code_departement, code_rome):
+# --- API Marché du travail : demandeurs d'emploi inscrits (DE_1) ---
+def stat_demandeurs(code_departement, code_rome):
     scope = "api_stats-offres-demandes-emploiv1 offresetdemandesemploi"
     token = get_token(scope)
-    url = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi/v1/indicateur/stat-dynamique-emploi"
+    url = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi/v1/indicateur/stat-demandeurs"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -47,7 +47,9 @@ def stat_dynamique_emploi(code_departement, code_rome):
         "codeTypeActivite": "ROME",
         "codeActivite": code_rome,
         "codeTypePeriode": "TRIMESTRE",
-        "dernierePeriode": True
+        "codeTypeNomenclature": "CATCAND",
+        "dernierePeriode": True,
+        "sansCaracteristiques": True
     }
     r = requests.post(url, headers=headers, json=body)
     if r.status_code not in (200, 206):
@@ -78,7 +80,7 @@ with tab1:
                 st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu}")
 
 with tab2:
-    st.write("Consultez le dynamisme de l'emploi pour un métier (code ROME) et un département.")
+    st.write("Consultez le nombre de demandeurs d'emploi inscrits pour un métier (code ROME) et un département.")
     code_rome = st.text_input(
         "Code ROME du métier (ex: M1805 = Études et développement informatique)",
         value="M1805"
@@ -87,7 +89,7 @@ with tab2:
 
     if st.button("Voir les tendances"):
         with st.spinner("Récupération des statistiques..."):
-            data = stat_dynamique_emploi(departement2, code_rome)
+            data = stat_demandeurs(departement2, code_rome)
         if data:
             st.success("Statistiques récupérées")
             st.json(data)
