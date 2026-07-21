@@ -43,4 +43,10 @@ if st.button("Chercher"):
     with st.spinner("Recherche en cours..."):
         resultats = chercher_offres(mots, departement)
     if not resultats:
-        st.warning("Aucune offre trouvée (ou
+        st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
+    else:
+        st.success(f"{len(resultats)} offres trouvées")
+        for o in resultats:
+            entreprise = o.get("entreprise", {}).get("nom", "N/C")
+            lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
+            st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu}")
