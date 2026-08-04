@@ -4,6 +4,8 @@ import os
 import pandas as pd
 from collections import Counter
 
+from cv_builder import afficher_generateur_cv
+
 CLIENT_ID = os.environ["CLIENT_ID"]
 CLIENT_SECRET = os.environ["CLIENT_SECRET"]
 
@@ -239,9 +241,9 @@ recherche_active = profil.startswith("🔍")
 st.divider()
 
 if recherche_active:
-    tab_profil, tab_offres = st.tabs(["🎯 Tendance par profil", "📋 Offres d'emploi"])
+    tab_profil, tab_offres, tab_cv = st.tabs(["🎯 Tendance par profil", "📋 Offres d'emploi", "🧾 Créer mon CV"])
 else:
-    tab_profil, tab_offres = st.tabs(["📊 Tendance du marché", "📋 Offres d'emploi"])
+    tab_profil, tab_offres, tab_cv = st.tabs(["📊 Tendance du marché", "📋 Offres d'emploi", "🧾 Créer mon CV"])
 
 # ---------------------------------------------------------------------------
 # Onglet 1 (contenu conditionnel selon le profil)
@@ -390,3 +392,9 @@ with tab_offres:
                 entreprise = o.get("entreprise", {}).get("nom", "N/C")
                 lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
                 st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu}")
+
+# ---------------------------------------------------------------------------
+# Onglet 3 : Créer mon CV (identique dans les deux parcours)
+# ---------------------------------------------------------------------------
+with tab_cv:
+    afficher_generateur_cv()
