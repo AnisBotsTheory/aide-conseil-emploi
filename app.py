@@ -188,13 +188,245 @@ def volumes_nationaux_offres(code_rome):
     return total
 
 
-def volumes_nationaux_demandeurs(code_rome):
+def volumes_departement_offres(code_rome, departement):
+    """Total offres pour un code ROME sur un département (via Content-Range, pas de pagination)."""
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    params = {"codeROME": code_rome, "departement": departement, "range": "0-0"}
+    r = requests.get(url, headers=headers, params=params)
+    if r.status_code not in (200, 206):
+        return 0
+    content_range = r.headers.get("Content-Range", "")
+    total = 0
+    if "/" in content_range:
+        try:
+            total = int(content_range.split("/")[-1])
+        except ValueError:
+            total = 0
+    return total
+
+
+# ---------------------------------------------------------------------------
+# API "Marché du travail" (stats-offres-demandes-emploi) et
+# "Informations sur un territoire" (stats-informations-territoire)
+# Documentation confirmée : requêtes POST avec corps JSON.
+# ---------------------------------------------------------------------------
+# ATTENTION : scope à vérifier dans les identifiants de ton application
+# francetravail.io (section scope). Noms devinés par convention, à confirmer
+# si tu obtiens une erreur 401/403.
+SCOPE_STATS_MARCHE = "api_stats-offres-demandes-emploiv1"
+SCOPE_STATS_TERRITOIRE = "api_stats-informations-territoirev1"
+
+BASE_STATS_MARCHE = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi"
+BASE_STATS_TERRITOIRE = "https://api.francetravail.io/partenaire/stats-informations-territoire"
+
+
+def _appeler_indicateur(base_url, ressource, token, payload):
+    url = f"{base_url}{ressource}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    r = requests.post(url, headers=headers, json=payload)
+    if r.status_code not in (200, 206):
+        return None, f"Erreur API {r.status_code} : {r.text}"
+    return r.json(), None
+
+
+def demandeurs_emploi_departement(code_rome, departement):
+    """Indicateur DE_1 : nombre de demandeurs d'emploi (cat. A+B+C) pour un ROME et un département."""
+    token = get_token(SCOPE_STATS_MARCHE)
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "ROME",
+        "codeActivite": code_rome,
+        "codeTypePeriode": "TRIMESTRE",
+        "codeTypeNomenclature": "CATCAND",
+        "listeCodeNomenclature": ["A", "B", "C"],
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    data, erreur = _appeler_indicateur(BASE_STATS_MARCHE, "/v1/indicateur/stat-demandeurs", token, payload)
+    if erreur:
+        return None, None, erreur
+    valeurs = data.get("listeValeursParPeriode", [])
+    total = sum(v.get("valeurPrincipaleNombre") or 0 for v in valeurs)
+    periode = valeurs[0].get("libPeriode") if valeurs else None
+    return total, periode, None
+
+
+def dynamisme_territoire(code_rome, departement):
+    """Indicateur DYN_1 : dynamique globale de l'emploi sur le territoire, via l'API Informations sur un territoire."""
+    token = get_token(SCOPE_STATS_TERRITOIRE)
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "ROME",
+        "codeActivite": code_rome,
+        "codeTypePeriode": "TRIMESTRE",
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    data, erreur = _appeler_indicateur(BASE_STATS_TERRITOIRE, "/v1/indicateur/stat-dynamique-emploi", token, payload)
+    if erreur:
+        return None, erreur
+    return data.get("listeValeursParPeriode", []), None
+
+
+def embauches_recentes(code_rome, departement):
+    """Indicateur EMB_1 : embauches récentes sur le métier et le département."""
+    token = get_token(SCOPE_STATS_MARCHE)
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "ROME",
+        "codeActivite": code_rome,
+        "codeTypePeriode": "TRIMESTRE",
+        "codeTypeNomenclature": "CATCAND",
+        "listeCodeNomenclature": ["A", "B", "C"],
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    data, erreur = _appeler_indicateur(BASE_STATS_MARCHE, "/v1/indicateur/stat-embauches", token, payload)
+    if erreur:
+        return None, None, erreur
+    valeurs = data.get("listeValeursParPeriode", [])
+    total = sum(v.get("valeurPrincipaleNombre") or 0 for v in valeurs)
+    periode = valeurs[0].get("libPeriode") if valeurs else None
+    return total, periode, None
+
+
+def etablissements_secteur(code_rome, departement):
+    """Indicateur ETAB_1 : établissements par secteur sur le département."""
+    token = get_token(SCOPE_STATS_TERRITOIRE)
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "ROME",
+        "codeActivite": code_rome,
+        "codeTypePeriode": "TRIMESTRE",
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    data, erreur = _appeler_indicateur(BASE_STATS_TERRITOIRE, "/v1/indicateur/stat-etablissements", token, payload)
+    if erreur:
+        return None, erreur
+    return data.get("listeValeursParPeriode", []), None
+
+
+def _dataframe_indicateur(valeurs):
+    """Transforme une liste de valeurs d'indicateur (schéma commun) en DataFrame lisible."""
+    lignes = []
+    for v in valeurs:
+        lignes.append({
+            "Territoire": v.get("libTerritoire", ""),
+            "Activité": v.get("libActivite", ""),
+            "Période": v.get("libPeriode", ""),
+            "Indicateur": v.get("valeurPrincipaleNom", ""),
+            "Valeur (nombre)": v.get("valeurPrincipaleNombre"),
+            "Valeur (taux)": v.get("valeurPrincipaleTaux"),
+            "Valeur (montant)": v.get("valeurPrincipaleMontant"),
+        })
+    return pd.DataFrame(lignes)
+
+
+# ---------------------------------------------------------------------------
+# Fonctions "Top entreprises qui recrutent" (API La Bonne Boite v2)
+# ---------------------------------------------------------------------------
+# ATTENTION : scope à vérifier. Le nom exact du scope dépend de la déclaration
+# de ton application sur francetravail.io (visible dans les identifiants de ton
+# app, section "scope"). "api_labonneboitev2" est une supposition à confirmer.
+SCOPE_LBB = "api_labonneboitev2"
+
+
+def geocoder_ville(nom_ville):
     """
-    TODO : à brancher sur l'API Marché du travail v1 une fois le endpoint exact
-    confirmé dans ton Swagger (francetravail.io). En attendant, saisie manuelle
-    proposée dans l'interface.
+    Géocode un nom de ville en (latitude, longitude) via l'API Adresse
+    (api-adresse.data.gouv.fr), gratuite et sans clé, opérée par l'État français.
     """
-    return None
+    url = "https://api-adresse.data.gouv.fr/search/"
+    params = {"q": nom_ville, "type": "municipality", "limit": 1}
+    r = requests.get(url, params=params, timeout=10)
+    if r.status_code != 200:
+        return None, None
+    features = r.json().get("features", [])
+    if not features:
+        return None, None
+    lon, lat = features[0]["geometry"]["coordinates"]
+    return lat, lon
+
+
+def top_entreprises_recrutement(code_rome, ville, rayon_km=30, max_resultats=10):
+    """
+    Interroge l'API La Bonne Boite v2 pour lister les entreprises à fort potentiel
+    d'embauche autour d'une ville, pour un métier (code ROME) donné.
+
+    Pattern d'URL confirmé par la doc officielle France Travail (exemple donné en v1) :
+    GET /partenaire/labonneboite/v1/company/?distance=30&latitude=..&rome_codes=M1607
+    Adapté ici en v2 conformément à ton abonnement. A vérifier si l'appel échoue.
+    """
+    lat, lon = geocoder_ville(ville)
+    if lat is None:
+        return pd.DataFrame(), "Ville introuvable, vérifiez l'orthographe."
+
+    token = get_token(SCOPE_LBB)
+    url = "https://api.francetravail.io/partenaire/labonneboite/v2/company/"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    params = {
+        "rome_codes": code_rome,
+        "latitude": lat,
+        "longitude": lon,
+        "distance": rayon_km,
+    }
+    r = requests.get(url, headers=headers, params=params)
+    if r.status_code not in (200, 206):
+        return pd.DataFrame(), f"Erreur API La Bonne Boite {r.status_code} : {r.text}"
+
+    data = r.json()
+    entreprises = data.get("companies", data if isinstance(data, list) else [])
+    lignes = []
+    for e in entreprises[:max_resultats]:
+        lignes.append({
+            "Entreprise": e.get("name") or e.get("raison_sociale", "N/C"),
+            "Ville": e.get("city", "N/C"),
+            "Secteur": e.get("naf_text") or e.get("naf", "N/C"),
+            "Distance (km)": e.get("distance", "N/C"),
+        })
+    return pd.DataFrame(lignes), None
+
+
+# ---------------------------------------------------------------------------
+# Comparaison multi-département (réutilise l'API Offres d'emploi déjà fonctionnelle)
+# ---------------------------------------------------------------------------
+def comparer_departements(code_rome, departements):
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    resultats = []
+    for dep in departements:
+        dep = dep.strip()
+        if not dep:
+            continue
+        params = {"codeROME": code_rome, "departement": dep, "range": "0-0"}
+        r = requests.get(url, headers=headers, params=params)
+        total = 0
+        if r.status_code in (200, 206):
+            content_range = r.headers.get("Content-Range", "")
+            if "/" in content_range:
+                try:
+                    total = int(content_range.split("/")[-1])
+                except ValueError:
+                    total = 0
+        resultats.append({"departement": dep, "nombre_offres": total})
+
+    df = pd.DataFrame(resultats)
+    if not df.empty:
+        df = df.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+    return df
 
 
 def calculer_tension(nb_offres, nb_demandeurs):
@@ -285,27 +517,118 @@ with tab_profil:
                     st.bar_chart(df_villes.set_index("ville"))
                     st.dataframe(df_villes, use_container_width=True, hide_index=True)
 
-                st.markdown("#### 🇫🇷 Vision nationale")
-                with st.spinner("Récupération des volumes nationaux..."):
+                st.markdown("#### 🇫🇷 Contexte national")
+                with st.spinner("Récupération du volume national d'offres..."):
                     total_national_offres = volumes_nationaux_offres(code_rome_choisi)
-                    total_national_demandeurs = volumes_nationaux_demandeurs(code_rome_choisi)
+                st.metric("Offres au niveau national (indicatif)", total_national_offres)
 
-                c1, c2 = st.columns(2)
-                c1.metric("Offres au niveau national", total_national_offres)
-                if total_national_demandeurs is None:
-                    total_national_demandeurs = st.number_input(
-                        "Demandeurs d'emploi (saisie manuelle en attendant l'API Marché du travail)",
-                        min_value=0, value=0,
+                st.markdown(f"#### ⚖️ Tension du marché — département {departement_profil}")
+                with st.spinner("Récupération des demandeurs d'emploi..."):
+                    total_dep_offres = volumes_departement_offres(code_rome_choisi, departement_profil)
+                    total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
+                        code_rome_choisi, departement_profil
                     )
-                c2.metric("Demandeurs d'emploi (national)", total_national_demandeurs)
 
-                st.markdown("#### ⚖️ Tension du marché")
-                tension = calculer_tension(total_national_offres, total_national_demandeurs)
+                if erreur_demandeurs:
+                    st.warning(
+                        f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
+                        "Saisis une valeur manuelle en attendant."
+                    )
+                    total_dep_demandeurs = st.number_input(
+                        "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
+                    )
+                else:
+                    c1, c2 = st.columns(2)
+                    c1.metric(f"Offres — département {departement_profil}", total_dep_offres)
+                    c2.metric(
+                        f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
+                        total_dep_demandeurs,
+                    )
+
+                tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
                 if tension is not None:
                     st.metric("Indice de tension (offres / demandeurs)", tension)
                     st.info(interpreter_tension(tension))
                 else:
-                    st.info("Renseignez un nombre de demandeurs pour calculer la tension.")
+                    st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
+
+                st.divider()
+                st.markdown("#### 🏢 Top entreprises qui recrutent (La Bonne Boite)")
+                col_ville, col_rayon = st.columns([2, 1])
+                with col_ville:
+                    ville_lbb = st.text_input(
+                        "Ville de référence", value="Aix-en-Provence", key="ville_lbb"
+                    )
+                with col_rayon:
+                    rayon_lbb = st.slider("Rayon (km)", 5, 100, 30, key="rayon_lbb")
+
+                if st.button("Chercher les entreprises à fort potentiel", key="btn_lbb"):
+                    with st.spinner("Recherche des entreprises en cours..."):
+                        df_entreprises, erreur_lbb = top_entreprises_recrutement(
+                            code_rome_choisi, ville_lbb, rayon_lbb
+                        )
+                    if erreur_lbb:
+                        st.error(erreur_lbb)
+                    elif df_entreprises.empty:
+                        st.info("Aucune entreprise trouvée pour ces critères.")
+                    else:
+                        st.dataframe(df_entreprises, use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 🗺️ Comparaison multi-département")
+                departements_compare = st.text_input(
+                    "Départements à comparer, séparés par une virgule (ex: 13,84,06)",
+                    value=f"{departement_profil},84,06",
+                    key="dep_compare",
+                )
+                if st.button("Comparer les départements", key="btn_compare"):
+                    liste_dep = departements_compare.split(",")
+                    with st.spinner("Comparaison en cours..."):
+                        df_compare = comparer_departements(code_rome_choisi, liste_dep)
+                    if df_compare.empty:
+                        st.info("Aucune donnée à afficher.")
+                    else:
+                        st.bar_chart(df_compare.set_index("departement"))
+                        st.dataframe(df_compare, use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 🌆 Dynamisme du territoire")
+                if st.button("Charger le dynamisme du territoire", key="btn_dynamisme"):
+                    with st.spinner("Récupération de l'indicateur de dynamisme..."):
+                        valeurs_dyn, erreur_dyn = dynamisme_territoire(code_rome_choisi, departement_profil)
+                    if erreur_dyn:
+                        st.error(erreur_dyn)
+                    elif not valeurs_dyn:
+                        st.info("Aucune donnée de dynamisme disponible pour ces critères.")
+                    else:
+                        st.dataframe(_dataframe_indicateur(valeurs_dyn), use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 📈 Embauches récentes")
+                if st.button("Charger les embauches récentes", key="btn_embauches"):
+                    with st.spinner("Récupération des embauches..."):
+                        total_embauches, periode_embauches, erreur_embauches = embauches_recentes(
+                            code_rome_choisi, departement_profil
+                        )
+                    if erreur_embauches:
+                        st.error(erreur_embauches)
+                    else:
+                        st.metric(
+                            f"Embauches{' — ' + periode_embauches if periode_embauches else ''}",
+                            total_embauches,
+                        )
+
+                st.divider()
+                st.markdown("#### 🏭 Établissements qui recrutent")
+                if st.button("Charger les établissements", key="btn_etablissements"):
+                    with st.spinner("Récupération des établissements..."):
+                        valeurs_etab, erreur_etab = etablissements_secteur(code_rome_choisi, departement_profil)
+                    if erreur_etab:
+                        st.error(erreur_etab)
+                    elif not valeurs_etab:
+                        st.info("Aucune donnée d'établissements disponible pour ces critères.")
+                    else:
+                        st.dataframe(_dataframe_indicateur(valeurs_etab), use_container_width=True, hide_index=True)
 
                 st.markdown("#### 💡 Autres KPIs à envisager")
                 st.markdown(
@@ -314,10 +637,7 @@ with tab_profil:
 - **Répartition par type de contrat** (CDI / CDD / intérim / freelance)
 - **Répartition par niveau d'expérience demandé**
 - **Fourchette de salaire proposée**, si disponible
-- **Durée de vie moyenne des offres** (proxy de tension indirecte)
-- **Top entreprises qui recrutent** via l'API La Bonne Boite
-- **Dynamisme du territoire** via l'API Informations sur un territoire
-- **Comparaison multi-département** pour arbitrer une mobilité géographique
+- **Difficulté de recrutement (BMO)** via l'indicateur "Perspectives Recrutement" — pas encore branché, dis-moi si tu veux qu'on l'ajoute
                     """
                 )
     else:
