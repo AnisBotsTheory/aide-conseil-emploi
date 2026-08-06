@@ -473,7 +473,9 @@ recherche_active = profil.startswith("🔍")
 st.divider()
 
 if recherche_active:
-    tab_profil, tab_offres, tab_cv = st.tabs(["🎯 Tendance par profil", "📋 Offres d'emploi", "🧾 Créer mon CV"])
+    tab_profil, tab_avance, tab_offres, tab_cv = st.tabs(
+        ["🎯 Tendance par profil", "🧩 KPIs avancés", "📋 Offres d'emploi", "🧾 Créer mon CV"]
+    )
 else:
     tab_profil, tab_offres, tab_cv = st.tabs(["📊 Tendance du marché", "📋 Offres d'emploi", "🧾 Créer mon CV"])
 
@@ -496,6 +498,14 @@ with tab_profil:
         if st.button("Lancer l'analyse de mon profil"):
             with st.spinner("Résolution du métier vers un/des code(s) ROME..."):
                 df_rome = resoudre_codes_rome(mots_cles_profil, departement=departement_profil)
+            # Stocké en session_state pour survivre aux reruns déclenchés par le
+            # selectbox ci-dessous, et pour être accessible depuis l'onglet "KPIs avancés".
+            st.session_state["df_rome_profil"] = df_rome
+            st.session_state["departement_profil_actif"] = departement_profil
+
+        if "df_rome_profil" in st.session_state:
+            df_rome = st.session_state["df_rome_profil"]
+            departement_actif = st.session_state["departement_profil_actif"]
 
             if df_rome.empty:
                 st.error("Aucun code ROME trouvé pour ce métier. Essayez un autre mot-clé.")
@@ -507,11 +517,14 @@ with tab_profil:
                     "Choisissez le code ROME le plus représentatif de votre recherche",
                     options=df_rome["code_rome"],
                     format_func=lambda c: f"{c} — {df_rome.loc[df_rome.code_rome == c, 'libelle'].values[0]}",
+                    key="code_rome_choisi_select",
                 )
+                # Persisté pour l'onglet "KPIs avancés"
+                st.session_state["code_rome_choisi"] = code_rome_choisi
 
-                st.markdown(f"#### 📍 Offres par ville — département {departement_profil}")
+                st.markdown(f"#### 📍 Offres par ville — département {departement_actif}")
                 with st.spinner("Récupération des offres par ville..."):
-                    df_villes, total_region = offres_par_ville(code_rome_choisi, departement_profil)
+                    df_villes, total_region = offres_par_ville(code_rome_choisi, departement_actif)
                 st.metric("Total offres dans la région", total_region)
                 if not df_villes.empty:
                     st.bar_chart(df_villes.set_index("ville"))
@@ -522,11 +535,11 @@ with tab_profil:
                     total_national_offres = volumes_nationaux_offres(code_rome_choisi)
                 st.metric("Offres au niveau national (indicatif)", total_national_offres)
 
-                st.markdown(f"#### ⚖️ Tension du marché — département {departement_profil}")
+                st.markdown(f"#### ⚖️ Tension du marché — département {departement_actif}")
                 with st.spinner("Récupération des demandeurs d'emploi..."):
-                    total_dep_offres = volumes_departement_offres(code_rome_choisi, departement_profil)
+                    total_dep_offres = volumes_departement_offres(code_rome_choisi, departement_actif)
                     total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
-                        code_rome_choisi, departement_profil
+                        code_rome_choisi, departement_actif
                     )
 
                 if erreur_demandeurs:
@@ -539,7 +552,7 @@ with tab_profil:
                     )
                 else:
                     c1, c2 = st.columns(2)
-                    c1.metric(f"Offres — département {departement_profil}", total_dep_offres)
+                    c1.metric(f"Offres — département {departement_actif}", total_dep_offres)
                     c2.metric(
                         f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
                         total_dep_demandeurs,
@@ -553,92 +566,10 @@ with tab_profil:
                     st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
 
                 st.divider()
-                st.markdown("#### 🏢 Top entreprises qui recrutent (La Bonne Boite)")
-                col_ville, col_rayon = st.columns([2, 1])
-                with col_ville:
-                    ville_lbb = st.text_input(
-                        "Ville de référence", value="Aix-en-Provence", key="ville_lbb"
-                    )
-                with col_rayon:
-                    rayon_lbb = st.slider("Rayon (km)", 5, 100, 30, key="rayon_lbb")
-
-                if st.button("Chercher les entreprises à fort potentiel", key="btn_lbb"):
-                    with st.spinner("Recherche des entreprises en cours..."):
-                        df_entreprises, erreur_lbb = top_entreprises_recrutement(
-                            code_rome_choisi, ville_lbb, rayon_lbb
-                        )
-                    if erreur_lbb:
-                        st.error(erreur_lbb)
-                    elif df_entreprises.empty:
-                        st.info("Aucune entreprise trouvée pour ces critères.")
-                    else:
-                        st.dataframe(df_entreprises, use_container_width=True, hide_index=True)
-
-                st.divider()
-                st.markdown("#### 🗺️ Comparaison multi-département")
-                departements_compare = st.text_input(
-                    "Départements à comparer, séparés par une virgule (ex: 13,84,06)",
-                    value=f"{departement_profil},84,06",
-                    key="dep_compare",
-                )
-                if st.button("Comparer les départements", key="btn_compare"):
-                    liste_dep = departements_compare.split(",")
-                    with st.spinner("Comparaison en cours..."):
-                        df_compare = comparer_departements(code_rome_choisi, liste_dep)
-                    if df_compare.empty:
-                        st.info("Aucune donnée à afficher.")
-                    else:
-                        st.bar_chart(df_compare.set_index("departement"))
-                        st.dataframe(df_compare, use_container_width=True, hide_index=True)
-
-                st.divider()
-                st.markdown("#### 🌆 Dynamisme du territoire")
-                if st.button("Charger le dynamisme du territoire", key="btn_dynamisme"):
-                    with st.spinner("Récupération de l'indicateur de dynamisme..."):
-                        valeurs_dyn, erreur_dyn = dynamisme_territoire(code_rome_choisi, departement_profil)
-                    if erreur_dyn:
-                        st.error(erreur_dyn)
-                    elif not valeurs_dyn:
-                        st.info("Aucune donnée de dynamisme disponible pour ces critères.")
-                    else:
-                        st.dataframe(_dataframe_indicateur(valeurs_dyn), use_container_width=True, hide_index=True)
-
-                st.divider()
-                st.markdown("#### 📈 Embauches récentes")
-                if st.button("Charger les embauches récentes", key="btn_embauches"):
-                    with st.spinner("Récupération des embauches..."):
-                        total_embauches, periode_embauches, erreur_embauches = embauches_recentes(
-                            code_rome_choisi, departement_profil
-                        )
-                    if erreur_embauches:
-                        st.error(erreur_embauches)
-                    else:
-                        st.metric(
-                            f"Embauches{' — ' + periode_embauches if periode_embauches else ''}",
-                            total_embauches,
-                        )
-
-                st.divider()
-                st.markdown("#### 🏭 Établissements qui recrutent")
-                if st.button("Charger les établissements", key="btn_etablissements"):
-                    with st.spinner("Récupération des établissements..."):
-                        valeurs_etab, erreur_etab = etablissements_secteur(code_rome_choisi, departement_profil)
-                    if erreur_etab:
-                        st.error(erreur_etab)
-                    elif not valeurs_etab:
-                        st.info("Aucune donnée d'établissements disponible pour ces critères.")
-                    else:
-                        st.dataframe(_dataframe_indicateur(valeurs_etab), use_container_width=True, hide_index=True)
-
-                st.markdown("#### 💡 Autres KPIs à envisager")
-                st.markdown(
-                    """
-- **Évolution du volume d'offres** sur 30/60/90 jours
-- **Répartition par type de contrat** (CDI / CDD / intérim / freelance)
-- **Répartition par niveau d'expérience demandé**
-- **Fourchette de salaire proposée**, si disponible
-- **Difficulté de recrutement (BMO)** via l'indicateur "Perspectives Recrutement" — pas encore branché, dis-moi si tu veux qu'on l'ajoute
-                    """
+                st.info(
+                    "💡 Pour le top entreprises, la comparaison multi-département, le "
+                    "dynamisme du territoire, les embauches et les établissements, direction "
+                    "l'onglet **🧩 KPIs avancés**."
                 )
     else:
         st.write(
@@ -686,6 +617,102 @@ with tab_profil:
                         "Le secteur d'activité n'est renseigné que sur une partie des offres "
                         "(environ 20% selon la documentation), les résultats peuvent être partiels."
                     )
+
+# ---------------------------------------------------------------------------
+# Onglet "KPIs avancés" (uniquement en parcours recherche active)
+# ---------------------------------------------------------------------------
+if recherche_active:
+    with tab_avance:
+        if "code_rome_choisi" not in st.session_state:
+            st.info(
+                "👉 Lance d'abord une analyse dans l'onglet **🎯 Tendance par profil** "
+                "pour choisir ton métier (code ROME) — les KPIs avancés s'appuient dessus."
+            )
+        else:
+            code_rome_actif = st.session_state["code_rome_choisi"]
+            departement_actif = st.session_state["departement_profil_actif"]
+            st.write(f"Analyse approfondie pour le code ROME **{code_rome_actif}**, département **{departement_actif}**.")
+
+            col_ville, col_rayon = st.columns([2, 1])
+            with col_ville:
+                ville_lbb = st.text_input(
+                    "Ville de référence (pour le top entreprises)", value="Aix-en-Provence", key="ville_lbb"
+                )
+            with col_rayon:
+                rayon_lbb = st.slider("Rayon (km)", 5, 100, 30, key="rayon_lbb")
+
+            departements_compare = st.text_input(
+                "Départements à comparer, séparés par une virgule (ex: 13,84,06)",
+                value=f"{departement_actif},84,06",
+                key="dep_compare",
+            )
+
+            if st.button("🚀 Lancer l'analyse complète", type="primary", key="btn_analyse_complete"):
+                with st.spinner("Analyse en cours (entreprises, comparaison, dynamisme, embauches, établissements)..."):
+                    df_entreprises, erreur_lbb = top_entreprises_recrutement(code_rome_actif, ville_lbb, rayon_lbb)
+                    df_compare = comparer_departements(code_rome_actif, departements_compare.split(","))
+                    valeurs_dyn, erreur_dyn = dynamisme_territoire(code_rome_actif, departement_actif)
+                    total_embauches, periode_embauches, erreur_embauches = embauches_recentes(
+                        code_rome_actif, departement_actif
+                    )
+                    valeurs_etab, erreur_etab = etablissements_secteur(code_rome_actif, departement_actif)
+
+                st.divider()
+                st.markdown("#### 🏢 Top entreprises qui recrutent (La Bonne Boite)")
+                if erreur_lbb:
+                    st.error(erreur_lbb)
+                elif df_entreprises.empty:
+                    st.info("Aucune entreprise trouvée pour ces critères.")
+                else:
+                    st.dataframe(df_entreprises, use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 🗺️ Comparaison multi-département")
+                if df_compare.empty:
+                    st.info("Aucune donnée à afficher.")
+                else:
+                    st.bar_chart(df_compare.set_index("departement"))
+                    st.dataframe(df_compare, use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 🌆 Dynamisme du territoire")
+                if erreur_dyn:
+                    st.error(erreur_dyn)
+                elif not valeurs_dyn:
+                    st.info("Aucune donnée de dynamisme disponible pour ces critères.")
+                else:
+                    st.dataframe(_dataframe_indicateur(valeurs_dyn), use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 📈 Embauches récentes")
+                if erreur_embauches:
+                    st.error(erreur_embauches)
+                else:
+                    st.metric(
+                        f"Embauches{' — ' + periode_embauches if periode_embauches else ''}",
+                        total_embauches,
+                    )
+
+                st.divider()
+                st.markdown("#### 🏭 Établissements qui recrutent")
+                if erreur_etab:
+                    st.error(erreur_etab)
+                elif not valeurs_etab:
+                    st.info("Aucune donnée d'établissements disponible pour ces critères.")
+                else:
+                    st.dataframe(_dataframe_indicateur(valeurs_etab), use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 💡 Autres KPIs à envisager")
+                st.markdown(
+                    """
+- **Évolution du volume d'offres** sur 30/60/90 jours
+- **Répartition par type de contrat** (CDI / CDD / intérim / freelance)
+- **Répartition par niveau d'expérience demandé**
+- **Fourchette de salaire proposée**, si disponible
+- **Difficulté de recrutement (BMO)** via l'indicateur "Perspectives Recrutement" — pas encore branché, dis-moi si tu veux qu'on l'ajoute
+                    """
+                )
 
 # ---------------------------------------------------------------------------
 # Onglet 2 : Offres d'emploi (identique dans les deux parcours)
