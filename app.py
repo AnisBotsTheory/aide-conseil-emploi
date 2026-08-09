@@ -37,6 +37,18 @@ def get_niveaux_formation():
     return r.json()
 
 
+@st.cache_data(ttl=3600)
+def get_secteurs_activite():
+    """Référentiel des secteurs d'activité NAF (mêmes codes que le paramètre secteurActivite)."""
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/referentiel/secteursActivites"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    r = requests.get(url, headers=headers)
+    if r.status_code != 200:
+        return []
+    return r.json()
+
+
 def chercher_offres(mots_cles, departement, secteur_naf=None, niveau_formation=None, range_str="0-19"):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -109,13 +121,15 @@ def analyser_tendances(mots_cles, departement, secteur_naf=None, niveau_formatio
 # ---------------------------------------------------------------------------
 # Fonctions "Tendance par profil" (analyse personnalisée par métier ROME)
 # ---------------------------------------------------------------------------
-def resoudre_codes_rome(mots_cles, departement=None, echantillon=100):
+def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, echantillon=100):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     params = {"motsCles": mots_cles, "range": f"0-{echantillon - 1}"}
     if departement:
         params["departement"] = departement
+    if secteur_activite:
+        params["secteurActivite"] = secteur_activite
 
     r = requests.get(url, headers=headers, params=params)
     if r.status_code not in (200, 206):
@@ -462,6 +476,14 @@ for n in niveaux:
     if code and libelle:
         options_niveaux[libelle] = code
 
+secteurs = get_secteurs_activite()
+options_secteurs = {"Tous secteurs": None}
+for s in secteurs:
+    code = s.get("code")
+    libelle = s.get("libelle")
+    if code and libelle:
+        options_secteurs[f"{libelle} ({code})"] = code
+
 st.markdown("### 👋 Pour commencer, dites-nous où vous en êtes")
 profil = st.radio(
     "Que souhaitez-vous faire ?",
@@ -495,9 +517,19 @@ with tab_profil:
         with col2:
             departement_profil = st.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
 
+        secteur_choisi_profil = st.selectbox(
+            "Secteur d'activité (optionnel — affine la recherche, ex: 'consultant' + secteur "
+            "'Programmation informatique' pour éviter les résultats hors-sujet)",
+            list(options_secteurs.keys()),
+            key="secteur_profil",
+        )
+        code_secteur_profil = options_secteurs[secteur_choisi_profil]
+
         if st.button("Lancer l'analyse de mon profil"):
             with st.spinner("Résolution du métier vers un/des code(s) ROME..."):
-                df_rome = resoudre_codes_rome(mots_cles_profil, departement=departement_profil)
+                df_rome = resoudre_codes_rome(
+                    mots_cles_profil, departement=departement_profil, secteur_activite=code_secteur_profil
+                )
             # Stocké en session_state pour survivre aux reruns déclenchés par le
             # selectbox ci-dessous, et pour être accessible depuis l'onglet "KPIs avancés".
             st.session_state["df_rome_profil"] = df_rome
@@ -578,7 +610,8 @@ with tab_profil:
         )
         mots_t = st.text_input("Mots-clés (optionnel, laissez vide pour tout voir)", value="", key="mots_tendance")
         departement_t = st.text_input("Département (ex: 13)", value="13", key="dep_tendance")
-        secteur_t = st.text_input("Secteur NAF, optionnel (2 chiffres)", value="", key="secteur_tendance")
+        secteur_choisi_t = st.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_tendance")
+        secteur_t = options_secteurs[secteur_choisi_t]
         niveau_choisi_t = st.selectbox(
             "Niveau de formation", list(options_niveaux.keys()), key="niveau_tendance"
         )
@@ -587,7 +620,7 @@ with tab_profil:
         if st.button("Analyser les tendances de recrutement"):
             with st.spinner("Analyse des offres en cours (peut prendre quelques secondes)..."):
                 offres, compteur_metiers, compteur_secteurs = analyser_tendances(
-                    mots_t.strip(), departement_t, secteur_t.strip() or None, code_niveau_t
+                    mots_t.strip(), departement_t, secteur_t, code_niveau_t
                 )
 
             if not offres:
@@ -720,17 +753,14 @@ if recherche_active:
 with tab_offres:
     mots = st.text_input("Mots-clés", value="data", key="mots_offres")
     departement = st.text_input("Département (ex: 13 = Bouches-du-Rhône)", value="13", key="dep_offres")
-    secteur_naf = st.text_input(
-        "Secteur d'activité NAF, 2 chiffres, optionnel (ex: 62 = Programmation informatique, "
-        "56 = Restauration, 41 = Construction de bâtiments)",
-        value="", key="secteur_offres"
-    )
+    secteur_choisi_offres = st.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_offres")
+    secteur_naf = options_secteurs[secteur_choisi_offres]
     niveau_choisi = st.selectbox("Niveau de formation", list(options_niveaux.keys()), key="niveau_offres")
     code_niveau = options_niveaux[niveau_choisi]
 
     if st.button("Chercher des offres"):
         with st.spinner("Recherche en cours..."):
-            resultats, total = chercher_offres(mots, departement, secteur_naf.strip() or None, code_niveau)
+            resultats, total = chercher_offres(mots, departement, secteur_naf, code_niveau)
         if not resultats:
             st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
         else:
