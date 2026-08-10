@@ -567,21 +567,29 @@ with tab_profil:
                     df_villes, total_region = offres_par_ville(code_rome_choisi, departement_actif)
                 st.metric("Total offres dans la région", total_region)
                 if not df_villes.empty:
-                    st.bar_chart(df_villes.set_index("ville")[["nombre_offres"]])
-
                     df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
                     if not df_carte.empty:
                         df_carte["latitude"] = df_carte["latitude"].astype(float)
                         df_carte["longitude"] = df_carte["longitude"].astype(float)
                         df_carte["rayon"] = df_carte["nombre_offres"] * 400 + 300
+                        df_carte["label"] = df_carte["nombre_offres"].astype(str)
 
-                        couche = pdk.Layer(
+                        couche_points = pdk.Layer(
                             "ScatterplotLayer",
                             data=df_carte,
                             get_position="[longitude, latitude]",
                             get_radius="rayon",
                             get_fill_color=[0, 102, 204, 160],
                             pickable=True,
+                        )
+                        couche_texte = pdk.Layer(
+                            "TextLayer",
+                            data=df_carte,
+                            get_position="[longitude, latitude]",
+                            get_text="label",
+                            get_size=18,
+                            get_color=[255, 255, 255, 255],
+                            get_alignment_baseline="'center'",
                         )
                         vue = pdk.ViewState(
                             latitude=df_carte["latitude"].mean(),
@@ -590,15 +598,13 @@ with tab_profil:
                         )
                         st.pydeck_chart(
                             pdk.Deck(
-                                layers=[couche],
+                                layers=[couche_points, couche_texte],
                                 initial_view_state=vue,
                                 tooltip={"text": "{ville}\n{nombre_offres} offre(s)"},
                             )
                         )
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
-
-                    st.dataframe(df_villes, use_container_width=True, hide_index=True)
 
                 st.markdown("#### 🇫🇷 Contexte national")
                 with st.spinner("Récupération du volume national d'offres..."):
