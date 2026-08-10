@@ -640,13 +640,19 @@ with tab_profil:
             if df_rome.empty:
                 st.error("Aucun code ROME trouvé pour ce métier. Essayez un autre mot-clé.")
             else:
-                st.markdown("#### Codes ROME identifiés")
-                st.dataframe(df_rome, use_container_width=True, hide_index=True)
+                st.markdown("#### Offres par poste de travail")
+                st.dataframe(
+                    df_rome[["libelle", "nb_offres_echantillon"]].rename(
+                        columns={"libelle": "Poste de travail", "nb_offres_echantillon": "Nombre d'offres"}
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
                 code_rome_choisi = st.selectbox(
-                    "Choisissez le code ROME le plus représentatif de votre recherche",
+                    "Choisissez le poste le plus représentatif de votre recherche",
                     options=df_rome["code_rome"],
-                    format_func=lambda c: f"{c} — {df_rome.loc[df_rome.code_rome == c, 'libelle'].values[0]}",
+                    format_func=lambda c: df_rome.loc[df_rome.code_rome == c, "libelle"].values[0],
                     key="code_rome_choisi_select",
                 )
                 # Persisté pour l'onglet "KPIs avancés"
