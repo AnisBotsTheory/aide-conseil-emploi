@@ -639,26 +639,9 @@ with tab_profil:
                         else:
                             zoom_auto = 8
 
-                        # Réutilise la position où l'utilisateur a laissé la carte (zoom/déplacement)
-                        # au lieu de la recentrer à chaque interaction — sauf si le contexte de
-                        # recherche (métier/département) a changé entre-temps.
-                        contexte_carte = (code_rome_choisi, departement_actif)
-                        vue_precedente = st.session_state.get("vue_carte_offres")
-                        if (
-                            vue_precedente
-                            and vue_precedente.get("center")
-                            and st.session_state.get("contexte_carte_offres") == contexte_carte
-                        ):
-                            centre = [vue_precedente["center"]["lat"], vue_precedente["center"]["lng"]]
-                            zoom_depart = vue_precedente.get("zoom", zoom_auto)
-                        else:
-                            centre = [df_carte["latitude"].mean(), df_carte["longitude"].mean()]
-                            zoom_depart = zoom_auto
-                            st.session_state["contexte_carte_offres"] = contexte_carte
-
                         carte = folium.Map(
-                            location=centre,
-                            zoom_start=zoom_depart,
+                            location=[df_carte["latitude"].mean(), df_carte["longitude"].mean()],
+                            zoom_start=zoom_auto,
                             tiles="CartoDB dark_matter",
                         )
                         cluster = MarkerCluster(
@@ -681,15 +664,16 @@ with tab_profil:
                                     weight=1,
                                 ).add_to(cluster)
 
-                        resultat_carte = st_folium(
+                        # returned_objects=[] : la carte ne renvoie plus rien au serveur, donc
+                        # zoomer/déplacer ne déclenche plus de rerun Streamlit — la carte reste
+                        # 100% interactive côté navigateur, sans saccade ni réinitialisation.
+                        st_folium(
                             carte,
                             use_container_width=True,
                             height=500,
                             key="carte_offres_ville",
-                            returned_objects=["zoom", "center"],
+                            returned_objects=[],
                         )
-                        if resultat_carte:
-                            st.session_state["vue_carte_offres"] = resultat_carte
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
 
