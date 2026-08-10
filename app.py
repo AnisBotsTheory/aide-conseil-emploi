@@ -881,7 +881,16 @@ with tab_offres:
             value=st.session_state.get("departement_profil_actif", "13"),
             key="dep_offres",
         )
-        secteur_choisi_offres = st.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_offres")
+        liste_labels_secteurs = list(options_secteurs.keys())
+        secteur_actif_code = st.session_state.get("secteur_profil_actif")
+        index_secteur_defaut = 0
+        for i, label in enumerate(liste_labels_secteurs):
+            if options_secteurs[label] == secteur_actif_code:
+                index_secteur_defaut = i
+                break
+        secteur_choisi_offres = st.selectbox(
+            "Secteur d'activité", liste_labels_secteurs, index=index_secteur_defaut, key="secteur_offres"
+        )
         secteur_naf = options_secteurs[secteur_choisi_offres]
         fraicheur_choisie_offres = st.selectbox(
             "Publiées depuis",
