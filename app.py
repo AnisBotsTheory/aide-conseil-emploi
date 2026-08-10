@@ -3,6 +3,7 @@ import requests
 import os
 import pandas as pd
 import folium
+from datetime import datetime, timedelta, timezone
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 from collections import Counter
@@ -157,7 +158,7 @@ def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, echa
 
 
 @st.cache_data(ttl=1800)
-def offres_par_ville(code_rome, departement, max_pages=5):
+def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -168,6 +169,9 @@ def offres_par_ville(code_rome, departement, max_pages=5):
         debut = page * taille_page
         fin = debut + taille_page - 1
         params = {"codeROME": code_rome, "departement": departement, "range": f"{debut}-{fin}"}
+        if jours_max:
+            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
+            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
         r = requests.get(url, headers=headers, params=params)
         if r.status_code not in (200, 206):
             break
@@ -177,6 +181,8 @@ def offres_par_ville(code_rome, departement, max_pages=5):
             break
 
     lieux = {}
+    entreprises = {}
+    dates_creation = []
     for offre in toutes_offres:
         lieu_travail = offre.get("lieuTravail", {})
         ville = lieu_travail.get("libelle", "Non renseigné")
@@ -188,10 +194,36 @@ def offres_par_ville(code_rome, departement, max_pages=5):
             }
         lieux[ville]["nombre_offres"] += 1
 
+        nom_entreprise = offre.get("entreprise", {}).get("nom")
+        if nom_entreprise:
+            if nom_entreprise not in entreprises:
+                entreprises[nom_entreprise] = {"nombre_offres": 0, "villes": set()}
+            entreprises[nom_entreprise]["nombre_offres"] += 1
+            entreprises[nom_entreprise]["villes"].add(ville)
+
+        date_creation = offre.get("dateCreation")
+        if date_creation:
+            dates_creation.append(date_creation)
+
     df = pd.DataFrame([{"ville": v, **infos} for v, infos in lieux.items()])
     if not df.empty:
         df = df.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
-    return df, len(toutes_offres)
+
+    df_entreprises = pd.DataFrame(
+        [
+            {"entreprise": nom, "nombre_offres": infos["nombre_offres"], "villes": ", ".join(sorted(infos["villes"]))}
+            for nom, infos in entreprises.items()
+        ]
+    )
+    if not df_entreprises.empty:
+        df_entreprises = df_entreprises.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+
+    nb_offres_anonymes = sum(1 for o in toutes_offres if not o.get("entreprise", {}).get("nom"))
+
+    date_min_pub = min(dates_creation) if dates_creation else None
+    date_max_pub = max(dates_creation) if dates_creation else None
+    return df, len(toutes_offres), date_min_pub, date_max_pub, df_entreprises, nb_offres_anonymes
+
 
 
 @st.cache_data(ttl=1800)
@@ -616,9 +648,34 @@ with tab_profil:
                 st.session_state["code_rome_choisi"] = code_rome_choisi
 
                 st.markdown(f"#### 📍 Offres par ville — département {departement_actif}")
+                fraicheur_choisie = st.selectbox(
+                    "Publiées depuis",
+                    ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
+                    key="fraicheur_offres_ville",
+                )
+                jours_max = {
+                    "Toutes les offres actives": None,
+                    "7 derniers jours": 7,
+                    "30 derniers jours": 30,
+                    "90 derniers jours": 90,
+                }[fraicheur_choisie]
+
                 with st.spinner("Récupération des offres par ville..."):
-                    df_villes, total_region = offres_par_ville(code_rome_choisi, departement_actif)
+                    df_villes, total_region, date_min_pub, date_max_pub, df_entreprises, nb_offres_anonymes = (
+                        offres_par_ville(code_rome_choisi, departement_actif, jours_max=jours_max)
+                    )
                 st.metric("Total offres dans la région", total_region)
+                if date_min_pub and date_max_pub:
+                    st.caption(
+                        f"📅 Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]} "
+                        "(format AAAA-MM-JJ) — l'API ne filtre pas par ancienneté par défaut, "
+                        "ces offres sont simplement celles encore actives aujourd'hui."
+                    )
+                # Persisté pour préremplir l'onglet "KPIs avancés" avec la ville la plus pertinente
+                if not df_villes.empty:
+                    st.session_state["ville_top_profil"] = (
+                        df_villes.iloc[0]["ville"].split(" - ", 1)[-1]
+                    )
                 if not df_villes.empty:
                     df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
                     if not df_carte.empty:
@@ -676,6 +733,30 @@ with tab_profil:
                         )
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
+
+                    st.markdown("#### 🏢 Entreprises ayant publié une offre sur la période")
+                    if df_entreprises.empty:
+                        st.info(
+                            "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
+                            "les offres sont diffusées de façon anonyme."
+                        )
+                    else:
+                        st.dataframe(
+                            df_entreprises.rename(
+                                columns={
+                                    "entreprise": "Entreprise",
+                                    "nombre_offres": "Nombre d'offres",
+                                    "villes": "Ville(s)",
+                                }
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        if nb_offres_anonymes:
+                            st.caption(
+                                f"ℹ️ {nb_offres_anonymes} offre(s) supplémentaire(s) diffusée(s) sans "
+                                "nom d'entreprise visible (recrutement anonyme), non comptabilisée(s) ci-dessus."
+                            )
 
                 st.markdown("#### 🇫🇷 Contexte national")
                 with st.spinner("Récupération du volume national d'offres..."):
@@ -784,7 +865,9 @@ if recherche_active:
             col_ville, col_rayon = st.columns([2, 1])
             with col_ville:
                 ville_lbb = st.text_input(
-                    "Ville de référence (pour le top entreprises)", value="Aix-en-Provence", key="ville_lbb"
+                    "Ville de référence (pour le top entreprises)",
+                    value=st.session_state.get("ville_top_profil", "Aix-en-Provence"),
+                    key="ville_lbb",
                 )
             with col_rayon:
                 rayon_lbb = st.slider("Rayon (km)", 5, 100, 30, key="rayon_lbb")
