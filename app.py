@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import folium
 import altair as alt
+import plotly.express as px
 from datetime import datetime, timedelta, timezone
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
@@ -31,6 +32,16 @@ def get_token(scope):
     return r.json()["access_token"]
 
 
+def _params_filtre_poste(code_rome, mots_cles=None):
+    """
+    Retourne le paramètre de filtre à utiliser pour l'API Offres d'emploi :
+    codeROME pour un poste précis, motsCles pour "Tous les postes" (recherche large).
+    """
+    if code_rome == "TOUS":
+        return {"motsCles": mots_cles} if mots_cles else {}
+    return {"codeROME": code_rome}
+
+
 @st.cache_data(ttl=3600)
 def get_secteurs_activite():
     """Référentiel des secteurs d'activité NAF (mêmes codes que le paramètre secteurActivite)."""
@@ -43,11 +54,12 @@ def get_secteurs_activite():
     return r.json()
 
 
-def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, range_str="0-19"):
+def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mots_cles=None, range_str="0-19"):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"codeROME": code_rome, "departement": departement, "range": range_str}
+    params = {"departement": departement, "range": range_str}
+    params.update(_params_filtre_poste(code_rome, mots_cles))
     if secteur_naf:
         params["secteurActivite"] = secteur_naf
     if jours_max:
@@ -118,7 +130,7 @@ def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, max_
 
 
 @st.cache_data(ttl=1800)
-def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5):
+def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -128,7 +140,8 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5):
     for page in range(max_pages):
         debut = page * taille_page
         fin = debut + taille_page - 1
-        params = {"codeROME": code_rome, "departement": departement, "range": f"{debut}-{fin}"}
+        params = {"departement": departement, "range": f"{debut}-{fin}"}
+        params.update(_params_filtre_poste(code_rome, mots_cles))
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
             params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -193,12 +206,13 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5):
 
 
 @st.cache_data(ttl=1800)
-def volumes_departement_offres(code_rome, departement):
-    """Total offres pour un code ROME sur un département (via Content-Range, pas de pagination)."""
+def volumes_departement_offres(code_rome, departement, mots_cles=None):
+    """Total offres pour un code ROME (ou tous, via mots-clés) sur un département."""
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"codeROME": code_rome, "departement": departement, "range": "0-0"}
+    params = {"departement": departement, "range": "0-0"}
+    params.update(_params_filtre_poste(code_rome, mots_cles))
     r = requests.get(url, headers=headers, params=params)
     if r.status_code not in (200, 206):
         return 0
@@ -312,10 +326,10 @@ def _formater_mois_fr(mois_str):
 
 
 @st.cache_data(ttl=1800)
-def evolution_offres_annuelle(code_rome, departement):
+def evolution_offres_annuelle(code_rome, departement, mots_cles=None):
     """
-    Volume d'offres par mois sur les 12 derniers mois, pour un ROME et un département.
-    Une requête par mois (compte via Content-Range, pas de pagination des résultats).
+    Volume d'offres par mois sur les 12 derniers mois, pour un ROME (ou tous, via
+    mots-clés) et un département. Une requête par mois (compte via Content-Range).
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -336,12 +350,12 @@ def evolution_offres_annuelle(code_rome, departement):
             fin_mois = datetime(annee, mois + 1, 1, tzinfo=timezone.utc)
 
         params = {
-            "codeROME": code_rome,
             "departement": departement,
             "range": "0-0",
             "minCreationDate": debut_mois.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "maxCreationDate": fin_mois.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
+        params.update(_params_filtre_poste(code_rome, mots_cles))
         r = requests.get(url, headers=headers, params=params)
         total = 0
         if r.status_code in (200, 206):
@@ -357,10 +371,10 @@ def evolution_offres_annuelle(code_rome, departement):
 
 
 @st.cache_data(ttl=1800)
-def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max_pages=5):
+def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None):
     """
-    Récupère les offres (ROME + département, filtre de fraîcheur optionnel) et
-    calcule la répartition par type de contrat + extrait les mentions de salaire.
+    Récupère les offres (ROME ou tous via mots-clés, + département, filtre de
+    fraîcheur optionnel) et calcule la répartition par type de contrat + salaires.
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -371,7 +385,8 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
     for page in range(max_pages):
         debut = page * taille_page
         fin = debut + taille_page - 1
-        params = {"codeROME": code_rome, "departement": departement, "range": f"{debut}-{fin}"}
+        params = {"departement": departement, "range": f"{debut}-{fin}"}
+        params.update(_params_filtre_poste(code_rome, mots_cles))
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
             params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -506,10 +521,12 @@ with tab_profil:
         # selectbox ci-dessous, et pour être accessible depuis l'onglet "KPIs avancés".
         st.session_state["df_rome_profil"] = df_rome
         st.session_state["departement_profil_actif"] = departement_profil
+        st.session_state["mots_cles_profil_actif"] = mots_cles_profil
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
         departement_actif = st.session_state["departement_profil_actif"]
+        mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
 
         if df_rome.empty:
             st.error("Aucun code ROME trouvé pour ce métier. Essayez un autre mot-clé.")
@@ -523,10 +540,17 @@ with tab_profil:
                 hide_index=True,
             )
 
+            options_postes = ["TOUS"] + list(df_rome["code_rome"])
+
+            def _libelle_poste(c):
+                if c == "TOUS":
+                    return "🌐 Tous les postes (recherche large, sans filtre de métier précis)"
+                return df_rome.loc[df_rome.code_rome == c, "libelle"].values[0]
+
             code_rome_choisi = st.selectbox(
                 "Choisissez le poste le plus représentatif de votre recherche",
-                options=df_rome["code_rome"],
-                format_func=lambda c: df_rome.loc[df_rome.code_rome == c, "libelle"].values[0],
+                options=options_postes,
+                format_func=_libelle_poste,
                 key="code_rome_choisi_select",
             )
             # Persisté pour l'onglet "KPIs avancés"
@@ -547,7 +571,9 @@ with tab_profil:
 
             with st.spinner("Récupération des offres par ville..."):
                 df_villes, total_region, date_min_pub, date_max_pub, df_entreprises, nb_offres_anonymes = (
-                    offres_par_ville(code_rome_choisi, departement_actif, jours_max=jours_max)
+                    offres_par_ville(
+                        code_rome_choisi, departement_actif, jours_max=jours_max, mots_cles=mots_cles_actifs
+                    )
                 )
             st.metric("Total offres dans la région", total_region)
             if date_min_pub and date_max_pub:
@@ -640,34 +666,41 @@ with tab_profil:
                         )
 
             st.markdown(f"#### ⚖️ Tension du marché — département {departement_actif}")
-            with st.spinner("Récupération des demandeurs d'emploi..."):
-                total_dep_offres = volumes_departement_offres(code_rome_choisi, departement_actif)
-                total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
-                    code_rome_choisi, departement_actif
-                )
-
-            if erreur_demandeurs:
-                st.warning(
-                    f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
-                    "Saisis une valeur manuelle en attendant."
-                )
-                total_dep_demandeurs = st.number_input(
-                    "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
+            if code_rome_choisi == "TOUS":
+                st.info(
+                    "⚖️ La tension du marché nécessite un poste précis (l'indicateur officiel "
+                    "raisonne par métier). Sélectionne un poste spécifique dans la liste "
+                    "ci-dessus pour voir ce calcul."
                 )
             else:
-                c1, c2 = st.columns(2)
-                c1.metric(f"Offres — département {departement_actif}", total_dep_offres)
-                c2.metric(
-                    f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
-                    total_dep_demandeurs,
-                )
+                with st.spinner("Récupération des demandeurs d'emploi..."):
+                    total_dep_offres = volumes_departement_offres(code_rome_choisi, departement_actif)
+                    total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
+                        code_rome_choisi, departement_actif
+                    )
 
-            tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
-            if tension is not None:
-                st.metric("Indice de tension (offres / demandeurs)", tension)
-                st.info(interpreter_tension(tension))
-            else:
-                st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
+                if erreur_demandeurs:
+                    st.warning(
+                        f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
+                        "Saisis une valeur manuelle en attendant."
+                    )
+                    total_dep_demandeurs = st.number_input(
+                        "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
+                    )
+                else:
+                    c1, c2 = st.columns(2)
+                    c1.metric(f"Offres — département {departement_actif}", total_dep_offres)
+                    c2.metric(
+                        f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
+                        total_dep_demandeurs,
+                    )
+
+                tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
+                if tension is not None:
+                    st.metric("Indice de tension (offres / demandeurs)", tension)
+                    st.info(interpreter_tension(tension))
+                else:
+                    st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
 
             st.divider()
             st.info(
@@ -688,12 +721,17 @@ with tab_avance:
     else:
         code_rome_actif = st.session_state["code_rome_choisi"]
         departement_actif = st.session_state["departement_profil_actif"]
+        mots_cles_actifs_avance = st.session_state.get("mots_cles_profil_actif", "")
 
         if st.button("🚀 Lancer l'analyse complète", type="primary", key="btn_analyse_complete"):
             with st.spinner("Analyse en cours (évolution, contrats, salaires, recruteurs)..."):
-                df_evolution = evolution_offres_annuelle(code_rome_actif, departement_actif)
+                df_evolution = evolution_offres_annuelle(
+                    code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance
+                )
                 df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_entreprises_avance = (
-                    repartition_contrats_et_salaires(code_rome_actif, departement_actif)
+                    repartition_contrats_et_salaires(
+                        code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance
+                    )
                 )
 
             st.divider()
@@ -724,35 +762,28 @@ with tab_avance:
             if df_contrats.empty:
                 st.info("Aucune donnée de type de contrat disponible pour ces critères.")
             else:
-                df_contrats_hm = df_contrats.copy()
-                df_contrats_hm["categorie"] = "Offres"
+                fig_contrats = px.treemap(
+                    df_contrats,
+                    path=["type_contrat"],
+                    values="nombre_offres",
+                    color="nombre_offres",
+                    color_continuous_scale="Blues",
+                )
+                fig_contrats.update_traces(
+                    textinfo="label+value",
+                    textfont_size=16,
+                    marker=dict(line=dict(width=2, color="white")),
+                )
+                fig_contrats.update_layout(margin=dict(t=10, l=10, r=10, b=10))
+                st.plotly_chart(fig_contrats, use_container_width=True)
 
-                base_hm = alt.Chart(df_contrats_hm).encode(
-                    x=alt.X(
-                        "type_contrat:N",
-                        title=None,
-                        sort=alt.SortField("nombre_offres", order="descending"),
-                        axis=alt.Axis(labelAngle=-45),
-                    ),
-                    y=alt.Y("categorie:N", title=None, axis=None),
+                # Tableau de détail en complément : garantit que chaque intitulé reste lisible,
+                # même pour les contrats avec très peu d'offres (case minuscule sur le treemap).
+                st.dataframe(
+                    df_contrats.rename(columns={"type_contrat": "Type de contrat", "nombre_offres": "Nombre d'offres"}),
+                    use_container_width=True,
+                    hide_index=True,
                 )
-                cases = base_hm.mark_rect().encode(
-                    color=alt.Color(
-                        "nombre_offres:Q",
-                        scale=alt.Scale(scheme="blues"),
-                        legend=alt.Legend(title="Nombre d'offres"),
-                    ),
-                    tooltip=["type_contrat:N", "nombre_offres:Q"],
-                )
-                etiquettes_hm = base_hm.mark_text(fontWeight="bold", fontSize=14).encode(
-                    text="nombre_offres:Q",
-                    color=alt.condition(
-                        alt.datum.nombre_offres > df_contrats_hm["nombre_offres"].max() / 2,
-                        alt.value("white"),
-                        alt.value("black"),
-                    ),
-                )
-                st.altair_chart((cases + etiquettes_hm).properties(height=140), use_container_width=True)
 
             st.divider()
             st.markdown("#### 💰 Fourchette de salaire proposée")
@@ -804,14 +835,21 @@ with tab_offres:
         )
     else:
         df_rome_offres = st.session_state["df_rome_profil"]
+        mots_cles_offres = st.session_state.get("mots_cles_profil_actif", "")
+        options_postes_offres = ["TOUS"] + list(df_rome_offres["code_rome"])
+
+        def _libelle_poste_offres(c):
+            if c == "TOUS":
+                return "🌐 Tous les postes (recherche large, sans filtre de métier précis)"
+            return df_rome_offres.loc[df_rome_offres.code_rome == c, "libelle"].values[0]
 
         code_rome_offres = st.selectbox(
             "Choisissez le poste le plus représentatif de votre recherche",
-            options=df_rome_offres["code_rome"],
-            format_func=lambda c: df_rome_offres.loc[df_rome_offres.code_rome == c, "libelle"].values[0],
+            options=options_postes_offres,
+            format_func=_libelle_poste_offres,
             index=(
-                list(df_rome_offres["code_rome"]).index(st.session_state["code_rome_choisi"])
-                if st.session_state.get("code_rome_choisi") in list(df_rome_offres["code_rome"])
+                options_postes_offres.index(st.session_state["code_rome_choisi"])
+                if st.session_state.get("code_rome_choisi") in options_postes_offres
                 else 0
             ),
             key="code_rome_offres_select",
@@ -837,7 +875,9 @@ with tab_offres:
 
         if st.button("Chercher des offres"):
             with st.spinner("Recherche en cours..."):
-                resultats, total = chercher_offres(code_rome_offres, departement, secteur_naf, jours_max_offres)
+                resultats, total = chercher_offres(
+                    code_rome_offres, departement, secteur_naf, jours_max_offres, mots_cles=mots_cles_offres
+                )
             if not resultats:
                 st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
             else:
