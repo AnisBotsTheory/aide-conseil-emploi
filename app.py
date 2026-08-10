@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import os
 import pandas as pd
+import pydeck as pdk
 from collections import Counter
 
 from cv_builder import afficher_generateur_cv
@@ -172,12 +173,19 @@ def offres_par_ville(code_rome, departement, max_pages=5):
         if len(resultats) < taille_page:
             break
 
-    villes = Counter()
+    lieux = {}
     for offre in toutes_offres:
-        lieu = offre.get("lieuTravail", {}).get("libelle", "Non renseigné")
-        villes[lieu] += 1
+        lieu_travail = offre.get("lieuTravail", {})
+        ville = lieu_travail.get("libelle", "Non renseigné")
+        if ville not in lieux:
+            lieux[ville] = {
+                "nombre_offres": 0,
+                "latitude": lieu_travail.get("latitude"),
+                "longitude": lieu_travail.get("longitude"),
+            }
+        lieux[ville]["nombre_offres"] += 1
 
-    df = pd.DataFrame(villes.items(), columns=["ville", "nombre_offres"])
+    df = pd.DataFrame([{"ville": v, **infos} for v, infos in lieux.items()])
     if not df.empty:
         df = df.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
     return df, len(toutes_offres)
@@ -559,7 +567,37 @@ with tab_profil:
                     df_villes, total_region = offres_par_ville(code_rome_choisi, departement_actif)
                 st.metric("Total offres dans la région", total_region)
                 if not df_villes.empty:
-                    st.bar_chart(df_villes.set_index("ville"))
+                    st.bar_chart(df_villes.set_index("ville")[["nombre_offres"]])
+
+                    df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
+                    if not df_carte.empty:
+                        df_carte["latitude"] = df_carte["latitude"].astype(float)
+                        df_carte["longitude"] = df_carte["longitude"].astype(float)
+                        df_carte["rayon"] = df_carte["nombre_offres"] * 400 + 300
+
+                        couche = pdk.Layer(
+                            "ScatterplotLayer",
+                            data=df_carte,
+                            get_position="[longitude, latitude]",
+                            get_radius="rayon",
+                            get_fill_color=[0, 102, 204, 160],
+                            pickable=True,
+                        )
+                        vue = pdk.ViewState(
+                            latitude=df_carte["latitude"].mean(),
+                            longitude=df_carte["longitude"].mean(),
+                            zoom=8,
+                        )
+                        st.pydeck_chart(
+                            pdk.Deck(
+                                layers=[couche],
+                                initial_view_state=vue,
+                                tooltip={"text": "{ville}\n{nombre_offres} offre(s)"},
+                            )
+                        )
+                    else:
+                        st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
+
                     st.dataframe(df_villes, use_container_width=True, hide_index=True)
 
                 st.markdown("#### 🇫🇷 Contexte national")
