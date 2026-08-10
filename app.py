@@ -53,7 +53,7 @@ def get_secteurs_activite():
     return r.json()
 
 
-def chercher_offres(mots_cles, departement, secteur_naf=None, niveau_formation=None, range_str="0-19"):
+def chercher_offres(mots_cles, departement, secteur_naf=None, niveau_formation=None, jours_max=None, range_str="0-19"):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -62,6 +62,9 @@ def chercher_offres(mots_cles, departement, secteur_naf=None, niveau_formation=N
         params["secteurActivite"] = secteur_naf
     if niveau_formation:
         params["niveauFormation"] = niveau_formation
+    if jours_max:
+        date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
+        params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
     r = requests.get(url, headers=headers, params=params)
     if r.status_code not in (200, 206):
         st.error(f"Erreur API Offres {r.status_code} : {r.text}")
@@ -955,10 +958,21 @@ with tab_offres:
     secteur_naf = options_secteurs[secteur_choisi_offres]
     niveau_choisi = st.selectbox("Niveau de formation", list(options_niveaux.keys()), key="niveau_offres")
     code_niveau = options_niveaux[niveau_choisi]
+    fraicheur_choisie_offres = st.selectbox(
+        "Publiées depuis",
+        ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
+        key="fraicheur_offres",
+    )
+    jours_max_offres = {
+        "Toutes les offres actives": None,
+        "7 derniers jours": 7,
+        "30 derniers jours": 30,
+        "90 derniers jours": 90,
+    }[fraicheur_choisie_offres]
 
     if st.button("Chercher des offres"):
         with st.spinner("Recherche en cours..."):
-            resultats, total = chercher_offres(mots, departement, secteur_naf, code_niveau)
+            resultats, total = chercher_offres(mots, departement, secteur_naf, code_niveau, jours_max_offres)
         if not resultats:
             st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
         else:
@@ -966,7 +980,8 @@ with tab_offres:
             for o in resultats:
                 entreprise = o.get("entreprise", {}).get("nom", "N/C")
                 lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
-                st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu}")
+                date_pub = o.get("dateCreation", "")[:10]
+                st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub}")
 
 # ---------------------------------------------------------------------------
 # Onglet 3 : Créer mon CV (identique dans les deux parcours)
