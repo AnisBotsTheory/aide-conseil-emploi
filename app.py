@@ -61,7 +61,7 @@ def get_secteurs_activite():
     return r.json()
 
 
-def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mots_cles=None, range_str="0-19"):
+def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mots_cles=None, range_str="0-149"):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -514,8 +514,7 @@ with tab_profil:
         departement_profil = st.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
 
     secteur_choisi_profil = st.selectbox(
-        "Secteur d'activité (optionnel — affine la recherche, ex: 'consultant' + secteur "
-        "'Programmation informatique' pour éviter les résultats hors-sujet)",
+        "Secteur d'activité",
         list(options_secteurs.keys()),
         key="secteur_profil",
     )
@@ -532,6 +531,10 @@ with tab_profil:
         st.session_state["departement_profil_actif"] = departement_profil
         st.session_state["mots_cles_profil_actif"] = mots_cles_profil
         st.session_state["secteur_profil_actif"] = code_secteur_profil
+        # Force la valeur du sélecteur secteur de l'onglet "Offres d'emploi" — doit être
+        # fait AVANT que ce widget soit instancié plus bas dans le script (même rerun),
+        # sinon Streamlit ignore silencieusement toute tentative de le faire via `index`.
+        st.session_state["secteur_offres"] = secteur_choisi_profil
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
@@ -555,7 +558,7 @@ with tab_profil:
 
             def _libelle_poste(c):
                 if c == "TOUS":
-                    return "🌐 Tous les postes (recherche large, sans filtre de métier précis)"
+                    return "🌐 Tous les postes"
                 return df_rome.loc[df_rome.code_rome == c, "libelle"].values[0]
 
             code_rome_choisi = st.selectbox(
@@ -862,7 +865,7 @@ with tab_offres:
 
         def _libelle_poste_offres(c):
             if c == "TOUS":
-                return "🌐 Tous les postes (recherche large, sans filtre de métier précis)"
+                return "🌐 Tous les postes"
             return df_rome_offres.loc[df_rome_offres.code_rome == c, "libelle"].values[0]
 
         code_rome_offres = st.selectbox(
@@ -881,16 +884,7 @@ with tab_offres:
             value=st.session_state.get("departement_profil_actif", "13"),
             key="dep_offres",
         )
-        liste_labels_secteurs = list(options_secteurs.keys())
-        secteur_actif_code = st.session_state.get("secteur_profil_actif")
-        index_secteur_defaut = 0
-        for i, label in enumerate(liste_labels_secteurs):
-            if options_secteurs[label] == secteur_actif_code:
-                index_secteur_defaut = i
-                break
-        secteur_choisi_offres = st.selectbox(
-            "Secteur d'activité", liste_labels_secteurs, index=index_secteur_defaut, key="secteur_offres"
-        )
+        secteur_choisi_offres = st.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_offres")
         secteur_naf = options_secteurs[secteur_choisi_offres]
         fraicheur_choisie_offres = st.selectbox(
             "Publiées depuis",
