@@ -2,7 +2,9 @@ import streamlit as st
 import requests
 import os
 import pandas as pd
-import pydeck as pdk
+import folium
+from folium.plugins import MarkerCluster
+from streamlit_folium import st_folium
 from collections import Counter
 
 from cv_builder import afficher_generateur_cv
@@ -618,31 +620,7 @@ with tab_profil:
                     if not df_carte.empty:
                         df_carte["latitude"] = df_carte["latitude"].astype(float)
                         df_carte["longitude"] = df_carte["longitude"].astype(float)
-                        # Échelle en racine carrée : c'est l'aire du cercle, pas son rayon,
-                        # qui doit être proportionnelle au nombre d'offres.
-                        df_carte["rayon"] = (df_carte["nombre_offres"] ** 0.5) * 6 + 8
-                        df_carte["label"] = df_carte["nombre_offres"].astype(str)
 
-                        couche_points = pdk.Layer(
-                            "ScatterplotLayer",
-                            data=df_carte,
-                            get_position="[longitude, latitude]",
-                            get_radius="rayon",
-                            radius_units="pixels",
-                            radius_min_pixels=14,
-                            radius_max_pixels=45,
-                            get_fill_color=[0, 102, 204, 180],
-                            pickable=True,
-                        )
-                        couche_texte = pdk.Layer(
-                            "TextLayer",
-                            data=df_carte,
-                            get_position="[longitude, latitude]",
-                            get_text="label",
-                            get_size=16,
-                            get_color=[255, 255, 255, 255],
-                            get_alignment_baseline="'center'",
-                        )
                         etendue_lat = df_carte["latitude"].max() - df_carte["latitude"].min()
                         etendue_lon = df_carte["longitude"].max() - df_carte["longitude"].min()
                         etendue = max(etendue_lat, etendue_lon)
@@ -651,24 +629,38 @@ with tab_profil:
                         elif etendue < 0.1:
                             zoom_auto = 11
                         elif etendue < 0.3:
-                            zoom_auto = 9.5
+                            zoom_auto = 10
                         elif etendue < 0.8:
-                            zoom_auto = 8.5
+                            zoom_auto = 9
                         else:
-                            zoom_auto = 7
+                            zoom_auto = 8
 
-                        vue = pdk.ViewState(
-                            latitude=df_carte["latitude"].mean(),
-                            longitude=df_carte["longitude"].mean(),
-                            zoom=zoom_auto,
+                        carte = folium.Map(
+                            location=[df_carte["latitude"].mean(), df_carte["longitude"].mean()],
+                            zoom_start=zoom_auto,
+                            tiles="CartoDB dark_matter",
                         )
-                        st.pydeck_chart(
-                            pdk.Deck(
-                                layers=[couche_points, couche_texte],
-                                initial_view_state=vue,
-                                tooltip={"text": "{ville}\n{nombre_offres} offre(s)"},
-                            )
-                        )
+                        cluster = MarkerCluster(
+                            # Regroupe agressivement au dézoom, éclate vite au zoom (comportement demandé)
+                            options={"maxClusterRadius": 60, "disableClusteringAtZoom": 15}
+                        ).add_to(carte)
+
+                        for _, row in df_carte.iterrows():
+                            # Un marqueur par offre (pas par ville) pour que le chiffre affiché sur
+                            # un cluster corresponde bien au nombre total d'offres regroupées.
+                            for _ in range(int(row["nombre_offres"])):
+                                folium.CircleMarker(
+                                    location=[row["latitude"], row["longitude"]],
+                                    radius=8,
+                                    tooltip=f"{row['ville']} : {int(row['nombre_offres'])} offre(s)",
+                                    color="#0066cc",
+                                    fill=True,
+                                    fill_color="#0066cc",
+                                    fill_opacity=0.8,
+                                    weight=1,
+                                ).add_to(cluster)
+
+                        st_folium(carte, use_container_width=True, height=500, key="carte_offres_ville")
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
 
