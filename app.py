@@ -65,6 +65,7 @@ def chercher_offres(mots_cles, departement, secteur_naf=None, niveau_formation=N
     if jours_max:
         date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
         params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+        params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     r = requests.get(url, headers=headers, params=params)
     if r.status_code not in (200, 206):
         st.error(f"Erreur API Offres {r.status_code} : {r.text}")
@@ -175,6 +176,7 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5):
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
             params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         r = requests.get(url, headers=headers, params=params)
         if r.status_code not in (200, 206):
             break
