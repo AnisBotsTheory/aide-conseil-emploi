@@ -239,12 +239,13 @@ def volumes_departement_offres(code_rome, departement):
 # 403, on teste plusieurs candidats au premier appel et on retient celui qui
 # fonctionne réellement, en le mettant en cache pour le reste de la session.
 _CANDIDATS_SCOPE_STATS_MARCHE = [
+    "api_stats-offres-demandes-emploiv1 offresetdemandesemploi",  # confirmé via Swagger (section Scopes)
     "api_stats-offres-demandes-emploiv1",
-    "api_stats-offres-demandes-emploiv1 stats-offres-demandes-emploi",
     "stats-offres-demandes-emploi",
     "api_stats-offres-demandes-emploi",
 ]
 _CANDIDATS_SCOPE_STATS_TERRITOIRE = [
+    "api_stats-informations-territoirev1 informationsterritoire",  # par analogie, à confirmer si échec
     "api_stats-informations-territoirev1",
     "api_stats-informations-territoirev1 stats-informations-territoire",
     "stats-informations-territoire",
