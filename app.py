@@ -234,11 +234,22 @@ def volumes_departement_offres(code_rome, departement):
 # "Informations sur un territoire" (stats-informations-territoire)
 # Documentation confirmée : requêtes POST avec corps JSON.
 # ---------------------------------------------------------------------------
-# ATTENTION : scope à vérifier dans les identifiants de ton application
-# francetravail.io (section scope). Noms devinés par convention, à confirmer
-# si tu obtiens une erreur 401/403.
-SCOPE_STATS_MARCHE = "api_stats-offres-demandes-emploiv1"
-SCOPE_STATS_TERRITOIRE = "api_stats-informations-territoirev1"
+# Le nom exact du scope de ces API n'est pas dans la doc publique (propre à la
+# config de l'application). Plutôt que de deviner une seule fois et planter en
+# 403, on teste plusieurs candidats au premier appel et on retient celui qui
+# fonctionne réellement, en le mettant en cache pour le reste de la session.
+_CANDIDATS_SCOPE_STATS_MARCHE = [
+    "api_stats-offres-demandes-emploiv1",
+    "api_stats-offres-demandes-emploiv1 stats-offres-demandes-emploi",
+    "stats-offres-demandes-emploi",
+    "api_stats-offres-demandes-emploi",
+]
+_CANDIDATS_SCOPE_STATS_TERRITOIRE = [
+    "api_stats-informations-territoirev1",
+    "api_stats-informations-territoirev1 stats-informations-territoire",
+    "stats-informations-territoire",
+    "api_stats-informations-territoire",
+]
 
 BASE_STATS_MARCHE = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi"
 BASE_STATS_TERRITOIRE = "https://api.francetravail.io/partenaire/stats-informations-territoire"
@@ -257,9 +268,35 @@ def _appeler_indicateur(base_url, ressource, token, payload):
     return r.json(), None
 
 
+def _appel_avec_decouverte_scope(candidats, cle_session, base_url, ressource, payload):
+    """
+    Essaie le scope déjà validé pour cette famille d'API (mémorisé en session),
+    sinon teste chaque candidat jusqu'à trouver celui qui fonctionne réellement.
+    """
+    scope_connu = st.session_state.get(cle_session)
+    ordre_essai = [scope_connu] + [c for c in candidats if c != scope_connu] if scope_connu else candidats
+
+    derniere_erreur = "Aucun scope testé."
+    for scope in ordre_essai:
+        try:
+            token = get_token(scope)
+        except Exception as e:
+            derniere_erreur = f"Échec d'obtention du token pour le scope '{scope}' : {e}"
+            continue
+        data, erreur = _appeler_indicateur(base_url, ressource, token, payload)
+        if erreur is None:
+            st.session_state[cle_session] = scope
+            return data, None
+        derniere_erreur = f"[scope '{scope}'] {erreur}"
+
+    return None, (
+        f"Aucun scope testé n'a fonctionné pour cette API. Dernière erreur : {derniere_erreur} "
+        "— vérifie le nom exact du scope via le bouton 'Authorize' du Swagger France Travail."
+    )
+
+
 def demandeurs_emploi_departement(code_rome, departement):
     """Indicateur DE_1 : nombre de demandeurs d'emploi (cat. A+B+C) pour un ROME et un département."""
-    token = get_token(SCOPE_STATS_MARCHE)
     payload = {
         "codeTypeTerritoire": "DEP",
         "codeTerritoire": departement,
@@ -271,7 +308,10 @@ def demandeurs_emploi_departement(code_rome, departement):
         "dernierePeriode": True,
         "sansCaracteristiques": True,
     }
-    data, erreur = _appeler_indicateur(BASE_STATS_MARCHE, "/v1/indicateur/stat-demandeurs", token, payload)
+    data, erreur = _appel_avec_decouverte_scope(
+        _CANDIDATS_SCOPE_STATS_MARCHE, "scope_stats_marche", BASE_STATS_MARCHE,
+        "/v1/indicateur/stat-demandeurs", payload,
+    )
     if erreur:
         return None, None, erreur
     valeurs = data.get("listeValeursParPeriode", [])
@@ -282,7 +322,6 @@ def demandeurs_emploi_departement(code_rome, departement):
 
 def dynamisme_territoire(code_rome, departement):
     """Indicateur DYN_1 : dynamique globale de l'emploi sur le territoire, via l'API Informations sur un territoire."""
-    token = get_token(SCOPE_STATS_TERRITOIRE)
     payload = {
         "codeTypeTerritoire": "DEP",
         "codeTerritoire": departement,
@@ -292,7 +331,10 @@ def dynamisme_territoire(code_rome, departement):
         "dernierePeriode": True,
         "sansCaracteristiques": True,
     }
-    data, erreur = _appeler_indicateur(BASE_STATS_TERRITOIRE, "/v1/indicateur/stat-dynamique-emploi", token, payload)
+    data, erreur = _appel_avec_decouverte_scope(
+        _CANDIDATS_SCOPE_STATS_TERRITOIRE, "scope_stats_territoire", BASE_STATS_TERRITOIRE,
+        "/v1/indicateur/stat-dynamique-emploi", payload,
+    )
     if erreur:
         return None, erreur
     return data.get("listeValeursParPeriode", []), None
@@ -300,7 +342,6 @@ def dynamisme_territoire(code_rome, departement):
 
 def embauches_recentes(code_rome, departement):
     """Indicateur EMB_1 : embauches récentes sur le métier et le département."""
-    token = get_token(SCOPE_STATS_MARCHE)
     payload = {
         "codeTypeTerritoire": "DEP",
         "codeTerritoire": departement,
@@ -312,7 +353,10 @@ def embauches_recentes(code_rome, departement):
         "dernierePeriode": True,
         "sansCaracteristiques": True,
     }
-    data, erreur = _appeler_indicateur(BASE_STATS_MARCHE, "/v1/indicateur/stat-embauches", token, payload)
+    data, erreur = _appel_avec_decouverte_scope(
+        _CANDIDATS_SCOPE_STATS_MARCHE, "scope_stats_marche", BASE_STATS_MARCHE,
+        "/v1/indicateur/stat-embauches", payload,
+    )
     if erreur:
         return None, None, erreur
     valeurs = data.get("listeValeursParPeriode", [])
@@ -323,7 +367,6 @@ def embauches_recentes(code_rome, departement):
 
 def etablissements_secteur(code_rome, departement):
     """Indicateur ETAB_1 : établissements par secteur sur le département."""
-    token = get_token(SCOPE_STATS_TERRITOIRE)
     payload = {
         "codeTypeTerritoire": "DEP",
         "codeTerritoire": departement,
@@ -333,7 +376,10 @@ def etablissements_secteur(code_rome, departement):
         "dernierePeriode": True,
         "sansCaracteristiques": True,
     }
-    data, erreur = _appeler_indicateur(BASE_STATS_TERRITOIRE, "/v1/indicateur/stat-etablissements", token, payload)
+    data, erreur = _appel_avec_decouverte_scope(
+        _CANDIDATS_SCOPE_STATS_TERRITOIRE, "scope_stats_territoire", BASE_STATS_TERRITOIRE,
+        "/v1/indicateur/stat-etablissements", payload,
+    )
     if erreur:
         return None, erreur
     return data.get("listeValeursParPeriode", []), None
