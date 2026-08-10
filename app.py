@@ -571,7 +571,9 @@ with tab_profil:
                     if not df_carte.empty:
                         df_carte["latitude"] = df_carte["latitude"].astype(float)
                         df_carte["longitude"] = df_carte["longitude"].astype(float)
-                        df_carte["rayon"] = df_carte["nombre_offres"] * 400 + 300
+                        # Échelle en racine carrée : c'est l'aire du cercle, pas son rayon,
+                        # qui doit être proportionnelle au nombre d'offres.
+                        df_carte["rayon"] = (df_carte["nombre_offres"] ** 0.5) * 6 + 8
                         df_carte["label"] = df_carte["nombre_offres"].astype(str)
 
                         couche_points = pdk.Layer(
@@ -579,7 +581,10 @@ with tab_profil:
                             data=df_carte,
                             get_position="[longitude, latitude]",
                             get_radius="rayon",
-                            get_fill_color=[0, 102, 204, 160],
+                            radius_units="pixels",
+                            radius_min_pixels=14,
+                            radius_max_pixels=45,
+                            get_fill_color=[0, 102, 204, 180],
                             pickable=True,
                         )
                         couche_texte = pdk.Layer(
@@ -587,14 +592,28 @@ with tab_profil:
                             data=df_carte,
                             get_position="[longitude, latitude]",
                             get_text="label",
-                            get_size=18,
+                            get_size=16,
                             get_color=[255, 255, 255, 255],
                             get_alignment_baseline="'center'",
                         )
+                        etendue_lat = df_carte["latitude"].max() - df_carte["latitude"].min()
+                        etendue_lon = df_carte["longitude"].max() - df_carte["longitude"].min()
+                        etendue = max(etendue_lat, etendue_lon)
+                        if etendue < 0.03:
+                            zoom_auto = 12
+                        elif etendue < 0.1:
+                            zoom_auto = 11
+                        elif etendue < 0.3:
+                            zoom_auto = 9.5
+                        elif etendue < 0.8:
+                            zoom_auto = 8.5
+                        else:
+                            zoom_auto = 7
+
                         vue = pdk.ViewState(
                             latitude=df_carte["latitude"].mean(),
                             longitude=df_carte["longitude"].mean(),
-                            zoom=8,
+                            zoom=zoom_auto,
                         )
                         st.pydeck_chart(
                             pdk.Deck(
