@@ -509,7 +509,7 @@ with tab_profil:
 
     col1, col2 = st.columns(2)
     with col1:
-        mots_cles_profil = st.text_input("Métier recherché", value="consultant", key="mots_profil")
+        mots_cles_profil = st.text_input("Métier recherché", value="", key="mots_profil")
     with col2:
         departement_profil = st.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
 
@@ -521,20 +521,23 @@ with tab_profil:
     code_secteur_profil = options_secteurs[secteur_choisi_profil]
 
     if st.button("Lancer l'analyse de mon profil"):
-        with st.spinner("Résolution du métier vers un/des code(s) ROME..."):
-            df_rome = resoudre_codes_rome(
-                mots_cles_profil, departement=departement_profil, secteur_activite=code_secteur_profil
-            )
-        # Stocké en session_state pour survivre aux reruns déclenchés par le
-        # selectbox ci-dessous, et pour être accessible depuis l'onglet "KPIs avancés".
-        st.session_state["df_rome_profil"] = df_rome
-        st.session_state["departement_profil_actif"] = departement_profil
-        st.session_state["mots_cles_profil_actif"] = mots_cles_profil
-        st.session_state["secteur_profil_actif"] = code_secteur_profil
-        # Force la valeur du sélecteur secteur de l'onglet "Offres d'emploi" — doit être
-        # fait AVANT que ce widget soit instancié plus bas dans le script (même rerun),
-        # sinon Streamlit ignore silencieusement toute tentative de le faire via `index`.
-        st.session_state["secteur_offres"] = secteur_choisi_profil
+        if not mots_cles_profil.strip():
+            st.warning("Merci d'indiquer un métier recherché avant de lancer l'analyse.")
+        else:
+            with st.spinner("Résolution du métier vers un/des code(s) ROME..."):
+                df_rome = resoudre_codes_rome(
+                    mots_cles_profil, departement=departement_profil, secteur_activite=code_secteur_profil
+                )
+            # Stocké en session_state pour survivre aux reruns déclenchés par le
+            # selectbox ci-dessous, et pour être accessible depuis l'onglet "KPIs avancés".
+            st.session_state["df_rome_profil"] = df_rome
+            st.session_state["departement_profil_actif"] = departement_profil
+            st.session_state["mots_cles_profil_actif"] = mots_cles_profil
+            st.session_state["secteur_profil_actif"] = code_secteur_profil
+            # Force la valeur du sélecteur secteur de l'onglet "Offres d'emploi" — doit être
+            # fait AVANT que ce widget soit instancié plus bas dans le script (même rerun),
+            # sinon Streamlit ignore silencieusement toute tentative de le faire via `index`.
+            st.session_state["secteur_offres"] = secteur_choisi_profil
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
