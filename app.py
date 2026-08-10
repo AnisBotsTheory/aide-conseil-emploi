@@ -3,6 +3,7 @@ import requests
 import os
 import pandas as pd
 import folium
+import altair as alt
 from datetime import datetime, timedelta, timezone
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
@@ -71,25 +72,38 @@ def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, ra
 # ---------------------------------------------------------------------------
 # Fonctions "Tendance par profil" (analyse personnalisée par métier ROME)
 # ---------------------------------------------------------------------------
-def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, echantillon=100):
+@st.cache_data(ttl=1800)
+def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, max_pages=8):
+    """
+    Parcourt toutes les offres correspondant au mot-clé (jusqu'à max_pages x 150
+    offres) pour identifier TOUS les postes (codes ROME) rencontrés, au lieu de
+    se limiter à un petit échantillon qui risquait de manquer des postes.
+    """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"motsCles": mots_cles, "range": f"0-{echantillon - 1}"}
-    if departement:
-        params["departement"] = departement
-    if secteur_activite:
-        params["secteurActivite"] = secteur_activite
 
-    r = requests.get(url, headers=headers, params=params)
-    if r.status_code not in (200, 206):
-        st.error(f"Erreur API Offres {r.status_code} : {r.text}")
-        return pd.DataFrame(columns=["code_rome", "libelle", "nb_offres_echantillon"])
+    toutes_offres = []
+    taille_page = 150
+    for page in range(max_pages):
+        debut = page * taille_page
+        fin = debut + taille_page - 1
+        params = {"motsCles": mots_cles, "range": f"{debut}-{fin}"}
+        if departement:
+            params["departement"] = departement
+        if secteur_activite:
+            params["secteurActivite"] = secteur_activite
+        r = requests.get(url, headers=headers, params=params)
+        if r.status_code not in (200, 206):
+            break
+        resultats = r.json().get("resultats", [])
+        toutes_offres.extend(resultats)
+        if len(resultats) < taille_page:
+            break
 
-    resultats = r.json().get("resultats", [])
     compteur = Counter()
     libelles = {}
-    for offre in resultats:
+    for offre in toutes_offres:
         rome = offre.get("romeCode")
         if rome:
             compteur[rome] += 1
@@ -285,6 +299,18 @@ def demandeurs_emploi_departement(code_rome, departement):
 # ---------------------------------------------------------------------------
 # Fonctions "KPIs avancés" : évolution annuelle, type de contrat, salaire
 # ---------------------------------------------------------------------------
+_MOIS_FR = {
+    1: "jan", 2: "fév", 3: "mars", 4: "avr", 5: "mai", 6: "juin",
+    7: "juil", 8: "août", 9: "sept", 10: "oct", 11: "nov", 12: "déc",
+}
+
+
+def _formater_mois_fr(mois_str):
+    """'2026-03' -> 'mars 2026'"""
+    annee, mois = mois_str.split("-")
+    return f"{_MOIS_FR[int(mois)]} {annee}"
+
+
 @st.cache_data(ttl=1800)
 def evolution_offres_annuelle(code_rome, departement):
     """
@@ -360,6 +386,7 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
 
     compteur_contrats = Counter()
     lignes_salaires = []
+    entreprises = {}
     for offre in toutes_offres:
         type_contrat = offre.get("typeContratLibelle") or offre.get("typeContrat") or "Non précisé"
         compteur_contrats[type_contrat] += 1
@@ -375,6 +402,15 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
                 }
             )
 
+        nom_entreprise = offre.get("entreprise", {}).get("nom")
+        if nom_entreprise:
+            ville = offre.get("lieuTravail", {}).get("libelle", "")
+            dep_offre = ville.split(" - ", 1)[0].strip() if " - " in ville else departement
+            if nom_entreprise not in entreprises:
+                entreprises[nom_entreprise] = {"nombre_offres": 0, "departements": set()}
+            entreprises[nom_entreprise]["nombre_offres"] += 1
+            entreprises[nom_entreprise]["departements"].add(dep_offre)
+
     df_contrats = pd.DataFrame(compteur_contrats.items(), columns=["type_contrat", "nombre_offres"])
     if not df_contrats.empty:
         df_contrats = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
@@ -383,7 +419,20 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
     nb_total = len(toutes_offres)
     nb_avec_salaire = len(lignes_salaires)
 
-    return df_contrats, df_salaires, nb_avec_salaire, nb_total
+    df_entreprises = pd.DataFrame(
+        [
+            {
+                "entreprise": nom,
+                "nombre_offres": infos["nombre_offres"],
+                "departements": ", ".join(sorted(infos["departements"])),
+            }
+            for nom, infos in entreprises.items()
+        ]
+    )
+    if not df_entreprises.empty:
+        df_entreprises = df_entreprises.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+
+    return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_entreprises
 
 
 def calculer_tension(nb_offres, nb_demandeurs):
@@ -641,31 +690,69 @@ with tab_avance:
         departement_actif = st.session_state["departement_profil_actif"]
 
         if st.button("🚀 Lancer l'analyse complète", type="primary", key="btn_analyse_complete"):
-            with st.spinner("Analyse en cours (évolution, contrats, salaires)..."):
+            with st.spinner("Analyse en cours (évolution, contrats, salaires, recruteurs)..."):
                 df_evolution = evolution_offres_annuelle(code_rome_actif, departement_actif)
-                df_contrats, df_salaires, nb_avec_salaire, nb_total_offres = repartition_contrats_et_salaires(
-                    code_rome_actif, departement_actif
+                df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_entreprises_avance = (
+                    repartition_contrats_et_salaires(code_rome_actif, departement_actif)
                 )
 
             st.divider()
-            st.markdown("#### 📈 Évolution du volume d'offres à l'année")
+            annee_courante = datetime.now().year
+            st.markdown(f"#### 📈 Nombre d'offres d'emploi - {annee_courante}")
             if df_evolution.empty or df_evolution["nombre_offres"].sum() == 0:
                 st.info("Aucune donnée d'évolution disponible pour ces critères.")
             else:
-                st.bar_chart(df_evolution.set_index("mois")[["nombre_offres"]])
-                st.caption("Nombre d'offres publiées par mois sur les 12 derniers mois.")
+                df_evolution_affiche = df_evolution.copy()
+                df_evolution_affiche["mois_label"] = df_evolution_affiche["mois"].apply(_formater_mois_fr)
+                ordre_mois = list(df_evolution_affiche["mois_label"])
+
+                base_evolution = alt.Chart(df_evolution_affiche).encode(
+                    x=alt.X(
+                        "mois_label:N",
+                        sort=ordre_mois,
+                        title=None,
+                        axis=alt.Axis(labelAngle=-45),
+                    ),
+                    y=alt.Y("nombre_offres:Q", title="Nombre d'offres"),
+                )
+                courbe = base_evolution.mark_line(point=True, color="#0066cc")
+                etiquettes = base_evolution.mark_text(dy=-12, fontSize=12).encode(text="nombre_offres:Q")
+                st.altair_chart((courbe + etiquettes).properties(height=350), use_container_width=True)
 
             st.divider()
             st.markdown("#### 📋 Répartition par type de contrat")
             if df_contrats.empty:
                 st.info("Aucune donnée de type de contrat disponible pour ces critères.")
             else:
-                st.bar_chart(df_contrats.set_index("type_contrat")[["nombre_offres"]])
-                st.dataframe(
-                    df_contrats.rename(columns={"type_contrat": "Type de contrat", "nombre_offres": "Nombre d'offres"}),
-                    use_container_width=True,
-                    hide_index=True,
+                df_contrats_hm = df_contrats.copy()
+                df_contrats_hm["categorie"] = "Offres"
+
+                base_hm = alt.Chart(df_contrats_hm).encode(
+                    x=alt.X(
+                        "type_contrat:N",
+                        title=None,
+                        sort=alt.SortField("nombre_offres", order="descending"),
+                        axis=alt.Axis(labelAngle=-45),
+                    ),
+                    y=alt.Y("categorie:N", title=None, axis=None),
                 )
+                cases = base_hm.mark_rect().encode(
+                    color=alt.Color(
+                        "nombre_offres:Q",
+                        scale=alt.Scale(scheme="blues"),
+                        legend=alt.Legend(title="Nombre d'offres"),
+                    ),
+                    tooltip=["type_contrat:N", "nombre_offres:Q"],
+                )
+                etiquettes_hm = base_hm.mark_text(fontWeight="bold", fontSize=14).encode(
+                    text="nombre_offres:Q",
+                    color=alt.condition(
+                        alt.datum.nombre_offres > df_contrats_hm["nombre_offres"].max() / 2,
+                        alt.value("white"),
+                        alt.value("black"),
+                    ),
+                )
+                st.altair_chart((cases + etiquettes_hm).properties(height=140), use_container_width=True)
 
             st.divider()
             st.markdown("#### 💰 Fourchette de salaire proposée")
@@ -677,6 +764,26 @@ with tab_avance:
                 pct = round(100 * nb_avec_salaire / nb_total_offres)
                 st.metric("Offres indiquant un salaire", f"{nb_avec_salaire} / {nb_total_offres} ({pct}%)")
                 st.dataframe(df_salaires, use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.markdown("#### 🏢 Top recruteurs")
+            if df_entreprises_avance.empty:
+                st.info(
+                    "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
+                    "les offres sont diffusées de façon anonyme."
+                )
+            else:
+                st.dataframe(
+                    df_entreprises_avance.rename(
+                        columns={
+                            "entreprise": "Entreprise",
+                            "nombre_offres": "Nombre d'offres",
+                            "departements": "Département",
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
             st.divider()
             st.markdown("#### 🎯 Difficulté de recrutement (BMO)")
