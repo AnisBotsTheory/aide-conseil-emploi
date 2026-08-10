@@ -156,6 +156,7 @@ def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, echa
     return df
 
 
+@st.cache_data(ttl=1800)
 def offres_par_ville(code_rome, departement, max_pages=5):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -193,6 +194,7 @@ def offres_par_ville(code_rome, departement, max_pages=5):
     return df, len(toutes_offres)
 
 
+@st.cache_data(ttl=1800)
 def volumes_nationaux_offres(code_rome):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -212,6 +214,7 @@ def volumes_nationaux_offres(code_rome):
     return total
 
 
+@st.cache_data(ttl=1800)
 def volumes_departement_offres(code_rome, departement):
     """Total offres pour un code ROME sur un département (via Content-Range, pas de pagination)."""
     token = get_token(SCOPE_OFFRES)
@@ -298,6 +301,7 @@ def _appel_avec_decouverte_scope(candidats, cle_session, base_url, ressource, pa
     )
 
 
+@st.cache_data(ttl=1800)
 def demandeurs_emploi_departement(code_rome, departement):
     """Indicateur DE_1 : nombre de demandeurs d'emploi (cat. A+B+C) pour un ROME et un département."""
     payload = {
@@ -635,9 +639,26 @@ with tab_profil:
                         else:
                             zoom_auto = 8
 
+                        # Réutilise la position où l'utilisateur a laissé la carte (zoom/déplacement)
+                        # au lieu de la recentrer à chaque interaction — sauf si le contexte de
+                        # recherche (métier/département) a changé entre-temps.
+                        contexte_carte = (code_rome_choisi, departement_actif)
+                        vue_precedente = st.session_state.get("vue_carte_offres")
+                        if (
+                            vue_precedente
+                            and vue_precedente.get("center")
+                            and st.session_state.get("contexte_carte_offres") == contexte_carte
+                        ):
+                            centre = [vue_precedente["center"]["lat"], vue_precedente["center"]["lng"]]
+                            zoom_depart = vue_precedente.get("zoom", zoom_auto)
+                        else:
+                            centre = [df_carte["latitude"].mean(), df_carte["longitude"].mean()]
+                            zoom_depart = zoom_auto
+                            st.session_state["contexte_carte_offres"] = contexte_carte
+
                         carte = folium.Map(
-                            location=[df_carte["latitude"].mean(), df_carte["longitude"].mean()],
-                            zoom_start=zoom_auto,
+                            location=centre,
+                            zoom_start=zoom_depart,
                             tiles="CartoDB dark_matter",
                         )
                         cluster = MarkerCluster(
@@ -660,7 +681,15 @@ with tab_profil:
                                     weight=1,
                                 ).add_to(cluster)
 
-                        st_folium(carte, use_container_width=True, height=500, key="carte_offres_ville")
+                        resultat_carte = st_folium(
+                            carte,
+                            use_container_width=True,
+                            height=500,
+                            key="carte_offres_ville",
+                            returned_objects=["zoom", "center"],
+                        )
+                        if resultat_carte:
+                            st.session_state["vue_carte_offres"] = resultat_carte
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
 
