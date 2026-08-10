@@ -32,13 +32,20 @@ def get_token(scope):
     return r.json()["access_token"]
 
 
-def _params_filtre_poste(code_rome, mots_cles=None):
+def _params_filtre_poste(code_rome, mots_cles=None, secteur_activite=None):
     """
-    Retourne le paramètre de filtre à utiliser pour l'API Offres d'emploi :
-    codeROME pour un poste précis, motsCles pour "Tous les postes" (recherche large).
+    Retourne le(s) paramètre(s) de filtre à utiliser pour l'API Offres d'emploi :
+    - codeROME pour un poste précis
+    - motsCles + secteurActivite (si renseignés) pour "Tous les postes" (recherche large,
+      indexée sur le même métier et le même secteur que la recherche de profil).
     """
     if code_rome == "TOUS":
-        return {"motsCles": mots_cles} if mots_cles else {}
+        params = {}
+        if mots_cles:
+            params["motsCles"] = mots_cles
+        if secteur_activite:
+            params["secteurActivite"] = secteur_activite
+        return params
     return {"codeROME": code_rome}
 
 
@@ -130,7 +137,7 @@ def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, max_
 
 
 @st.cache_data(ttl=1800)
-def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None):
+def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -141,7 +148,7 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
         debut = page * taille_page
         fin = debut + taille_page - 1
         params = {"departement": departement, "range": f"{debut}-{fin}"}
-        params.update(_params_filtre_poste(code_rome, mots_cles))
+        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
             params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -206,13 +213,13 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
 
 
 @st.cache_data(ttl=1800)
-def volumes_departement_offres(code_rome, departement, mots_cles=None):
+def volumes_departement_offres(code_rome, departement, mots_cles=None, secteur_activite=None):
     """Total offres pour un code ROME (ou tous, via mots-clés) sur un département."""
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     params = {"departement": departement, "range": "0-0"}
-    params.update(_params_filtre_poste(code_rome, mots_cles))
+    params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
     r = requests.get(url, headers=headers, params=params)
     if r.status_code not in (200, 206):
         return 0
@@ -326,7 +333,7 @@ def _formater_mois_fr(mois_str):
 
 
 @st.cache_data(ttl=1800)
-def evolution_offres_annuelle(code_rome, departement, mots_cles=None):
+def evolution_offres_annuelle(code_rome, departement, mots_cles=None, secteur_activite=None):
     """
     Volume d'offres par mois sur les 12 derniers mois, pour un ROME (ou tous, via
     mots-clés) et un département. Une requête par mois (compte via Content-Range).
@@ -355,7 +362,7 @@ def evolution_offres_annuelle(code_rome, departement, mots_cles=None):
             "minCreationDate": debut_mois.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "maxCreationDate": fin_mois.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        params.update(_params_filtre_poste(code_rome, mots_cles))
+        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
         r = requests.get(url, headers=headers, params=params)
         total = 0
         if r.status_code in (200, 206):
@@ -371,7 +378,7 @@ def evolution_offres_annuelle(code_rome, departement, mots_cles=None):
 
 
 @st.cache_data(ttl=1800)
-def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None):
+def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
     """
     Récupère les offres (ROME ou tous via mots-clés, + département, filtre de
     fraîcheur optionnel) et calcule la répartition par type de contrat + salaires.
@@ -386,7 +393,7 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
         debut = page * taille_page
         fin = debut + taille_page - 1
         params = {"departement": departement, "range": f"{debut}-{fin}"}
-        params.update(_params_filtre_poste(code_rome, mots_cles))
+        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
             params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -403,7 +410,9 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
     lignes_salaires = []
     entreprises = {}
     for offre in toutes_offres:
-        type_contrat = offre.get("typeContratLibelle") or offre.get("typeContrat") or "Non précisé"
+        type_contrat_brut = offre.get("typeContratLibelle") or offre.get("typeContrat") or "Non précisé"
+        # On ignore la nuance de durée après le tiret (ex: "Intérim - 6 Mois" -> "Intérim")
+        type_contrat = type_contrat_brut.split(" - ")[0].strip()
         compteur_contrats[type_contrat] += 1
 
         salaire = offre.get("salaire", {})
@@ -522,11 +531,13 @@ with tab_profil:
         st.session_state["df_rome_profil"] = df_rome
         st.session_state["departement_profil_actif"] = departement_profil
         st.session_state["mots_cles_profil_actif"] = mots_cles_profil
+        st.session_state["secteur_profil_actif"] = code_secteur_profil
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
         departement_actif = st.session_state["departement_profil_actif"]
         mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
+        secteur_actif = st.session_state.get("secteur_profil_actif")
 
         if df_rome.empty:
             st.error("Aucun code ROME trouvé pour ce métier. Essayez un autre mot-clé.")
@@ -572,7 +583,11 @@ with tab_profil:
             with st.spinner("Récupération des offres par ville..."):
                 df_villes, total_region, date_min_pub, date_max_pub, df_entreprises, nb_offres_anonymes = (
                     offres_par_ville(
-                        code_rome_choisi, departement_actif, jours_max=jours_max, mots_cles=mots_cles_actifs
+                        code_rome_choisi,
+                        departement_actif,
+                        jours_max=jours_max,
+                        mots_cles=mots_cles_actifs,
+                        secteur_activite=secteur_actif,
                     )
                 )
             st.metric("Total offres dans la région", total_region)
@@ -722,15 +737,22 @@ with tab_avance:
         code_rome_actif = st.session_state["code_rome_choisi"]
         departement_actif = st.session_state["departement_profil_actif"]
         mots_cles_actifs_avance = st.session_state.get("mots_cles_profil_actif", "")
+        secteur_actif_avance = st.session_state.get("secteur_profil_actif")
 
         if st.button("🚀 Lancer l'analyse complète", type="primary", key="btn_analyse_complete"):
             with st.spinner("Analyse en cours (évolution, contrats, salaires, recruteurs)..."):
                 df_evolution = evolution_offres_annuelle(
-                    code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance
+                    code_rome_actif,
+                    departement_actif,
+                    mots_cles=mots_cles_actifs_avance,
+                    secteur_activite=secteur_actif_avance,
                 )
                 df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_entreprises_avance = (
                     repartition_contrats_et_salaires(
-                        code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance
+                        code_rome_actif,
+                        departement_actif,
+                        mots_cles=mots_cles_actifs_avance,
+                        secteur_activite=secteur_actif_avance,
                     )
                 )
 
