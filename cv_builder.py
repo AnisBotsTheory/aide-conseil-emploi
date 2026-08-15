@@ -117,6 +117,7 @@ def _estimer_volume_contenu(data):
     for form in data.get("formations", []):
         volume += 40
     volume += len(data.get("langues", ""))
+    volume += len(data.get("competences", ""))
     volume += len(data.get("outils", ""))
     volume += len(data.get("interets", ""))
     return volume
@@ -351,9 +352,17 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
                 prefixe = _drapeau_pour_langue(ligne) if afficher_drapeaux else ""
                 _puce(cell_bandeau, f"{prefixe}{ligne}", echelle=echelle)
 
-    # --- Compétences / Outils informatiques ---
+    # --- Compétences ---
+    if data.get("competences"):
+        _titre_section(cell_bandeau, "Compétences", bandeau_texte, echelle=echelle)
+        for ligne in data["competences"].split("\n"):
+            ligne = ligne.strip()
+            if ligne:
+                _puce(cell_bandeau, ligne, echelle=echelle)
+
+    # --- Outils informatiques ---
     if data.get("outils"):
-        _titre_section(cell_bandeau, "Compétences & Outils", bandeau_texte, echelle=echelle)
+        _titre_section(cell_bandeau, "Outils informatiques", bandeau_texte, echelle=echelle)
         for ligne in data["outils"].split("\n"):
             ligne = ligne.strip()
             if ligne:
@@ -530,11 +539,18 @@ def afficher_generateur_cv():
         height=80,
     )
 
-    st.markdown("#### 🛠️ Compétences & outils")
+    st.markdown("#### 🧠 Compétences")
+    competences = st.text_area(
+        "Une compétence par ligne (ex: Gestion de projet, Audit des processus...)",
+        key="cv_competences",
+        height=90,
+    )
+
+    st.markdown("#### 🛠️ Outils informatiques")
     outils = st.text_area(
-        "Un élément par ligne (ex: Gestion de projet, SQL, Salesforce...)",
+        "Un outil par ligne (ex: Jira, SAP, SalesForce...)",
         key="cv_outils",
-        height=100,
+        height=90,
     )
 
     st.markdown("#### 🎯 Centres d'intérêt")
@@ -561,6 +577,7 @@ def afficher_generateur_cv():
                 "experiences": st.session_state.cv_experiences,
                 "formations": st.session_state.cv_formations,
                 "langues": langues,
+                "competences": competences,
                 "outils": outils,
                 "interets": interets,
             }
