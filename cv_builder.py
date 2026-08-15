@@ -13,6 +13,7 @@ Intégration dans app.py :
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -42,6 +43,101 @@ THEMES = {
         "bandeau_texte": "2F5233",
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Drapeaux (facultatif, best-effort — langues reconnues seulement)
+# ---------------------------------------------------------------------------
+DRAPEAUX_LANGUES = {
+    "français": "🇫🇷", "anglais": "🇬🇧", "espagnol": "🇪🇸", "allemand": "🇩🇪",
+    "italien": "🇮🇹", "portugais": "🇵🇹", "arabe": "🇸🇦", "chinois": "🇨🇳",
+    "mandarin": "🇨🇳", "japonais": "🇯🇵", "russe": "🇷🇺", "néerlandais": "🇳🇱",
+    "coréen": "🇰🇷", "turc": "🇹🇷", "polonais": "🇵🇱", "grec": "🇬🇷",
+    "hébreu": "🇮🇱", "hindi": "🇮🇳", "suédois": "🇸🇪", "norvégien": "🇳🇴",
+    "danois": "🇩🇰", "finnois": "🇫🇮", "roumain": "🇷🇴", "ukrainien": "🇺🇦",
+}
+
+
+def _drapeau_pour_langue(texte_ligne):
+    """Retourne un drapeau si le nom de la langue est reconnu, sinon chaîne vide."""
+    debut = texte_ligne.strip().lower()
+    for nom, drapeau in DRAPEAUX_LANGUES.items():
+        if debut.startswith(nom):
+            return drapeau + " "
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Aide à l'autofill navigateur (best-effort — limitation connue de Streamlit)
+# ---------------------------------------------------------------------------
+def _injecter_aide_autofill():
+    """
+    Streamlit ne pose pas d'attributs autocomplete/name sur ses <input>, donc les
+    navigateurs ne proposent pas toujours le remplissage automatique. Ce script
+    les ajoute a posteriori sur les champs d'infos personnelles, ce qui aide
+    (sans garantie totale, ça dépend du navigateur) les suggestions à apparaître.
+    """
+    components.html(
+        """
+        <script>
+        const cible = window.parent.document;
+        const correspondances = {
+            "Prénom": "given-name",
+            "Nom": "family-name",
+            "Email": "email",
+            "Téléphone": "tel",
+            "Ville": "address-level2",
+        };
+        function appliquer() {
+            const champs = cible.querySelectorAll("input[aria-label]");
+            champs.forEach((champ) => {
+                const label = champ.getAttribute("aria-label");
+                if (correspondances[label]) {
+                    champ.setAttribute("autocomplete", correspondances[label]);
+                    champ.setAttribute("name", correspondances[label]);
+                }
+            });
+        }
+        appliquer();
+        setTimeout(appliquer, 500);
+        setTimeout(appliquer, 1500);
+        </script>
+        """,
+        height=0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Échelle automatique (police / espacement) pour tenir sur une page
+# ---------------------------------------------------------------------------
+def _estimer_volume_contenu(data):
+    volume = len(data.get("profil", ""))
+    for exp in data.get("experiences", []):
+        volume += len(exp.get("description", "")) + 60
+    for form in data.get("formations", []):
+        volume += 40
+    volume += len(data.get("langues", ""))
+    volume += len(data.get("outils", ""))
+    volume += len(data.get("interets", ""))
+    return volume
+
+
+def _calculer_echelle(volume):
+    """Plus le contenu est volumineux, plus on réduit polices/espacements."""
+    if volume < 1400:
+        return 1.0
+    elif volume < 2200:
+        return 0.9
+    elif volume < 3000:
+        return 0.82
+    elif volume < 3800:
+        return 0.75
+    else:
+        return 0.68
+
+
+def _pt(base, echelle):
+    return Pt(round(base * echelle * 2) / 2)
 
 
 # ---------------------------------------------------------------------------
@@ -154,23 +250,23 @@ def _definir_marges_cellule(cell, gauche=0.15, droite=0.15, haut=0.05, bas=0.05)
     tc_pr.append(tc_mar)
 
 
-def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12):
-    """Ajoute un titre de section stylé (majuscules, gras, coloré, filet ne sous forme d'espacement)."""
+def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0):
+    """Ajoute un titre de section stylé (majuscules, gras, coloré)."""
     p = cell_ou_doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(12)
-    p.paragraph_format.space_after = Pt(4)
+    p.paragraph_format.space_before = _pt(12, echelle)
+    p.paragraph_format.space_after = _pt(4, echelle)
     run = p.add_run(texte.upper())
     run.bold = True
-    run.font.size = Pt(taille)
+    run.font.size = _pt(taille, echelle)
     run.font.color.rgb = RGBColor.from_string(couleur_hex)
     return p
 
 
-def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10):
+def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10, echelle=1.0):
     p = cell_ou_doc.add_paragraph()
-    p.paragraph_format.space_after = Pt(2)
+    p.paragraph_format.space_after = _pt(2, echelle)
     run = p.add_run(f"• {texte}")
-    run.font.size = Pt(taille)
+    run.font.size = _pt(taille, echelle)
     if couleur_puce:
         run.font.color.rgb = RGBColor.from_string(couleur_puce)
     return p
@@ -179,11 +275,12 @@ def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10):
 # ---------------------------------------------------------------------------
 # Génération du document Word (mise en page 2 colonnes)
 # ---------------------------------------------------------------------------
-def generer_cv_docx(data, theme_nom="🔵 Bleu classique"):
+def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, afficher_drapeaux=True):
     theme = THEMES.get(theme_nom, THEMES["🔵 Bleu classique"])
     accent = theme["accent"]
     bandeau_fond = theme["bandeau_fond"]
     bandeau_texte = theme["bandeau_texte"]
+    echelle = _calculer_echelle(_estimer_volume_contenu(data))
 
     doc = Document()
     for section in doc.sections:
@@ -220,8 +317,16 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique"):
     # =======================================================================
     # BANDEAU LATÉRAL
     # =======================================================================
+    # --- Photo (facultative) ---
+    if photo_bytes:
+        p_photo = cell_bandeau.add_paragraph()
+        p_photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_photo.paragraph_format.space_after = _pt(10, echelle)
+        run_photo = p_photo.add_run()
+        run_photo.add_picture(BytesIO(photo_bytes), width=Inches(1.6))
+
     # --- Contact ---
-    _titre_section(cell_bandeau, "Contact", bandeau_texte)
+    _titre_section(cell_bandeau, "Contact", bandeau_texte, echelle=echelle)
     for label, valeur in [
         ("E-mail", data.get("email")),
         ("Téléphone", data.get("telephone")),
@@ -229,37 +334,38 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique"):
     ]:
         if valeur:
             p = cell_bandeau.add_paragraph()
-            p.paragraph_format.space_after = Pt(2)
+            p.paragraph_format.space_after = _pt(2, echelle)
             run_label = p.add_run(f"{label}\n")
             run_label.bold = True
-            run_label.font.size = Pt(9)
+            run_label.font.size = _pt(9, echelle)
             run_label.font.color.rgb = RGBColor.from_string(bandeau_texte)
             run_val = p.add_run(valeur)
-            run_val.font.size = Pt(10)
+            run_val.font.size = _pt(10, echelle)
 
     # --- Langues ---
     if data.get("langues"):
-        _titre_section(cell_bandeau, "Langues", bandeau_texte)
+        _titre_section(cell_bandeau, "Langues", bandeau_texte, echelle=echelle)
         for ligne in data["langues"].split("\n"):
             ligne = ligne.strip()
             if ligne:
-                _puce(cell_bandeau, ligne)
+                prefixe = _drapeau_pour_langue(ligne) if afficher_drapeaux else ""
+                _puce(cell_bandeau, f"{prefixe}{ligne}", echelle=echelle)
 
     # --- Compétences / Outils informatiques ---
     if data.get("outils"):
-        _titre_section(cell_bandeau, "Compétences & Outils", bandeau_texte)
+        _titre_section(cell_bandeau, "Compétences & Outils", bandeau_texte, echelle=echelle)
         for ligne in data["outils"].split("\n"):
             ligne = ligne.strip()
             if ligne:
-                _puce(cell_bandeau, ligne)
+                _puce(cell_bandeau, ligne, echelle=echelle)
 
     # --- Centres d'intérêt ---
     if data.get("interets"):
-        _titre_section(cell_bandeau, "Centres d'intérêt", bandeau_texte)
+        _titre_section(cell_bandeau, "Centres d'intérêt", bandeau_texte, echelle=echelle)
         interets_list = [i.strip() for i in data["interets"].replace("\n", ",").split(",") if i.strip()]
         p = cell_bandeau.add_paragraph()
         run = p.add_run(" · ".join(interets_list))
-        run.font.size = Pt(10)
+        run.font.size = _pt(10, echelle)
 
     # =======================================================================
     # COLONNE PRINCIPALE
@@ -269,21 +375,20 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique"):
     p_nom.paragraph_format.space_after = Pt(0)
     run_nom = p_nom.add_run(f"{data.get('prenom', '')} {data.get('nom', '')}".strip().upper())
     run_nom.bold = True
-    run_nom.font.size = Pt(20)
+    run_nom.font.size = _pt(20, echelle)
     run_nom.font.color.rgb = RGBColor.from_string(accent)
 
     if data.get("titre_recherche"):
         p_titre = cell_principale.add_paragraph()
-        p_titre.paragraph_format.space_after = Pt(8)
+        p_titre.paragraph_format.space_after = _pt(8, echelle)
         run_titre = p_titre.add_run(data["titre_recherche"])
         run_titre.italic = True
-        run_titre.font.size = Pt(13)
+        run_titre.font.size = _pt(13, echelle)
         run_titre.font.color.rgb = RGBColor.from_string(accent)
 
     # Filet horizontal sous l'en-tête
     p_filet = cell_principale.add_paragraph()
-    p_filet.paragraph_format.space_after = Pt(8)
-    p_filet_format = p_filet.paragraph_format
+    p_filet.paragraph_format.space_after = _pt(8, echelle)
     pPr = p_filet._p.get_or_add_pPr()
     bord = OxmlElement("w:pBdr")
     bas = OxmlElement("w:bottom")
@@ -296,22 +401,22 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique"):
 
     # --- Profil ---
     if data.get("profil"):
-        _titre_section(cell_principale, "Profil", accent, taille=13)
+        _titre_section(cell_principale, "Profil", accent, taille=13, echelle=echelle)
         p = cell_principale.add_paragraph()
         run = p.add_run(data["profil"])
-        run.font.size = Pt(10.5)
+        run.font.size = _pt(10.5, echelle)
 
     # --- Expériences ---
     experiences = [e for e in data.get("experiences", []) if e.get("poste") or e.get("entreprise")]
     if experiences:
-        _titre_section(cell_principale, "Expériences professionnelles", accent, taille=13)
+        _titre_section(cell_principale, "Expériences professionnelles", accent, taille=13, echelle=echelle)
         for exp in experiences:
             p = cell_principale.add_paragraph()
-            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_before = _pt(6, echelle)
             p.paragraph_format.space_after = Pt(0)
             run = p.add_run(f"{exp.get('poste', '')} — {exp.get('entreprise', '')}")
             run.bold = True
-            run.font.size = Pt(11)
+            run.font.size = _pt(11, echelle)
 
             dates_ville = " · ".join(
                 x for x in [
@@ -321,10 +426,10 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique"):
             )
             if dates_ville:
                 p_meta = cell_principale.add_paragraph()
-                p_meta.paragraph_format.space_after = Pt(3)
+                p_meta.paragraph_format.space_after = _pt(3, echelle)
                 run_meta = p_meta.add_run(dates_ville)
                 run_meta.italic = True
-                run_meta.font.size = Pt(9.5)
+                run_meta.font.size = _pt(9.5, echelle)
                 run_meta.font.color.rgb = RGBColor.from_string(accent)
 
             description = exp.get("description", "").strip()
@@ -332,33 +437,33 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique"):
                 for ligne in description.split("\n"):
                     ligne = ligne.strip(" -•")
                     if ligne:
-                        _puce(cell_principale, ligne, taille=10)
+                        _puce(cell_principale, ligne, taille=10, echelle=echelle)
 
     # --- Formation ---
     formations = [f for f in data.get("formations", []) if f.get("diplome") or f.get("etablissement")]
     if formations:
-        _titre_section(cell_principale, "Formation", accent, taille=13)
+        _titre_section(cell_principale, "Formation", accent, taille=13, echelle=echelle)
         for form in formations:
             p = cell_principale.add_paragraph()
-            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_before = _pt(4, echelle)
             p.paragraph_format.space_after = Pt(0)
             run = p.add_run(f"{form.get('diplome', '')} — {form.get('etablissement', '')}")
             run.bold = True
-            run.font.size = Pt(10.5)
+            run.font.size = _pt(10.5, echelle)
 
             meta = " · ".join(x for x in [form.get("ville", ""), form.get("annee", "")] if x)
             if meta:
                 p_meta = cell_principale.add_paragraph()
-                p_meta.paragraph_format.space_after = Pt(2)
+                p_meta.paragraph_format.space_after = _pt(2, echelle)
                 run_meta = p_meta.add_run(meta)
                 run_meta.italic = True
-                run_meta.font.size = Pt(9.5)
+                run_meta.font.size = _pt(9.5, echelle)
                 run_meta.font.color.rgb = RGBColor.from_string(accent)
 
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
-    return buffer
+    return buffer, echelle
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +474,11 @@ def afficher_generateur_cv():
 
     st.header("🧾 Créez votre CV")
     st.write("Remplissez les sections ci-dessous, choisissez un thème de couleur, puis générez votre CV au format Word (.docx).")
+    st.caption(
+        "ℹ️ Le remplissage automatique de votre navigateur peut ne pas fonctionner sur ce "
+        "formulaire (limitation technique de Streamlit) — on a ajouté une aide, mais ce n'est "
+        "pas garanti selon votre navigateur."
+    )
 
     theme_choisi = st.radio(
         "🎨 Thème de couleur",
@@ -376,6 +486,15 @@ def afficher_generateur_cv():
         horizontal=True,
         key="cv_theme",
     )
+
+    photo_uploadee = st.file_uploader(
+        "📷 Photo (facultatif, format carré recommandé)", type=["png", "jpg", "jpeg"], key="cv_photo"
+    )
+    if photo_uploadee:
+        col_apercu, _ = st.columns([1, 4])
+        col_apercu.image(photo_uploadee, width=100)
+
+    afficher_drapeaux = st.checkbox("🏳️ Afficher un drapeau à côté des langues reconnues", value=True, key="cv_drapeaux")
 
     st.markdown("#### 👤 Informations générales")
     c1, c2 = st.columns(2)
@@ -388,6 +507,8 @@ def afficher_generateur_cv():
     email = c3.text_input("Email", key="cv_email")
     telephone = c4.text_input("Téléphone", key="cv_telephone")
     ville = c5.text_input("Ville", key="cv_ville")
+
+    _injecter_aide_autofill()
 
     profil = st.text_area(
         "Profil / accroche (2-3 phrases qui résument votre parcours et votre projet)",
@@ -443,8 +564,18 @@ def afficher_generateur_cv():
                 "outils": outils,
                 "interets": interets,
             }
-            buffer = generer_cv_docx(data, theme_nom=theme_choisi)
+            photo_bytes = photo_uploadee.getvalue() if photo_uploadee else None
+            buffer, echelle = generer_cv_docx(
+                data, theme_nom=theme_choisi, photo_bytes=photo_bytes, afficher_drapeaux=afficher_drapeaux
+            )
             st.success("Votre CV est prêt !")
+            if echelle < 0.85:
+                st.warning(
+                    "⚠️ Contenu assez volumineux : la police et les espacements ont été "
+                    "automatiquement réduits pour essayer de tenir sur une page. Si le rendu "
+                    "final dépasse quand même une page, pense à raccourcir certaines descriptions "
+                    "d'expérience."
+                )
             st.download_button(
                 label="⬇️ Télécharger mon CV (.docx)",
                 data=buffer,
