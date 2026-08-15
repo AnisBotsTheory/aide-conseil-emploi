@@ -2,6 +2,8 @@
 cv_builder.py
 --------------
 Formulaire de création de CV pour l'application "Aide Conseil Emploi".
+Mise en page à deux colonnes (bandeau latéral coloré + colonne principale),
+avec 3 thèmes de couleur au choix. Pas de photo (décision produit actuelle).
 
 Intégration dans app.py :
     from cv_builder import afficher_generateur_cv
@@ -12,9 +14,34 @@ Intégration dans app.py :
 
 import streamlit as st
 from docx import Document
-from docx.shared import Pt, Cm
+from docx.shared import Pt, Cm, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 from io import BytesIO
+
+
+# ---------------------------------------------------------------------------
+# Thèmes de couleur
+# ---------------------------------------------------------------------------
+THEMES = {
+    "🔵 Bleu classique": {
+        "accent": "1F4E79",       # titres, nom, filets
+        "bandeau_fond": "EAF1F8",  # fond du bandeau latéral
+        "bandeau_texte": "1F4E79",
+    },
+    "🍷 Bordeaux élégant": {
+        "accent": "7B2C3B",
+        "bandeau_fond": "F6ECEE",
+        "bandeau_texte": "7B2C3B",
+    },
+    "🟢 Vert forêt": {
+        "accent": "2F5233",
+        "bandeau_fond": "EAF2EA",
+        "bandeau_texte": "2F5233",
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +103,7 @@ def _section_formations():
 
             c3, c4 = st.columns(2)
             form["ville"] = c3.text_input("Ville", value=form.get("ville", ""), key=f"form_ville_{i}")
-            form["annee"] = c4.text_input("Année", value=form.get("annee", ""), key=f"form_annee_{i}")
+            form["annee"] = c4.text_input("Année (ex: sept 2017 / oct 2018)", value=form.get("annee", ""), key=f"form_annee_{i}")
 
             if st.button("🗑️ Supprimer cette formation", key=f"form_supprimer_{i}"):
                 a_supprimer = i
@@ -91,66 +118,200 @@ def _section_formations():
 
 
 # ---------------------------------------------------------------------------
-# Génération du document Word
+# Helpers python-docx bas niveau (ombrage de cellule, bordures de tableau)
 # ---------------------------------------------------------------------------
-def _ajouter_titre_section(doc, texte):
-    p = doc.add_paragraph()
+def _ombrer_cellule(cell, couleur_hex):
+    """Applique une couleur de fond à une cellule de tableau (non exposé par l'API haut niveau)."""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), couleur_hex)
+    tc_pr.append(shd)
+
+
+def _supprimer_bordures_tableau(table):
+    """Retire toutes les bordures d'un tableau (utilisé comme grille de mise en page invisible)."""
+    tbl = table._tbl
+    tbl_pr = tbl.tblPr
+    borders = OxmlElement("w:tblBorders")
+    for cote in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        elem = OxmlElement(f"w:{cote}")
+        elem.set(qn("w:val"), "nil")
+        borders.append(elem)
+    tbl_pr.append(borders)
+
+
+def _definir_marges_cellule(cell, gauche=0.15, droite=0.15, haut=0.05, bas=0.05):
+    """Définit des marges internes (en cm) pour une cellule."""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tc_mar = OxmlElement("w:tcMar")
+    for cote, valeur in (("left", gauche), ("right", droite), ("top", haut), ("bottom", bas)):
+        elem = OxmlElement(f"w:{cote}")
+        elem.set(qn("w:w"), str(int(valeur * 567)))  # cm -> twips (1cm ≈ 567 twips)
+        elem.set(qn("w:type"), "dxa")
+        tc_mar.append(elem)
+    tc_pr.append(tc_mar)
+
+
+def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12):
+    """Ajoute un titre de section stylé (majuscules, gras, coloré, filet ne sous forme d'espacement)."""
+    p = cell_ou_doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(12)
+    p.paragraph_format.space_after = Pt(4)
     run = p.add_run(texte.upper())
     run.bold = True
-    run.font.size = Pt(12)
-    run.font.color.rgb = None  # garde la couleur par défaut, modifiable si besoin
-    p.paragraph_format.space_before = Pt(14)
-    p.paragraph_format.space_after = Pt(4)
-    # ligne de séparation simple sous le titre
-    p_border = doc.add_paragraph()
-    p_border.paragraph_format.space_after = Pt(2)
+    run.font.size = Pt(taille)
+    run.font.color.rgb = RGBColor.from_string(couleur_hex)
     return p
 
 
-def generer_cv_docx(data):
+def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10):
+    p = cell_ou_doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(2)
+    run = p.add_run(f"• {texte}")
+    run.font.size = Pt(taille)
+    if couleur_puce:
+        run.font.color.rgb = RGBColor.from_string(couleur_puce)
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Génération du document Word (mise en page 2 colonnes)
+# ---------------------------------------------------------------------------
+def generer_cv_docx(data, theme_nom="🔵 Bleu classique"):
+    theme = THEMES.get(theme_nom, THEMES["🔵 Bleu classique"])
+    accent = theme["accent"]
+    bandeau_fond = theme["bandeau_fond"]
+    bandeau_texte = theme["bandeau_texte"]
+
     doc = Document()
-
-    # Marges resserrées pour un CV compact
     for section in doc.sections:
-        section.top_margin = Cm(1.5)
-        section.bottom_margin = Cm(1.5)
-        section.left_margin = Cm(2)
-        section.right_margin = Cm(2)
+        section.top_margin = Cm(1.2)
+        section.bottom_margin = Cm(1.2)
+        section.left_margin = Cm(1.2)
+        section.right_margin = Cm(1.2)
+        largeur_utile = section.page_width - section.left_margin - section.right_margin
 
-    # --- En-tête ---
-    p_nom = doc.add_paragraph()
-    p_nom.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run_nom = p_nom.add_run(f"{data['prenom']} {data['nom']}".strip().upper())
+    largeur_bandeau = Inches(2.3)
+    largeur_principale = largeur_utile - largeur_bandeau
+
+    # --- Tableau de mise en page 1 ligne x 2 colonnes, bordures invisibles ---
+    table = doc.add_table(rows=1, cols=2)
+    table.autofit = False
+    _supprimer_bordures_tableau(table)
+    table.columns[0].width = largeur_bandeau
+    table.columns[1].width = largeur_principale
+
+    cell_bandeau = table.cell(0, 0)
+    cell_principale = table.cell(0, 1)
+    cell_bandeau.width = largeur_bandeau
+    cell_principale.width = largeur_principale
+    _ombrer_cellule(cell_bandeau, bandeau_fond)
+    _definir_marges_cellule(cell_bandeau, gauche=0.35, droite=0.25, haut=0.3, bas=0.3)
+    _definir_marges_cellule(cell_principale, gauche=0.35, droite=0.1, haut=0.3, bas=0.3)
+    cell_bandeau.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+    cell_principale.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+
+    # Nettoyage du paragraphe vide auto-créé dans chaque cellule
+    cell_bandeau.paragraphs[0].text = ""
+    cell_principale.paragraphs[0].text = ""
+
+    # =======================================================================
+    # BANDEAU LATÉRAL
+    # =======================================================================
+    # --- Contact ---
+    _titre_section(cell_bandeau, "Contact", bandeau_texte)
+    for label, valeur in [
+        ("E-mail", data.get("email")),
+        ("Téléphone", data.get("telephone")),
+        ("Ville", data.get("ville")),
+    ]:
+        if valeur:
+            p = cell_bandeau.add_paragraph()
+            p.paragraph_format.space_after = Pt(2)
+            run_label = p.add_run(f"{label}\n")
+            run_label.bold = True
+            run_label.font.size = Pt(9)
+            run_label.font.color.rgb = RGBColor.from_string(bandeau_texte)
+            run_val = p.add_run(valeur)
+            run_val.font.size = Pt(10)
+
+    # --- Langues ---
+    if data.get("langues"):
+        _titre_section(cell_bandeau, "Langues", bandeau_texte)
+        for ligne in data["langues"].split("\n"):
+            ligne = ligne.strip()
+            if ligne:
+                _puce(cell_bandeau, ligne)
+
+    # --- Compétences / Outils informatiques ---
+    if data.get("outils"):
+        _titre_section(cell_bandeau, "Compétences & Outils", bandeau_texte)
+        for ligne in data["outils"].split("\n"):
+            ligne = ligne.strip()
+            if ligne:
+                _puce(cell_bandeau, ligne)
+
+    # --- Centres d'intérêt ---
+    if data.get("interets"):
+        _titre_section(cell_bandeau, "Centres d'intérêt", bandeau_texte)
+        interets_list = [i.strip() for i in data["interets"].replace("\n", ",").split(",") if i.strip()]
+        p = cell_bandeau.add_paragraph()
+        run = p.add_run(" · ".join(interets_list))
+        run.font.size = Pt(10)
+
+    # =======================================================================
+    # COLONNE PRINCIPALE
+    # =======================================================================
+    # --- En-tête : nom + titre recherché ---
+    p_nom = cell_principale.add_paragraph()
+    p_nom.paragraph_format.space_after = Pt(0)
+    run_nom = p_nom.add_run(f"{data.get('prenom', '')} {data.get('nom', '')}".strip().upper())
     run_nom.bold = True
     run_nom.font.size = Pt(20)
+    run_nom.font.color.rgb = RGBColor.from_string(accent)
 
     if data.get("titre_recherche"):
-        p_titre = doc.add_paragraph()
-        p_titre.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_titre = cell_principale.add_paragraph()
+        p_titre.paragraph_format.space_after = Pt(8)
         run_titre = p_titre.add_run(data["titre_recherche"])
         run_titre.italic = True
         run_titre.font.size = Pt(13)
+        run_titre.font.color.rgb = RGBColor.from_string(accent)
 
-    contact_parts = [c for c in [data.get("email"), data.get("telephone"), data.get("ville")] if c]
-    if contact_parts:
-        p_contact = doc.add_paragraph()
-        p_contact.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run_contact = p_contact.add_run(" | ".join(contact_parts))
-        run_contact.font.size = Pt(10)
+    # Filet horizontal sous l'en-tête
+    p_filet = cell_principale.add_paragraph()
+    p_filet.paragraph_format.space_after = Pt(8)
+    p_filet_format = p_filet.paragraph_format
+    pPr = p_filet._p.get_or_add_pPr()
+    bord = OxmlElement("w:pBdr")
+    bas = OxmlElement("w:bottom")
+    bas.set(qn("w:val"), "single")
+    bas.set(qn("w:sz"), "12")
+    bas.set(qn("w:space"), "1")
+    bas.set(qn("w:color"), accent)
+    bord.append(bas)
+    pPr.append(bord)
 
     # --- Profil ---
     if data.get("profil"):
-        _ajouter_titre_section(doc, "Profil")
-        doc.add_paragraph(data["profil"])
+        _titre_section(cell_principale, "Profil", accent, taille=13)
+        p = cell_principale.add_paragraph()
+        run = p.add_run(data["profil"])
+        run.font.size = Pt(10.5)
 
     # --- Expériences ---
     experiences = [e for e in data.get("experiences", []) if e.get("poste") or e.get("entreprise")]
     if experiences:
-        _ajouter_titre_section(doc, "Expériences professionnelles")
+        _titre_section(cell_principale, "Expériences professionnelles", accent, taille=13)
         for exp in experiences:
-            p = doc.add_paragraph()
-            ligne1 = p.add_run(f"{exp.get('poste', '')} — {exp.get('entreprise', '')}")
-            ligne1.bold = True
+            p = cell_principale.add_paragraph()
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after = Pt(0)
+            run = p.add_run(f"{exp.get('poste', '')} — {exp.get('entreprise', '')}")
+            run.bold = True
+            run.font.size = Pt(11)
 
             dates_ville = " · ".join(
                 x for x in [
@@ -159,56 +320,40 @@ def generer_cv_docx(data):
                 ] if x
             )
             if dates_ville:
-                p_meta = doc.add_paragraph()
+                p_meta = cell_principale.add_paragraph()
+                p_meta.paragraph_format.space_after = Pt(3)
                 run_meta = p_meta.add_run(dates_ville)
                 run_meta.italic = True
-                run_meta.font.size = Pt(10)
-                p_meta.paragraph_format.space_after = Pt(2)
+                run_meta.font.size = Pt(9.5)
+                run_meta.font.color.rgb = RGBColor.from_string(accent)
 
             description = exp.get("description", "").strip()
             if description:
                 for ligne in description.split("\n"):
                     ligne = ligne.strip(" -•")
                     if ligne:
-                        doc.add_paragraph(ligne, style="List Bullet")
+                        _puce(cell_principale, ligne, taille=10)
 
     # --- Formation ---
     formations = [f for f in data.get("formations", []) if f.get("diplome") or f.get("etablissement")]
     if formations:
-        _ajouter_titre_section(doc, "Formation")
+        _titre_section(cell_principale, "Formation", accent, taille=13)
         for form in formations:
-            p = doc.add_paragraph()
-            ligne1 = p.add_run(f"{form.get('diplome', '')} — {form.get('etablissement', '')}")
-            ligne1.bold = True
+            p = cell_principale.add_paragraph()
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(0)
+            run = p.add_run(f"{form.get('diplome', '')} — {form.get('etablissement', '')}")
+            run.bold = True
+            run.font.size = Pt(10.5)
 
             meta = " · ".join(x for x in [form.get("ville", ""), form.get("annee", "")] if x)
             if meta:
-                p_meta = doc.add_paragraph()
+                p_meta = cell_principale.add_paragraph()
+                p_meta.paragraph_format.space_after = Pt(2)
                 run_meta = p_meta.add_run(meta)
                 run_meta.italic = True
-                run_meta.font.size = Pt(10)
-
-    # --- Langues ---
-    if data.get("langues"):
-        _ajouter_titre_section(doc, "Langues")
-        for ligne in data["langues"].split("\n"):
-            ligne = ligne.strip()
-            if ligne:
-                doc.add_paragraph(ligne, style="List Bullet")
-
-    # --- Outils informatiques ---
-    if data.get("outils"):
-        _ajouter_titre_section(doc, "Outils informatiques")
-        for ligne in data["outils"].split("\n"):
-            ligne = ligne.strip()
-            if ligne:
-                doc.add_paragraph(ligne, style="List Bullet")
-
-    # --- Centres d'intérêt ---
-    if data.get("interets"):
-        _ajouter_titre_section(doc, "Centres d'intérêt")
-        interets_list = [i.strip() for i in data["interets"].replace("\n", ",").split(",") if i.strip()]
-        doc.add_paragraph(" · ".join(interets_list))
+                run_meta.font.size = Pt(9.5)
+                run_meta.font.color.rgb = RGBColor.from_string(accent)
 
     buffer = BytesIO()
     doc.save(buffer)
@@ -223,14 +368,21 @@ def afficher_generateur_cv():
     _init_cv_state()
 
     st.header("🧾 Créez votre CV")
-    st.write("Remplissez les sections ci-dessous, puis générez votre CV au format Word (.docx).")
+    st.write("Remplissez les sections ci-dessous, choisissez un thème de couleur, puis générez votre CV au format Word (.docx).")
+
+    theme_choisi = st.radio(
+        "🎨 Thème de couleur",
+        list(THEMES.keys()),
+        horizontal=True,
+        key="cv_theme",
+    )
 
     st.markdown("#### 👤 Informations générales")
     c1, c2 = st.columns(2)
     prenom = c1.text_input("Prénom", key="cv_prenom")
     nom = c2.text_input("Nom", key="cv_nom")
 
-    titre_recherche = st.text_input("Titre du poste recherché (ex: Chef de projet PMO)", key="cv_titre")
+    titre_recherche = st.text_input("Titre du poste recherché (ex: PMO Finance)", key="cv_titre")
 
     c3, c4, c5 = st.columns(3)
     email = c3.text_input("Email", key="cv_email")
@@ -257,11 +409,11 @@ def afficher_generateur_cv():
         height=80,
     )
 
-    st.markdown("#### 🛠️ Outils informatiques")
+    st.markdown("#### 🛠️ Compétences & outils")
     outils = st.text_area(
-        "Un outil/une compétence par ligne (ex: Excel - Avancé, Power BI, Python)",
+        "Un élément par ligne (ex: Gestion de projet, SQL, Salesforce...)",
         key="cv_outils",
-        height=80,
+        height=100,
     )
 
     st.markdown("#### 🎯 Centres d'intérêt")
@@ -291,7 +443,7 @@ def afficher_generateur_cv():
                 "outils": outils,
                 "interets": interets,
             }
-            buffer = generer_cv_docx(data)
+            buffer = generer_cv_docx(data, theme_nom=theme_choisi)
             st.success("Votre CV est prêt !")
             st.download_button(
                 label="⬇️ Télécharger mon CV (.docx)",
