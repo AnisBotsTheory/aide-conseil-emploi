@@ -49,6 +49,107 @@ def _params_filtre_poste(code_rome, mots_cles=None, secteur_activite=None):
     return {"codeROME": code_rome}
 
 
+# ---------------------------------------------------------------------------
+# Suggestions de compétences / outils / langages (basées sur les offres réelles)
+# ---------------------------------------------------------------------------
+# Listes de référence pour classer chaque libellé de compétence renvoyé par
+# l'API. Non exhaustives par nature — à enrichir si des cas manquants
+# remontent en usage réel.
+_REF_LANGAGES_INFORMATIQUES = {
+    "python", "java", "javascript", "typescript", "sql", "php", "c++", "c#",
+    "ruby", "golang", "go", "rust", "swift", "kotlin", "scala", "html", "css",
+    "bash", "shell", "matlab", "vba", "perl", "dart", "r ", "plsql", "pl/sql",
+}
+
+_REF_OUTILS_INFORMATIQUES = {
+    "excel", "sap", "salesforce", "jira", "power bi", "jedox", "dynamics 365",
+    "dynamics", "tableau", "google sheets", "word", "powerpoint", "sharepoint",
+    "teams", "slack", "git", "docker", "aws", "azure", "gcp", "kubernetes",
+    "linux", "windows", "photoshop", "illustrator", "autocad", "sketch", "figma",
+    "wordpress", "hubspot", "workday", "successfactors", "oracle", "peoplesoft",
+    "netsuite", "quickbooks", "sage", "cegid", "confluence", "notion", "trello",
+    "asana", "servicenow", "zendesk", "power automate", "power apps", "qlik",
+    "looker", "google analytics", "efront", "sap fico", "sap mm", "sap sd",
+    "outlook", "access", "visio", "adobe", "canva", "wix", "shopify",
+}
+
+
+def _classifier_competence(libelle):
+    """Classe un libellé de compétence en 'langage', 'outil' ou 'competence' (générique)."""
+    l = f" {libelle.lower().strip()} "
+    for lang in _REF_LANGAGES_INFORMATIQUES:
+        if f" {lang.strip()} " in l:
+            return "langage"
+    for outil in _REF_OUTILS_INFORMATIQUES:
+        if outil in l:
+            return "outil"
+    return "competence"
+
+
+@st.cache_data(ttl=1800)
+def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
+    """
+    Récupère les offres (même logique de filtrage que le reste de l'app) et
+    extrait leur champ 'competences' pour bâtir 3 listes de suggestions
+    (compétences génériques / outils informatiques / langages informatiques),
+    chacune avec un % d'offres qui la mentionnent.
+    """
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    toutes_offres = []
+    taille_page = 150
+    for page in range(max_pages):
+        debut = page * taille_page
+        fin = debut + taille_page - 1
+        params = {"departement": departement, "range": f"{debut}-{fin}"}
+        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
+        if jours_max:
+            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
+            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = requests.get(url, headers=headers, params=params)
+        if r.status_code not in (200, 206):
+            break
+        resultats = r.json().get("resultats", [])
+        toutes_offres.extend(resultats)
+        if len(resultats) < taille_page:
+            break
+
+    nb_total_offres = len(toutes_offres)
+    compteurs = {"competence": Counter(), "outil": Counter(), "langage": Counter()}
+
+    for offre in toutes_offres:
+        competences_offre = offre.get("competences", [])
+        if not competences_offre:
+            continue
+        libelles_vus = set()  # évite un double comptage si dupliqué dans la même offre
+        for comp in competences_offre:
+            libelle = (comp.get("libelle") or "").strip()
+            if not libelle or libelle in libelles_vus:
+                continue
+            libelles_vus.add(libelle)
+            categorie = _classifier_competence(libelle)
+            compteurs[categorie][libelle] += 1
+
+    def _construire_df(compteur):
+        if nb_total_offres == 0:
+            return pd.DataFrame(columns=["libelle", "nombre_offres", "pourcentage"])
+        lignes = [
+            {"libelle": lib, "nombre_offres": n, "pourcentage": round(100 * n / nb_total_offres)}
+            for lib, n in compteur.most_common(15)
+        ]
+        return pd.DataFrame(lignes)
+
+    return (
+        _construire_df(compteurs["competence"]),
+        _construire_df(compteurs["outil"]),
+        _construire_df(compteurs["langage"]),
+        nb_total_offres,
+    )
+
+
 @st.cache_data(ttl=3600)
 def get_secteurs_activite():
     """Référentiel des secteurs d'activité NAF (mêmes codes que le paramètre secteurActivite)."""
@@ -503,7 +604,7 @@ tab_cv, tab_profil, tab_avance, tab_offres = st.tabs(
 # "Métier recherché" doit être en place avant que ce champ ne soit affiché)
 # ---------------------------------------------------------------------------
 with tab_cv:
-    afficher_generateur_cv()
+    afficher_generateur_cv(fonction_analyse_competences=analyser_competences)
 
 # ---------------------------------------------------------------------------
 # Onglet 1 : Tendance par profil
