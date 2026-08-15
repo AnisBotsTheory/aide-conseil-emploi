@@ -712,4 +712,3 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 file_name=f"CV_{prenom}_{nom}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
-            )
