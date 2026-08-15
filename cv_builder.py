@@ -476,6 +476,21 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
 
 # ---------------------------------------------------------------------------
+# Synchronisation avec l'onglet "Tendance par profil"
+# ---------------------------------------------------------------------------
+def _synchroniser_metier_recherche():
+    """
+    Callback déclenché quand le "Titre du poste recherché" change dans le CV.
+    Préremplit le "Métier recherché" de l'onglet Tendance par profil (clé
+    widget "mots_profil"). Les callbacks Streamlit s'exécutent AVANT le rerun
+    complet du script, donc ça fonctionne quel que soit l'ordre des onglets.
+    """
+    valeur = st.session_state.get("cv_titre", "")
+    if valeur:
+        st.session_state["mots_profil"] = valeur
+
+
+# ---------------------------------------------------------------------------
 # Interface Streamlit
 # ---------------------------------------------------------------------------
 def afficher_generateur_cv():
@@ -510,7 +525,12 @@ def afficher_generateur_cv():
     prenom = c1.text_input("Prénom", key="cv_prenom")
     nom = c2.text_input("Nom", key="cv_nom")
 
-    titre_recherche = st.text_input("Titre du poste recherché (ex: PMO Finance)", key="cv_titre")
+    titre_recherche = st.text_input(
+        "Titre du poste recherché (ex: PMO Finance)",
+        key="cv_titre",
+        on_change=_synchroniser_metier_recherche,
+        help="Ce champ alimente automatiquement le \"Métier recherché\" de l'onglet Tendance par profil.",
+    )
 
     c3, c4, c5 = st.columns(3)
     email = c3.text_input("Email", key="cv_email")
