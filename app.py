@@ -494,9 +494,16 @@ for s in secteurs:
 
 st.divider()
 
-tab_profil, tab_avance, tab_offres, tab_cv = st.tabs(
-    ["🎯 Tendance par profil", "🧩 KPIs avancés", "📋 Offres d'emploi", "🧾 Créer mon CV"]
+tab_cv, tab_profil, tab_avance, tab_offres = st.tabs(
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés", "📋 Offres d'emploi"]
 )
+
+# ---------------------------------------------------------------------------
+# Onglet 0 : Créer mon CV (exécuté en premier : sa synchronisation vers
+# "Métier recherché" doit être en place avant que ce champ ne soit affiché)
+# ---------------------------------------------------------------------------
+with tab_cv:
+    afficher_generateur_cv()
 
 # ---------------------------------------------------------------------------
 # Onglet 1 : Tendance par profil
@@ -509,7 +516,7 @@ with tab_profil:
 
     col1, col2 = st.columns(2)
     with col1:
-        mots_cles_profil = st.text_input("Métier recherché", value="", key="mots_profil")
+        mots_cles_profil = st.text_input("Métier recherché", key="mots_profil")
     with col2:
         departement_profil = st.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
 
@@ -915,9 +922,3 @@ with tab_offres:
                     lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
                     date_pub = o.get("dateCreation", "")[:10]
                     st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub}")
-
-# ---------------------------------------------------------------------------
-# Onglet 3 : Créer mon CV (identique dans les deux parcours)
-# ---------------------------------------------------------------------------
-with tab_cv:
-    afficher_generateur_cv()
