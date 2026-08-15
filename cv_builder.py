@@ -119,6 +119,7 @@ def _estimer_volume_contenu(data):
     volume += len(data.get("langues", ""))
     volume += len(data.get("competences", ""))
     volume += len(data.get("outils", ""))
+    volume += len(data.get("langages_informatiques", ""))
     volume += len(data.get("interets", ""))
     return volume
 
@@ -368,6 +369,14 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             if ligne:
                 _puce(cell_bandeau, ligne, echelle=echelle)
 
+    # --- Langages informatiques (facultatif, invisible si vide — profils non-tech) ---
+    if data.get("langages_informatiques"):
+        _titre_section(cell_bandeau, "Langages informatiques", bandeau_texte, echelle=echelle)
+        for ligne in data["langages_informatiques"].split("\n"):
+            ligne = ligne.strip()
+            if ligne:
+                _puce(cell_bandeau, ligne, echelle=echelle)
+
     # --- Centres d'intérêt ---
     if data.get("interets"):
         _titre_section(cell_bandeau, "Centres d'intérêt", bandeau_texte, echelle=echelle)
@@ -491,9 +500,74 @@ def _synchroniser_metier_recherche():
 
 
 # ---------------------------------------------------------------------------
+# Suggestions de compétences / outils / langages (basées sur les offres réelles)
+# ---------------------------------------------------------------------------
+def _ajouter_suggestion(cle_session, valeur):
+    """Ajoute une ligne à un textarea (par clé de session_state) si elle n'y est pas déjà."""
+    actuel = st.session_state.get(cle_session, "")
+    lignes = [l.strip() for l in actuel.split("\n") if l.strip()]
+    if valeur not in lignes:
+        lignes.append(valeur)
+        st.session_state[cle_session] = "\n".join(lignes)
+
+
+def _afficher_suggestions(df_suggestions, cle_session, nb_total_offres, prefixe_bouton):
+    """Affiche des boutons cliquables "+ Compétence (XX%)" qui alimentent le textarea ciblé."""
+    if df_suggestions.empty:
+        st.caption("Aucune suggestion détectée pour ce poste (le champ compétences n'est pas toujours renseigné par les recruteurs).")
+        return
+
+    if nb_total_offres < 10:
+        st.caption(
+            f"⚠️ Échantillon réduit ({nb_total_offres} offre(s) analysée(s)) — les pourcentages "
+            "sont indicatifs, à prendre avec prudence."
+        )
+
+    colonnes = st.columns(3)
+    for i, ligne in df_suggestions.iterrows():
+        col = colonnes[i % 3]
+        libelle = ligne["libelle"]
+        pct = ligne["pourcentage"]
+        if col.button(f"+ {libelle} ({pct}%)", key=f"{prefixe_bouton}_{i}_{libelle}"):
+            _ajouter_suggestion(cle_session, libelle)
+            st.rerun()
+
+
+def _section_suggestions_competences(fonction_analyse_competences):
+    """
+    Bloc de suggestions basé sur les offres du poste sélectionné dans
+    "Tendance par profil". Nécessite qu'une recherche y ait déjà été lancée.
+    """
+    if not fonction_analyse_competences:
+        return None, None, None
+    if "code_rome_choisi" not in st.session_state:
+        st.info(
+            "👉 Lance d'abord une recherche dans l'onglet **🎯 Tendance par profil** pour "
+            "voir des suggestions de compétences basées sur les offres réelles de ce métier."
+        )
+        return None, None, None
+
+    if st.button("🔍 Suggérer des compétences, outils et langages pour ce poste", key="btn_suggestions_competences"):
+        with st.spinner("Analyse des offres en cours..."):
+            df_comp, df_outils, df_langages, nb_total = fonction_analyse_competences(
+                st.session_state["code_rome_choisi"],
+                st.session_state.get("departement_profil_actif"),
+                mots_cles=st.session_state.get("mots_cles_profil_actif"),
+                secteur_activite=st.session_state.get("secteur_profil_actif"),
+            )
+        st.session_state["cv_suggestions"] = (df_comp, df_outils, df_langages, nb_total)
+
+    if "cv_suggestions" in st.session_state:
+        df_comp, df_outils, df_langages, nb_total = st.session_state["cv_suggestions"]
+        st.caption(f"Basé sur {nb_total} offre(s) trouvée(s) pour ce poste.")
+        return df_comp, df_outils, df_langages
+    return None, None, None
+
+
+# ---------------------------------------------------------------------------
 # Interface Streamlit
 # ---------------------------------------------------------------------------
-def afficher_generateur_cv():
+def afficher_generateur_cv(fonction_analyse_competences=None):
     _init_cv_state()
 
     st.header("🧾 Créez votre CV")
@@ -559,7 +633,13 @@ def afficher_generateur_cv():
         height=80,
     )
 
+    st.divider()
+    st.markdown("#### 💡 Suggestions basées sur les offres réelles")
+    df_sugg_comp, df_sugg_outils, df_sugg_langages = _section_suggestions_competences(fonction_analyse_competences)
+
     st.markdown("#### 🧠 Compétences")
+    if df_sugg_comp is not None:
+        _afficher_suggestions(df_sugg_comp, "cv_competences", st.session_state["cv_suggestions"][3], "sugg_comp")
     competences = st.text_area(
         "Une compétence par ligne (ex: Gestion de projet, Audit des processus...)",
         key="cv_competences",
@@ -567,10 +647,22 @@ def afficher_generateur_cv():
     )
 
     st.markdown("#### 🛠️ Outils informatiques")
+    if df_sugg_outils is not None:
+        _afficher_suggestions(df_sugg_outils, "cv_outils", st.session_state["cv_suggestions"][3], "sugg_outil")
     outils = st.text_area(
         "Un outil par ligne (ex: Jira, SAP, SalesForce...)",
         key="cv_outils",
         height=90,
+    )
+
+    st.markdown("#### 💻 Langages informatiques")
+    st.caption("Facultatif — pertinent surtout pour les profils tech/data.")
+    if df_sugg_langages is not None:
+        _afficher_suggestions(df_sugg_langages, "cv_langages", st.session_state["cv_suggestions"][3], "sugg_langage")
+    langages_informatiques = st.text_area(
+        "Un langage par ligne (ex: Python, SQL, JavaScript...)",
+        key="cv_langages",
+        height=80,
     )
 
     st.markdown("#### 🎯 Centres d'intérêt")
@@ -598,6 +690,7 @@ def afficher_generateur_cv():
                 "formations": st.session_state.cv_formations,
                 "langues": langues,
                 "competences": competences,
+                "langages_informatiques": langages_informatiques,
                 "outils": outils,
                 "interets": interets,
             }
@@ -618,4 +711,5 @@ def afficher_generateur_cv():
                 data=buffer,
                 file_name=f"CV_{prenom}_{nom}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
             )
