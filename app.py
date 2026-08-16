@@ -218,6 +218,44 @@ def get_secteurs_activite():
     return r.json()
 
 
+@st.cache_data(ttl=86400)
+def get_referentiel_appellations():
+    """
+    Référentiel officiel complet des appellations de métiers (~14 300 entrées),
+    pour proposer un vrai sélecteur de poste dès le départ plutôt que de dépendre
+    d'une recherche préalable dans les offres. Nom de ressource pas garanti à 100%
+    (jamais testé en conditions réelles) — on essaie plusieurs candidats.
+    """
+    token = get_token(SCOPE_OFFRES)
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    for ressource in ("appellations", "romes"):
+        url = f"https://api.francetravail.io/partenaire/offresdemploi/v2/referentiel/{ressource}"
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and data:
+                return data
+    return []
+
+
+def _extraire_code_rome(item_appellation):
+    """
+    Essaie de trouver un code ROME directement dans une entrée du référentiel
+    appellations (plusieurs noms de champ possibles selon la structure réelle,
+    jamais vérifiée). Retourne None si non trouvé — un fallback par recherche
+    prend le relai dans ce cas.
+    """
+    for cle in ("codeRome", "romeCode", "code_rome"):
+        if item_appellation.get(cle):
+            return item_appellation[cle]
+    metier = item_appellation.get("metier")
+    if isinstance(metier, dict):
+        for cle in ("code", "codeRome"):
+            if metier.get(cle):
+                return metier[cle]
+    return None
+
+
 def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mots_cles=None, range_str="0-149"):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -249,11 +287,10 @@ def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mo
 # Fonctions "Tendance par profil" (analyse personnalisée par métier ROME)
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=1800)
-def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, max_pages=8):
+def resoudre_codes_rome(mots_cles=None, departement=None, secteur_activite=None, max_pages=8):
     """
-    Parcourt toutes les offres correspondant au mot-clé (jusqu'à max_pages x 150
-    offres) pour identifier TOUS les postes (codes ROME) rencontrés, au lieu de
-    se limiter à un petit échantillon qui risquait de manquer des postes.
+    Parcourt toutes les offres correspondant au mot-clé (ou au secteur seul si
+    mots_cles est vide) pour identifier TOUS les postes (codes ROME) rencontrés.
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -264,7 +301,9 @@ def resoudre_codes_rome(mots_cles, departement=None, secteur_activite=None, max_
     for page in range(max_pages):
         debut = page * taille_page
         fin = debut + taille_page - 1
-        params = {"motsCles": mots_cles, "range": f"{debut}-{fin}"}
+        params = {"range": f"{debut}-{fin}"}
+        if mots_cles:
+            params["motsCles"] = mots_cles
         if departement:
             params["departement"] = departement
         if secteur_activite:
@@ -667,13 +706,31 @@ with tab_cv:
 # ---------------------------------------------------------------------------
 with tab_profil:
     st.write(
-        "Indiquez le métier que vous ciblez : nous calculons pour vous où sont les offres "
+        "Choisissez le poste que vous ciblez : nous calculons pour vous où sont les offres "
         "près de chez vous, le volume national, et le niveau de tension du marché sur ce métier."
     )
+    st.caption(
+        "Cette recherche s'appuie sur la nomenclature officielle des métiers de France Travail "
+        "(ROME). Choisis un poste précis dans la liste pour une analyse ciblée — y compris la "
+        "tension du marché — ou sélectionne **🌐 Tous les postes** combiné à un secteur pour une "
+        "recherche plus large sur tout un domaine d'activité."
+    )
+
+    appellations = get_referentiel_appellations()
+    labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
 
     col1, col2 = st.columns(2)
     with col1:
-        mots_cles_profil = st.text_input("Métier recherché", key="mots_profil")
+        if labels_appellations:
+            poste_choisi_label = st.selectbox(
+                "Poste recherché",
+                options=["🌐 Tous les postes"] + labels_appellations,
+                key="poste_profil_select",
+            )
+        else:
+            st.caption("⚠️ Référentiel des postes indisponible pour le moment — recherche par mot-clé en secours.")
+            poste_texte_libre = st.text_input("Poste recherché (mot-clé)", key="poste_profil_texte")
+            poste_choisi_label = poste_texte_libre.strip() if poste_texte_libre.strip() else "🌐 Tous les postes"
     with col2:
         departement_profil = st.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
 
@@ -685,18 +742,46 @@ with tab_profil:
     code_secteur_profil = options_secteurs[secteur_choisi_profil]
 
     if st.button("Lancer l'analyse de mon profil"):
-        if not mots_cles_profil.strip():
-            st.warning("Merci d'indiquer un métier recherché avant de lancer l'analyse.")
-        else:
-            with st.spinner("Résolution du métier vers un/des code(s) ROME..."):
+        with st.spinner("Préparation de l'analyse..."):
+            if poste_choisi_label == "🌐 Tous les postes":
                 df_rome = resoudre_codes_rome(
-                    mots_cles_profil, departement=departement_profil, secteur_activite=code_secteur_profil
+                    mots_cles=None, departement=departement_profil, secteur_activite=code_secteur_profil
                 )
-            # Stocké en session_state pour survivre aux reruns déclenchés par le
-            # selectbox ci-dessous, et pour être accessible depuis l'onglet "KPIs avancés".
-            st.session_state["df_rome_profil"] = df_rome
+                st.session_state["df_rome_profil"] = df_rome
+                st.session_state["code_rome_choisi"] = "TOUS"
+                st.session_state["mots_cles_profil_actif"] = ""
+            else:
+                # Tente de résoudre le code ROME directement depuis le référentiel...
+                item = next(
+                    (a for a in appellations if a.get("libelle", "").strip() == poste_choisi_label), None
+                )
+                code_rome_direct = _extraire_code_rome(item) if item else None
+
+                if code_rome_direct:
+                    code_rome_final = code_rome_direct
+                else:
+                    # ...sinon résolution automatique en coulisses (invisible pour l'utilisateur).
+                    df_resolu = resoudre_codes_rome(
+                        mots_cles=poste_choisi_label,
+                        departement=departement_profil,
+                        secteur_activite=code_secteur_profil,
+                    )
+                    code_rome_final = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
+
+                if not code_rome_final:
+                    st.error(
+                        "Impossible de résoudre ce poste pour l'instant (aucune offre trouvée pour le "
+                        "recouper). Essaie un autre poste ou élargis le département."
+                    )
+                    st.session_state.pop("df_rome_profil", None)
+                else:
+                    st.session_state["df_rome_profil"] = pd.DataFrame(
+                        [{"code_rome": code_rome_final, "libelle": poste_choisi_label, "nb_offres_echantillon": None}]
+                    )
+                    st.session_state["code_rome_choisi"] = code_rome_final
+                    st.session_state["mots_cles_profil_actif"] = poste_choisi_label
+
             st.session_state["departement_profil_actif"] = departement_profil
-            st.session_state["mots_cles_profil_actif"] = mots_cles_profil
             st.session_state["secteur_profil_actif"] = code_secteur_profil
             # Force la valeur du sélecteur secteur de l'onglet "Offres d'emploi" — doit être
             # fait AVANT que ce widget soit instancié plus bas dans le script (même rerun),
@@ -708,34 +793,20 @@ with tab_profil:
         departement_actif = st.session_state["departement_profil_actif"]
         mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
         secteur_actif = st.session_state.get("secteur_profil_actif")
+        code_rome_choisi = st.session_state.get("code_rome_choisi")
 
         if df_rome.empty:
-            st.error("Aucun code ROME trouvé pour ce métier. Essayez un autre mot-clé.")
+            st.error("Aucune offre trouvée pour ce secteur/département. Essaie d'élargir les critères.")
         else:
-            st.markdown("#### Offres par poste de travail")
-            st.dataframe(
-                df_rome[["libelle", "nb_offres_echantillon"]].rename(
-                    columns={"libelle": "Poste de travail", "nb_offres_echantillon": "Nombre d'offres"}
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            options_postes = ["TOUS"] + list(df_rome["code_rome"])
-
-            def _libelle_poste(c):
-                if c == "TOUS":
-                    return "🌐 Tous les postes"
-                return df_rome.loc[df_rome.code_rome == c, "libelle"].values[0]
-
-            code_rome_choisi = st.selectbox(
-                "Choisissez le poste le plus représentatif de votre recherche",
-                options=options_postes,
-                format_func=_libelle_poste,
-                key="code_rome_choisi_select",
-            )
-            # Persisté pour l'onglet "KPIs avancés"
-            st.session_state["code_rome_choisi"] = code_rome_choisi
+            if code_rome_choisi == "TOUS":
+                st.markdown("#### Offres par poste de travail")
+                st.dataframe(
+                    df_rome[["libelle", "nb_offres_echantillon"]].rename(
+                        columns={"libelle": "Poste de travail", "nb_offres_echantillon": "Nombre d'offres"}
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
             st.markdown(f"#### 📍 Offres par ville — département {departement_actif}")
             fraicheur_choisie = st.selectbox(
