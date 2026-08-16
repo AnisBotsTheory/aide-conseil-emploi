@@ -13,7 +13,6 @@ Intégration dans app.py :
 """
 
 import streamlit as st
-import streamlit.components.v1 as components
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -614,19 +613,15 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "que vous visez.\n"
         "2. 🎯 **Tendance par profil** — analysez le marché pour ce poste : offres disponibles, "
         "secteurs qui recrutent, tension du marché.\n"
-        "3. Revenez ici enrichir vos listes de compétences/outils avec ce qui est réellement "
-        "demandé sur ce poste.\n"
-        "4. 📋 **Offres d'emploi** — consultez les annonces réelles, avec un score de "
+        "3. 📋 **Offres d'emploi** — consultez les annonces réelles, avec un score de "
         "correspondance calculé à partir de votre profil.\n"
-        "5. 🧩 **KPIs avancés** — pour aller plus loin : évolution du marché, salaires, types "
+        "4. 🧩 **KPIs avancés** — pour aller plus loin : évolution du marché, salaires, types "
         "de contrat."
     )
     st.caption(
-        "ℹ️ Renseigne au minimum : ton nom, ton titre de poste, une expérience professionnelle "
-        "(poste, entreprise, dates, missions) et une formation — ce sont les éléments essentiels "
-        "pour un CV complet. Les autres champs (compétences, langues, centres d'intérêt...) "
-        "enrichissent le rendu mais restent facultatifs. Tous les champs se remplissent "
-        "manuellement, saisis directement tes informations."
+        "ℹ️ Renseignez vos compétences, outils et mots-clés sectoriels ci-dessous : ils "
+        "permettent de calculer le score de correspondance affiché pour chaque offre dans "
+        "l'onglet **📋 Offres d'emploi**."
     )
 
     theme_choisi = st.radio(
@@ -680,8 +675,6 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     email = c3.text_input("Email", key="cv_email")
     telephone = c4.text_input("Téléphone", key="cv_telephone")
     ville = c5.text_input("Ville", key="cv_ville")
-
-    _injecter_aide_autofill()
 
     profil = st.text_area(
         "Profil / accroche (2-3 phrases qui résument votre parcours et votre projet)",
