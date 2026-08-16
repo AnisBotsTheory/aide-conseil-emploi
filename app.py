@@ -945,7 +945,8 @@ with tab_profil:
 
                     # returned_objects=[] : la carte ne renvoie plus rien au serveur, donc
                     # zoomer/déplacer ne déclenche plus de rerun Streamlit — la carte reste
-                    # 100% interactive côté navigateur, sans saccade ni réinitialisation.
+                    # 100% interactive côté navigateur, sans saccade ni réinitialisation, et
+                    # ne dépend plus d'une connexion WebSocket active (plus fragile sur mobile).
                     st_folium(
                         carte,
                         use_container_width=True,
