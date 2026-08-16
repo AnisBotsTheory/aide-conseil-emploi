@@ -86,6 +86,62 @@ def _classifier_competence(libelle):
     return "competence"
 
 
+def _normaliser(texte):
+    return texte.strip().lower()
+
+
+def calculer_correspondance_offre(offre, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur):
+    """
+    Calcule un score de correspondance entre une offre et le profil déclaré par
+    l'utilisateur (Créer mon CV), dimension par dimension. Une dimension est
+    ignorée (pas de pénalité) si l'offre ou l'utilisateur n'a rien à comparer
+    sur cette dimension. Retourne (score_global_pct ou None, détail par dimension).
+    """
+    comp_user = {_normaliser(c) for c in competences_utilisateur}
+    outils_user = {_normaliser(o) for o in outils_utilisateur}
+    langages_user = {_normaliser(l) for l in langages_utilisateur}
+
+    # Rien à comparer côté utilisateur : pas de score plutôt qu'un faux 0%.
+    if not comp_user and not outils_user and not langages_user and not (mots_cles_secteur and mots_cles_secteur.strip()):
+        return None, {}
+
+    competences_offre = offre.get("competences", []) or []
+    comp_offre_generique, outils_offre, langages_offre = set(), set(), set()
+    for c in competences_offre:
+        libelle = (c.get("libelle") or "").strip()
+        if not libelle:
+            continue
+        categorie = _classifier_competence(libelle)
+        if categorie == "competence":
+            comp_offre_generique.add(_normaliser(libelle))
+        elif categorie == "outil":
+            outils_offre.add(_normaliser(libelle))
+        else:
+            langages_offre.add(_normaliser(libelle))
+
+    detail = {}
+
+    if comp_offre_generique:
+        detail["Compétences"] = (len(comp_offre_generique & comp_user), len(comp_offre_generique))
+    if outils_offre:
+        detail["Outils"] = (len(outils_offre & outils_user), len(outils_offre))
+    if langages_offre:
+        detail["Langages"] = (len(langages_offre & langages_user), len(langages_offre))
+
+    if mots_cles_secteur and mots_cles_secteur.strip():
+        mots = [m.strip().lower() for m in mots_cles_secteur.split(",") if m.strip()]
+        texte_offre = f"{offre.get('intitule', '')} {offre.get('description', '')}".lower()
+        trouves = sum(1 for m in mots if m in texte_offre)
+        if mots:
+            detail["Mots-clés"] = (trouves, len(mots))
+
+    if not detail:
+        return None, detail
+
+    score_global = round(100 * sum(n / d for n, d in detail.values()) / len(detail))
+    return score_global, detail
+
+
 @st.cache_data(ttl=1800)
 def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
     """
@@ -1018,8 +1074,48 @@ with tab_offres:
                 st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
             else:
                 st.success(f"{len(resultats)} offres affichées sur {total} au total")
+
+                competences_utilisateur = st.session_state.get("cv_competences_select", [])
+                outils_utilisateur = st.session_state.get("cv_outils_select", [])
+                langages_utilisateur = st.session_state.get("cv_langages_select", [])
+                mots_cles_secteur = st.session_state.get("cv_mots_cles_secteur", "")
+
+                if not competences_utilisateur and not mots_cles_secteur:
+                    st.info(
+                        "💡 Renseigne tes compétences et/ou tes mots-clés sectoriels dans "
+                        "**🧾 Créer mon CV** pour activer le % de correspondance sur ces offres."
+                    )
+
                 for o in resultats:
                     entreprise = o.get("entreprise", {}).get("nom", "N/C")
                     lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
                     date_pub = o.get("dateCreation", "")[:10]
-                    st.markdown(f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub}")
+
+                    score, detail = calculer_correspondance_offre(
+                        o, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur
+                    )
+                    ligne_titre = f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub}"
+                    if score is not None:
+                        ligne_titre += f"  \n🎯 Correspondance : **{score}%**"
+                        if detail:
+                            ligne_titre += " (" + " · ".join(f"{k} {n}/{d}" for k, (n, d) in detail.items()) + ")"
+
+                    with st.expander(ligne_titre):
+                        type_contrat = o.get("typeContratLibelle") or o.get("typeContrat")
+                        if type_contrat:
+                            st.markdown(f"**Type de contrat :** {type_contrat}")
+                        salaire = o.get("salaire", {}).get("libelle")
+                        if salaire:
+                            st.markdown(f"**Salaire :** {salaire}")
+                        description = o.get("description")
+                        if description:
+                            st.markdown("**Description :**")
+                            st.write(description)
+                        competences_offre = o.get("competences", [])
+                        if competences_offre:
+                            libelles = ", ".join(c.get("libelle", "") for c in competences_offre if c.get("libelle"))
+                            if libelles:
+                                st.markdown(f"**Compétences demandées :** {libelles}")
+                        url_offre = o.get("origineOffre", {}).get("urlOrigine")
+                        if url_offre:
+                            st.markdown(f"🔗 [Voir l'offre complète et postuler sur France Travail]({url_offre})")
