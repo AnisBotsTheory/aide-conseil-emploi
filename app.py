@@ -333,6 +333,49 @@ def resoudre_codes_rome(mots_cles=None, departement=None, secteur_activite=None,
 
 
 @st.cache_data(ttl=1800)
+def secteurs_pour_poste(code_rome, departement=None, max_pages=2):
+    """
+    Liste les secteurs d'activité (NAF) des entreprises qui recrutent réellement
+    pour ce poste (code ROME), avec le nombre d'offres par secteur. Sert à filtrer
+    le sélecteur "Secteur d'activité" sur des options pertinentes plutôt que la
+    liste NAF générique complète.
+    """
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    toutes_offres = []
+    taille_page = 150
+    for page in range(max_pages):
+        debut = page * taille_page
+        fin = debut + taille_page - 1
+        params = {"codeROME": code_rome, "range": f"{debut}-{fin}"}
+        if departement:
+            params["departement"] = departement
+        r = requests.get(url, headers=headers, params=params)
+        if r.status_code not in (200, 206):
+            break
+        resultats = r.json().get("resultats", [])
+        toutes_offres.extend(resultats)
+        if len(resultats) < taille_page:
+            break
+
+    compteur = Counter()
+    libelles = {}
+    for offre in toutes_offres:
+        code = offre.get("secteurActivite")
+        libelle = offre.get("secteurActiviteLibelle")
+        if code and libelle:
+            compteur[code] += 1
+            libelles[code] = libelle
+
+    df = pd.DataFrame([{"code": c, "libelle": libelles[c], "nombre_offres": n} for c, n in compteur.items()])
+    if not df.empty:
+        df = df.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+    return df
+
+
+@st.cache_data(ttl=1800)
 def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -734,12 +777,56 @@ with tab_profil:
     with col2:
         departement_profil = st.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
 
-    secteur_choisi_profil = st.selectbox(
-        "Secteur d'activité",
-        list(options_secteurs.keys()),
-        key="secteur_profil",
+    # Résolution du code ROME dès le choix du poste (pas besoin d'attendre le bouton) pour
+    # pouvoir filtrer le sélecteur "Secteur" sur des options réellement pertinentes.
+    code_rome_pour_secteurs = None
+    if poste_choisi_label != "🌐 Tous les postes":
+        item_poste = next((a for a in appellations if a.get("libelle", "").strip() == poste_choisi_label), None)
+        code_rome_pour_secteurs = _extraire_code_rome(item_poste) if item_poste else None
+        if not code_rome_pour_secteurs:
+            with st.spinner("Résolution du poste..."):
+                df_resolu_apercu = resoudre_codes_rome(mots_cles=poste_choisi_label, departement=departement_profil)
+            code_rome_pour_secteurs = (
+                df_resolu_apercu.iloc[0]["code_rome"] if not df_resolu_apercu.empty else None
+            )
+
+    aide_secteur = (
+        "Filtre sur le secteur d'activité de l'ENTREPRISE qui recrute, pas sur le type de "
+        "poste — une entreprise du secteur assurance peut par exemple recruter des postes "
+        "très variés (médical, IT, RH...)."
     )
-    code_secteur_profil = options_secteurs[secteur_choisi_profil]
+
+    if code_rome_pour_secteurs:
+        with st.spinner("Recherche des secteurs qui recrutent pour ce poste..."):
+            df_secteurs_poste = secteurs_pour_poste(code_rome_pour_secteurs, departement_profil)
+
+        options_secteurs_poste = {"Tous secteurs": None}
+        for _, ligne in df_secteurs_poste.iterrows():
+            libelle_option = f"{ligne['libelle']} ({ligne['code']}) — {ligne['nombre_offres']} offre(s)"
+            options_secteurs_poste[libelle_option] = ligne["code"]
+
+        if len(options_secteurs_poste) > 1:
+            st.caption("💡 Secteurs qui recrutent le plus pour ce poste, dans ce département.")
+        else:
+            st.caption("Aucune offre trouvée pour ce poste ici — liste de secteurs générique en attendant.")
+            options_secteurs_poste = dict(options_secteurs)
+
+        secteur_choisi_profil = st.selectbox(
+            "Secteur d'activité de l'entreprise",
+            list(options_secteurs_poste.keys()),
+            key="secteur_profil",
+            help=aide_secteur,
+        )
+        code_secteur_profil = options_secteurs_poste[secteur_choisi_profil]
+    else:
+        # "Tous les postes", ou poste pas encore résolvable : liste NAF générique complète
+        secteur_choisi_profil = st.selectbox(
+            "Secteur d'activité de l'entreprise",
+            list(options_secteurs.keys()),
+            key="secteur_profil",
+            help=aide_secteur,
+        )
+        code_secteur_profil = options_secteurs[secteur_choisi_profil]
 
     if st.button("Lancer l'analyse de mon profil"):
         with st.spinner("Préparation de l'analyse..."):
@@ -751,22 +838,7 @@ with tab_profil:
                 st.session_state["code_rome_choisi"] = "TOUS"
                 st.session_state["mots_cles_profil_actif"] = ""
             else:
-                # Tente de résoudre le code ROME directement depuis le référentiel...
-                item = next(
-                    (a for a in appellations if a.get("libelle", "").strip() == poste_choisi_label), None
-                )
-                code_rome_direct = _extraire_code_rome(item) if item else None
-
-                if code_rome_direct:
-                    code_rome_final = code_rome_direct
-                else:
-                    # ...sinon résolution automatique en coulisses (invisible pour l'utilisateur).
-                    df_resolu = resoudre_codes_rome(
-                        mots_cles=poste_choisi_label,
-                        departement=departement_profil,
-                        secteur_activite=code_secteur_profil,
-                    )
-                    code_rome_final = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
+                code_rome_final = code_rome_pour_secteurs  # déjà résolu plus haut
 
                 if not code_rome_final:
                     st.error(
@@ -784,9 +856,11 @@ with tab_profil:
             st.session_state["departement_profil_actif"] = departement_profil
             st.session_state["secteur_profil_actif"] = code_secteur_profil
             # Force la valeur du sélecteur secteur de l'onglet "Offres d'emploi" — doit être
-            # fait AVANT que ce widget soit instancié plus bas dans le script (même rerun),
-            # sinon Streamlit ignore silencieusement toute tentative de le faire via `index`.
-            st.session_state["secteur_offres"] = secteur_choisi_profil
+            # fait AVANT que ce widget soit instancié plus bas dans le script (même rerun).
+            # Uniquement si le libellé correspond au format générique attendu là-bas (le
+            # sélecteur filtré par poste a un format différent, avec le nombre d'offres).
+            if secteur_choisi_profil in options_secteurs:
+                st.session_state["secteur_offres"] = secteur_choisi_profil
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
