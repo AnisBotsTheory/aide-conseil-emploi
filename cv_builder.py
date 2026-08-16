@@ -602,7 +602,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     _init_cv_state()
 
     st.header("🧾 Créez votre CV")
-    st.write("Créez votre CV professionnel, prêt à l'emploi, au format Word.")
+    st.write("Créez votre CV professionnel, prêt à l'emploi, au format Word — en une seule page.")
     st.markdown(
         "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
         "expériences, formations, compétences...), choisissez un thème de couleur, puis générez "
