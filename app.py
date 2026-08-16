@@ -416,11 +416,11 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
 
         nom_entreprise = offre.get("entreprise", {}).get("nom")
         if nom_entreprise:
-            departement_offre = ville.split(" - ", 1)[0].strip() if " - " in ville else departement
+            nom_ville = ville.split(" - ", 1)[-1].strip() if " - " in ville else ville
             if nom_entreprise not in entreprises:
-                entreprises[nom_entreprise] = {"nombre_offres": 0, "departements": set()}
+                entreprises[nom_entreprise] = {"nombre_offres": 0, "villes": set()}
             entreprises[nom_entreprise]["nombre_offres"] += 1
-            entreprises[nom_entreprise]["departements"].add(departement_offre)
+            entreprises[nom_entreprise]["villes"].add(nom_ville)
 
         date_creation = offre.get("dateCreation")
         if date_creation:
@@ -435,7 +435,7 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
             {
                 "entreprise": nom,
                 "nombre_offres": infos["nombre_offres"],
-                "departements": ", ".join(sorted(infos["departements"])),
+                "villes": ", ".join(sorted(infos["villes"])),
             }
             for nom, infos in entreprises.items()
         ]
@@ -646,13 +646,16 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
             break
 
     compteur_contrats = Counter()
+    compteur_experience = Counter()
     lignes_salaires = []
-    entreprises = {}
     for offre in toutes_offres:
         type_contrat_brut = offre.get("typeContratLibelle") or offre.get("typeContrat") or "Non précisé"
         # On ignore la nuance de durée après le tiret (ex: "Intérim - 6 Mois" -> "Intérim")
         type_contrat = type_contrat_brut.split(" - ")[0].strip()
         compteur_contrats[type_contrat] += 1
+
+        experience_libelle = offre.get("experienceLibelle") or "Non précisé"
+        compteur_experience[experience_libelle] += 1
 
         salaire = offre.get("salaire", {})
         libelle_salaire = salaire.get("libelle") if salaire else None
@@ -665,37 +668,19 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
                 }
             )
 
-        nom_entreprise = offre.get("entreprise", {}).get("nom")
-        if nom_entreprise:
-            ville = offre.get("lieuTravail", {}).get("libelle", "")
-            dep_offre = ville.split(" - ", 1)[0].strip() if " - " in ville else departement
-            if nom_entreprise not in entreprises:
-                entreprises[nom_entreprise] = {"nombre_offres": 0, "departements": set()}
-            entreprises[nom_entreprise]["nombre_offres"] += 1
-            entreprises[nom_entreprise]["departements"].add(dep_offre)
-
     df_contrats = pd.DataFrame(compteur_contrats.items(), columns=["type_contrat", "nombre_offres"])
     if not df_contrats.empty:
         df_contrats = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+
+    df_experience = pd.DataFrame(compteur_experience.items(), columns=["experience", "nombre_offres"])
+    if not df_experience.empty:
+        df_experience = df_experience.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
 
     df_salaires = pd.DataFrame(lignes_salaires)
     nb_total = len(toutes_offres)
     nb_avec_salaire = len(lignes_salaires)
 
-    df_entreprises = pd.DataFrame(
-        [
-            {
-                "entreprise": nom,
-                "nombre_offres": infos["nombre_offres"],
-                "departements": ", ".join(sorted(infos["departements"])),
-            }
-            for nom, infos in entreprises.items()
-        ]
-    )
-    if not df_entreprises.empty:
-        df_entreprises = df_entreprises.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
-
-    return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_entreprises
+    return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_experience
 
 
 def calculer_tension(nb_offres, nb_demandeurs):
@@ -983,7 +968,7 @@ with tab_profil:
                             columns={
                                 "entreprise": "Entreprise",
                                 "nombre_offres": "Nombre d'offres",
-                                "departements": "Département",
+                                "villes": "Ville",
                             }
                         ),
                         use_container_width=True,
@@ -1055,14 +1040,14 @@ with tab_avance:
         secteur_actif_avance = st.session_state.get("secteur_profil_actif")
 
         if st.button("🚀 Lancer l'analyse complète", type="primary", key="btn_analyse_complete"):
-            with st.spinner("Analyse en cours (évolution, contrats, salaires, recruteurs)..."):
+            with st.spinner("Analyse en cours (évolution, contrats, salaires, expérience)..."):
                 df_evolution = evolution_offres_annuelle(
                     code_rome_actif,
                     departement_actif,
                     mots_cles=mots_cles_actifs_avance,
                     secteur_activite=secteur_actif_avance,
                 )
-                df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_entreprises_avance = (
+                df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                     repartition_contrats_et_salaires(
                         code_rome_actif,
                         departement_actif,
@@ -1134,23 +1119,21 @@ with tab_avance:
                 st.dataframe(df_salaires, use_container_width=True, hide_index=True)
 
             st.divider()
-            st.markdown("#### 🏢 Top recruteurs")
-            if df_entreprises_avance.empty:
-                st.info(
-                    "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
-                    "les offres sont diffusées de façon anonyme."
-                )
+            st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
+            if df_experience.empty:
+                st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
             else:
-                st.dataframe(
-                    df_entreprises_avance.rename(
-                        columns={
-                            "entreprise": "Entreprise",
-                            "nombre_offres": "Nombre d'offres",
-                            "departements": "Département",
-                        }
-                    ),
+                base_experience = alt.Chart(df_experience).encode(
+                    x=alt.X("nombre_offres:Q", title="Nombre d'offres"),
+                    y=alt.Y("experience:N", title=None, sort="-x"),
+                )
+                barres_experience = base_experience.mark_bar(color="#0066cc")
+                etiquettes_experience = base_experience.mark_text(
+                    align="left", dx=4, fontSize=11
+                ).encode(text="nombre_offres:Q")
+                st.altair_chart(
+                    (barres_experience + etiquettes_experience).properties(height=140),
                     use_container_width=True,
-                    hide_index=True,
                 )
 
             st.divider()
