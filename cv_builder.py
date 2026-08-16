@@ -720,6 +720,21 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "**🎯 Tendance par profil** — il ne sera jamais imprimé sur ton CV."
     )
 
+    mots_cles_secteur = st.text_input(
+        "🎯 Mots-clés sectoriels / métier (pour le % de correspondance des offres)",
+        key="cv_mots_cles_secteur",
+        placeholder="ex: finance, reporting, contrôle de gestion",
+        help=(
+            "N'apparaît jamais sur ton CV — utilisé uniquement pour calculer le % de "
+            "correspondance affiché sous chaque offre dans l'onglet 'Offres d'emploi'. "
+            "Sépare plusieurs mots-clés par une virgule."
+        ),
+    )
+    st.caption(
+        "💡 Facultatif pour générer le CV, mais nécessaire (avec les compétences ci-dessous) "
+        "pour activer le score de correspondance sur les offres."
+    )
+
     c3, c4, c5 = st.columns(3)
     email = c3.text_input("Email", key="cv_email")
     telephone = c4.text_input("Téléphone", key="cv_telephone")
