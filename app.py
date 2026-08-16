@@ -718,8 +718,8 @@ for s in secteurs:
 
 st.divider()
 
-tab_cv, tab_profil, tab_avance, tab_offres = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés", "📋 Offres d'emploi"]
+tab_cv, tab_profil, tab_offres, tab_avance = st.tabs(
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "📋 Offres d'emploi", "🧩 KPIs avancés"]
 )
 
 # ---------------------------------------------------------------------------
@@ -1025,6 +1025,110 @@ with tab_profil:
             )
 
 # ---------------------------------------------------------------------------
+# Onglet 2 : Offres d'emploi (identique dans les deux parcours)
+# ---------------------------------------------------------------------------
+with tab_offres:
+    if "df_rome_profil" not in st.session_state or st.session_state["df_rome_profil"].empty:
+        st.info(
+            "👉 Lance d'abord une recherche dans l'onglet **🎯 Tendance par profil** pour "
+            "identifier les postes correspondant à ton métier — ils seront proposés ici."
+        )
+    else:
+        df_rome_offres = st.session_state["df_rome_profil"]
+        mots_cles_offres = st.session_state.get("mots_cles_profil_actif", "")
+        options_postes_offres = ["TOUS"] + list(df_rome_offres["code_rome"])
+
+        def _libelle_poste_offres(c):
+            if c == "TOUS":
+                return "🌐 Tous les postes"
+            return df_rome_offres.loc[df_rome_offres.code_rome == c, "libelle"].values[0]
+
+        code_rome_offres = st.selectbox(
+            "Choisissez le poste le plus représentatif de votre recherche",
+            options=options_postes_offres,
+            format_func=_libelle_poste_offres,
+            index=(
+                options_postes_offres.index(st.session_state["code_rome_choisi"])
+                if st.session_state.get("code_rome_choisi") in options_postes_offres
+                else 0
+            ),
+            key="code_rome_offres_select",
+        )
+        departement = st.text_input(
+            "Département (ex: 13 = Bouches-du-Rhône)",
+            value=st.session_state.get("departement_profil_actif", "13"),
+            key="dep_offres",
+        )
+        secteur_choisi_offres = st.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_offres")
+        secteur_naf = options_secteurs[secteur_choisi_offres]
+        fraicheur_choisie_offres = st.selectbox(
+            "Publiées depuis",
+            ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
+            key="fraicheur_offres",
+        )
+        jours_max_offres = {
+            "Toutes les offres actives": None,
+            "7 derniers jours": 7,
+            "30 derniers jours": 30,
+            "90 derniers jours": 90,
+        }[fraicheur_choisie_offres]
+
+        if st.button("Chercher des offres"):
+            with st.spinner("Recherche en cours..."):
+                resultats, total = chercher_offres(
+                    code_rome_offres, departement, secteur_naf, jours_max_offres, mots_cles=mots_cles_offres
+                )
+            if not resultats:
+                st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
+            else:
+                st.success(f"{len(resultats)} offres affichées sur {total} au total")
+
+                competences_utilisateur = st.session_state.get("cv_competences_select", [])
+                outils_utilisateur = st.session_state.get("cv_outils_select", [])
+                langages_utilisateur = st.session_state.get("cv_langages_select", [])
+                mots_cles_secteur = st.session_state.get("cv_mots_cles_secteur", "")
+
+                if not competences_utilisateur and not mots_cles_secteur:
+                    st.info(
+                        "💡 Renseigne tes compétences et/ou tes mots-clés sectoriels dans "
+                        "**🧾 Créer mon CV** pour activer le % de correspondance sur ces offres."
+                    )
+
+                for o in resultats:
+                    entreprise = o.get("entreprise", {}).get("nom", "N/C")
+                    lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
+                    date_pub = o.get("dateCreation", "")[:10]
+
+                    score, detail = calculer_correspondance_offre(
+                        o, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur
+                    )
+                    ligne_titre = f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub}"
+                    if score is not None:
+                        ligne_titre += f"  \n🎯 Correspondance : **{score}%**"
+                        if detail:
+                            ligne_titre += " (" + " · ".join(f"{k} {n}/{d}" for k, (n, d) in detail.items()) + ")"
+
+                    with st.expander(ligne_titre):
+                        type_contrat = o.get("typeContratLibelle") or o.get("typeContrat")
+                        if type_contrat:
+                            st.markdown(f"**Type de contrat :** {type_contrat}")
+                        salaire = o.get("salaire", {}).get("libelle")
+                        if salaire:
+                            st.markdown(f"**Salaire :** {salaire}")
+                        description = o.get("description")
+                        if description:
+                            st.markdown("**Description :**")
+                            st.write(description)
+                        competences_offre = o.get("competences", [])
+                        if competences_offre:
+                            libelles = ", ".join(c.get("libelle", "") for c in competences_offre if c.get("libelle"))
+                            if libelles:
+                                st.markdown(f"**Compétences demandées :** {libelles}")
+                        url_offre = o.get("origineOffre", {}).get("urlOrigine")
+                        if url_offre:
+                            st.markdown(f"🔗 [Voir l'offre complète et postuler sur France Travail]({url_offre})")
+
+# ---------------------------------------------------------------------------
 # Onglet "KPIs avancés"
 # ---------------------------------------------------------------------------
 with tab_avance:
@@ -1143,107 +1247,3 @@ with tab_avance:
                 "employeurs), différent des données d'offres réelles utilisées ailleurs dans "
                 "l'app. Dis-moi si tu veux qu'on l'ajoute."
             )
-
-# ---------------------------------------------------------------------------
-# Onglet 2 : Offres d'emploi (identique dans les deux parcours)
-# ---------------------------------------------------------------------------
-with tab_offres:
-    if "df_rome_profil" not in st.session_state or st.session_state["df_rome_profil"].empty:
-        st.info(
-            "👉 Lance d'abord une recherche dans l'onglet **🎯 Tendance par profil** pour "
-            "identifier les postes correspondant à ton métier — ils seront proposés ici."
-        )
-    else:
-        df_rome_offres = st.session_state["df_rome_profil"]
-        mots_cles_offres = st.session_state.get("mots_cles_profil_actif", "")
-        options_postes_offres = ["TOUS"] + list(df_rome_offres["code_rome"])
-
-        def _libelle_poste_offres(c):
-            if c == "TOUS":
-                return "🌐 Tous les postes"
-            return df_rome_offres.loc[df_rome_offres.code_rome == c, "libelle"].values[0]
-
-        code_rome_offres = st.selectbox(
-            "Choisissez le poste le plus représentatif de votre recherche",
-            options=options_postes_offres,
-            format_func=_libelle_poste_offres,
-            index=(
-                options_postes_offres.index(st.session_state["code_rome_choisi"])
-                if st.session_state.get("code_rome_choisi") in options_postes_offres
-                else 0
-            ),
-            key="code_rome_offres_select",
-        )
-        departement = st.text_input(
-            "Département (ex: 13 = Bouches-du-Rhône)",
-            value=st.session_state.get("departement_profil_actif", "13"),
-            key="dep_offres",
-        )
-        secteur_choisi_offres = st.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_offres")
-        secteur_naf = options_secteurs[secteur_choisi_offres]
-        fraicheur_choisie_offres = st.selectbox(
-            "Publiées depuis",
-            ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
-            key="fraicheur_offres",
-        )
-        jours_max_offres = {
-            "Toutes les offres actives": None,
-            "7 derniers jours": 7,
-            "30 derniers jours": 30,
-            "90 derniers jours": 90,
-        }[fraicheur_choisie_offres]
-
-        if st.button("Chercher des offres"):
-            with st.spinner("Recherche en cours..."):
-                resultats, total = chercher_offres(
-                    code_rome_offres, departement, secteur_naf, jours_max_offres, mots_cles=mots_cles_offres
-                )
-            if not resultats:
-                st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
-            else:
-                st.success(f"{len(resultats)} offres affichées sur {total} au total")
-
-                competences_utilisateur = st.session_state.get("cv_competences_select", [])
-                outils_utilisateur = st.session_state.get("cv_outils_select", [])
-                langages_utilisateur = st.session_state.get("cv_langages_select", [])
-                mots_cles_secteur = st.session_state.get("cv_mots_cles_secteur", "")
-
-                if not competences_utilisateur and not mots_cles_secteur:
-                    st.info(
-                        "💡 Renseigne tes compétences et/ou tes mots-clés sectoriels dans "
-                        "**🧾 Créer mon CV** pour activer le % de correspondance sur ces offres."
-                    )
-
-                for o in resultats:
-                    entreprise = o.get("entreprise", {}).get("nom", "N/C")
-                    lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
-                    date_pub = o.get("dateCreation", "")[:10]
-
-                    score, detail = calculer_correspondance_offre(
-                        o, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur
-                    )
-                    ligne_titre = f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub}"
-                    if score is not None:
-                        ligne_titre += f"  \n🎯 Correspondance : **{score}%**"
-                        if detail:
-                            ligne_titre += " (" + " · ".join(f"{k} {n}/{d}" for k, (n, d) in detail.items()) + ")"
-
-                    with st.expander(ligne_titre):
-                        type_contrat = o.get("typeContratLibelle") or o.get("typeContrat")
-                        if type_contrat:
-                            st.markdown(f"**Type de contrat :** {type_contrat}")
-                        salaire = o.get("salaire", {}).get("libelle")
-                        if salaire:
-                            st.markdown(f"**Salaire :** {salaire}")
-                        description = o.get("description")
-                        if description:
-                            st.markdown("**Description :**")
-                            st.write(description)
-                        competences_offre = o.get("competences", [])
-                        if competences_offre:
-                            libelles = ", ".join(c.get("libelle", "") for c in competences_offre if c.get("libelle"))
-                            if libelles:
-                                st.markdown(f"**Compétences demandées :** {libelles}")
-                        url_offre = o.get("origineOffre", {}).get("urlOrigine")
-                        if url_offre:
-                            st.markdown(f"🔗 [Voir l'offre complète et postuler sur France Travail]({url_offre})")
