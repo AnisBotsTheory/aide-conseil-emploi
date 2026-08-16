@@ -68,46 +68,6 @@ def _drapeau_pour_langue(texte_ligne):
 
 
 # ---------------------------------------------------------------------------
-# Aide à l'autofill navigateur (best-effort — limitation connue de Streamlit)
-# ---------------------------------------------------------------------------
-def _injecter_aide_autofill():
-    """
-    Streamlit ne pose pas d'attributs autocomplete/name sur ses <input>, donc les
-    navigateurs ne proposent pas toujours le remplissage automatique. Ce script
-    les ajoute a posteriori sur les champs d'infos personnelles, ce qui aide
-    (sans garantie totale, ça dépend du navigateur) les suggestions à apparaître.
-    """
-    components.html(
-        """
-        <script>
-        const cible = window.parent.document;
-        const correspondances = {
-            "Prénom": "given-name",
-            "Nom": "family-name",
-            "Email": "email",
-            "Téléphone": "tel",
-            "Ville": "address-level2",
-        };
-        function appliquer() {
-            const champs = cible.querySelectorAll("input[aria-label]");
-            champs.forEach((champ) => {
-                const label = champ.getAttribute("aria-label");
-                if (correspondances[label]) {
-                    champ.setAttribute("autocomplete", correspondances[label]);
-                    champ.setAttribute("name", correspondances[label]);
-                }
-            });
-        }
-        appliquer();
-        setTimeout(appliquer, 500);
-        setTimeout(appliquer, 1500);
-        </script>
-        """,
-        height=0,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Échelle automatique (police / espacement) pour tenir sur une page
 # ---------------------------------------------------------------------------
 def _estimer_volume_contenu(data):
@@ -520,33 +480,6 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     return buffer, echelle
 
 
-# ---------------------------------------------------------------------------
-# Synchronisation avec l'onglet "Tendance par profil"
-# ---------------------------------------------------------------------------
-def _synchroniser_titre_vers_motcle():
-    """
-    Callback déclenché quand le "Titre du poste recherché" (celui affiché sur le
-    CV) change. Prérempli le champ "Mot-clé pour l'analyse de tendances" avec la
-    même valeur — l'utilisateur peut ensuite le modifier indépendamment si le
-    titre du CV n'est pas un terme de recherche générique reconnu par France Travail.
-    """
-    valeur = st.session_state.get("cv_titre", "")
-    if valeur:
-        st.session_state["cv_mot_cle_analyse"] = valeur
-        st.session_state["mots_profil"] = valeur
-
-
-def _synchroniser_motcle_vers_profil():
-    """
-    Callback déclenché quand le "Mot-clé pour l'analyse de tendances" change.
-    Répercute uniquement vers "Métier recherché" (Tendance par profil) — jamais
-    vers le titre affiché sur le CV. Les callbacks Streamlit s'exécutent AVANT
-    le rerun complet, donc ça fonctionne quel que soit l'ordre des onglets.
-    """
-    valeur = st.session_state.get("cv_mot_cle_analyse", "")
-    if valeur:
-        st.session_state["mots_profil"] = valeur
-
 
 # ---------------------------------------------------------------------------
 # Suggestions de compétences / outils / langages (basées sur les offres réelles)
@@ -669,11 +602,31 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     _init_cv_state()
 
     st.header("🧾 Créez votre CV")
-    st.write("Remplissez les sections ci-dessous, choisissez un thème de couleur, puis générez votre CV au format Word (.docx).")
+    st.write("Créez votre CV professionnel, prêt à l'emploi, au format Word.")
+    st.markdown(
+        "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
+        "expériences, formations, compétences...), choisissez un thème de couleur, puis générez "
+        "votre CV en un clic."
+    )
+    st.markdown(
+        "**Le parcours complet de l'application :**\n"
+        "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
+        "que vous visez.\n"
+        "2. 🎯 **Tendance par profil** — analysez le marché pour ce poste : offres disponibles, "
+        "secteurs qui recrutent, tension du marché.\n"
+        "3. Revenez ici enrichir vos listes de compétences/outils avec ce qui est réellement "
+        "demandé sur ce poste.\n"
+        "4. 📋 **Offres d'emploi** — consultez les annonces réelles, avec un score de "
+        "correspondance calculé à partir de votre profil.\n"
+        "5. 🧩 **KPIs avancés** — pour aller plus loin : évolution du marché, salaires, types "
+        "de contrat."
+    )
     st.caption(
-        "ℹ️ Le remplissage automatique de votre navigateur peut ne pas fonctionner sur ce "
-        "formulaire (limitation technique de Streamlit) — on a ajouté une aide, mais ce n'est "
-        "pas garanti selon votre navigateur."
+        "ℹ️ Renseigne au minimum : ton nom, ton titre de poste, une expérience professionnelle "
+        "(poste, entreprise, dates, missions) et une formation — ce sont les éléments essentiels "
+        "pour un CV complet. Les autres champs (compétences, langues, centres d'intérêt...) "
+        "enrichissent le rendu mais restent facultatifs. Tous les champs se remplissent "
+        "manuellement, saisis directement tes informations."
     )
 
     theme_choisi = st.radio(
@@ -700,24 +653,12 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     titre_recherche = st.text_input(
         "Titre du poste recherché (ex: PMO Finance)",
         key="cv_titre",
-        on_change=_synchroniser_titre_vers_motcle,
-        help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peux être personnalisé librement.",
-    )
-
-    mot_cle_analyse = st.text_input(
-        "🔎 Mot-clé pour l'analyse de tendances",
-        key="cv_mot_cle_analyse",
-        on_change=_synchroniser_motcle_vers_profil,
-        help=(
-            "N'apparaît jamais sur ton CV — utilisé uniquement pour chercher des offres dans "
-            "l'onglet 'Tendance par profil'. Préfère un terme générique reconnu par France "
-            "Travail (ex: 'Consultant', 'Chef de projet') plutôt qu'un intitulé personnalisé "
-            "comme 'PMO Finance', qui risque de ne remonter aucun résultat."
-        ),
+        help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peut être personnalisé librement.",
     )
     st.caption(
-        "💡 Ce mot-clé alimente automatiquement le champ \"Métier recherché\" de l'onglet "
-        "**🎯 Tendance par profil** — il ne sera jamais imprimé sur ton CV."
+        "💡 Pour analyser les tendances du marché sur ce métier, direction l'onglet "
+        "**🎯 Tendance par profil** — son sélecteur de poste s'appuie directement sur la "
+        "nomenclature officielle France Travail."
     )
 
     mots_cles_secteur = st.text_input(
