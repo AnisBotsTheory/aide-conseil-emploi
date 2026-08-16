@@ -129,13 +129,29 @@ def _calculer_echelle(volume):
     if volume < 1400:
         return 1.0
     elif volume < 2200:
-        return 0.9
+        return 0.92
     elif volume < 3000:
-        return 0.82
+        return 0.85
     elif volume < 3800:
-        return 0.75
+        return 0.78
+    elif volume < 4600:
+        return 0.71
+    elif volume < 5500:
+        return 0.65
+    elif volume < 6500:
+        return 0.60
     else:
-        return 0.68
+        return 0.55
+
+
+def _calculer_marge_verticale(echelle):
+    """Réduit aussi les marges haut/bas de page pour les contenus très volumineux."""
+    if echelle >= 0.85:
+        return 1.2
+    elif echelle >= 0.65:
+        return 0.9
+    else:
+        return 0.6
 
 
 def _pt(base, echelle):
@@ -252,16 +268,25 @@ def _definir_marges_cellule(cell, gauche=0.15, droite=0.15, haut=0.05, bas=0.05)
     tc_pr.append(tc_mar)
 
 
-def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0):
+def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0, espace_avant=12):
     """Ajoute un titre de section stylé (majuscules, gras, coloré)."""
     p = cell_ou_doc.add_paragraph()
-    p.paragraph_format.space_before = _pt(12, echelle)
+    p.paragraph_format.space_before = _pt(espace_avant, echelle)
     p.paragraph_format.space_after = _pt(4, echelle)
     run = p.add_run(texte.upper())
     run.bold = True
     run.font.size = _pt(taille, echelle)
     run.font.color.rgb = RGBColor.from_string(couleur_hex)
     return p
+
+
+_CARACTERES_PUCE_PARASITES = " -•➤▸●○*>·‣"
+
+
+def _nettoyer_ligne(texte):
+    """Retire les puces/symboles que l'utilisateur a pu coller depuis un autre CV
+    (➤, ▸, -, •...) pour éviter un double affichage avec notre propre puce."""
+    return texte.strip(_CARACTERES_PUCE_PARASITES).strip()
 
 
 def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10, echelle=1.0):
@@ -283,11 +308,18 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     bandeau_fond = theme["bandeau_fond"]
     bandeau_texte = theme["bandeau_texte"]
     echelle = _calculer_echelle(_estimer_volume_contenu(data))
+    marge_verticale = _calculer_marge_verticale(echelle)
 
     doc = Document()
+    # Interligne compact par défaut (évite l'espacement 1.08/1.15 par défaut de Word,
+    # qui gonfle inutilement la hauteur de chaque ligne de texte).
+    style_normal = doc.styles["Normal"]
+    style_normal.paragraph_format.line_spacing = 1.0
+    style_normal.paragraph_format.space_after = Pt(0)
+
     for section in doc.sections:
-        section.top_margin = Cm(1.2)
-        section.bottom_margin = Cm(1.2)
+        section.top_margin = Cm(marge_verticale)
+        section.bottom_margin = Cm(marge_verticale)
         section.left_margin = Cm(1.2)
         section.right_margin = Cm(1.2)
         largeur_utile = section.page_width - section.left_margin - section.right_margin
@@ -307,14 +339,18 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     cell_bandeau.width = largeur_bandeau
     cell_principale.width = largeur_principale
     _ombrer_cellule(cell_bandeau, bandeau_fond)
-    _definir_marges_cellule(cell_bandeau, gauche=0.35, droite=0.25, haut=0.3, bas=0.3)
-    _definir_marges_cellule(cell_principale, gauche=0.35, droite=0.1, haut=0.3, bas=0.3)
+    marge_cellule_haut = 0.15 if echelle < 0.85 else 0.3
+    _definir_marges_cellule(cell_bandeau, gauche=0.35, droite=0.25, haut=marge_cellule_haut, bas=0.15)
+    _definir_marges_cellule(cell_principale, gauche=0.35, droite=0.1, haut=marge_cellule_haut, bas=0.15)
     cell_bandeau.vertical_alignment = WD_ALIGN_VERTICAL.TOP
     cell_principale.vertical_alignment = WD_ALIGN_VERTICAL.TOP
 
-    # Nettoyage du paragraphe vide auto-créé dans chaque cellule
-    cell_bandeau.paragraphs[0].text = ""
-    cell_principale.paragraphs[0].text = ""
+    # Suppression réelle (pas juste vidage du texte) du paragraphe auto-créé dans
+    # chaque cellule — sinon il reste une ligne vide qui pousse tout le contenu
+    # vers le bas, y compris le nom en haut de la colonne principale.
+    for cellule in (cell_bandeau, cell_principale):
+        p_vide = cellule.paragraphs[0]
+        p_vide._element.getparent().remove(p_vide._element)
 
     # =======================================================================
     # BANDEAU LATÉRAL
@@ -328,7 +364,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         run_photo.add_picture(BytesIO(photo_bytes), width=Inches(1.6))
 
     # --- Contact ---
-    _titre_section(cell_bandeau, "Contact", bandeau_texte, echelle=echelle)
+    _titre_section(cell_bandeau, "Contact", bandeau_texte, echelle=echelle, espace_avant=0)
     for label, valeur in [
         ("E-mail", data.get("email")),
         ("Téléphone", data.get("telephone")),
@@ -348,7 +384,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     if data.get("langues"):
         _titre_section(cell_bandeau, "Langues", bandeau_texte, echelle=echelle)
         for ligne in data["langues"].split("\n"):
-            ligne = ligne.strip()
+            ligne = _nettoyer_ligne(ligne)
             if ligne:
                 prefixe = _drapeau_pour_langue(ligne) if afficher_drapeaux else ""
                 _puce(cell_bandeau, f"{prefixe}{ligne}", echelle=echelle)
@@ -357,7 +393,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     if data.get("competences"):
         _titre_section(cell_bandeau, "Compétences", bandeau_texte, echelle=echelle)
         for ligne in data["competences"].split("\n"):
-            ligne = ligne.strip()
+            ligne = _nettoyer_ligne(ligne)
             if ligne:
                 _puce(cell_bandeau, ligne, echelle=echelle)
 
@@ -365,7 +401,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     if data.get("outils"):
         _titre_section(cell_bandeau, "Outils informatiques", bandeau_texte, echelle=echelle)
         for ligne in data["outils"].split("\n"):
-            ligne = ligne.strip()
+            ligne = _nettoyer_ligne(ligne)
             if ligne:
                 _puce(cell_bandeau, ligne, echelle=echelle)
 
@@ -373,7 +409,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     if data.get("langages_informatiques"):
         _titre_section(cell_bandeau, "Langages informatiques", bandeau_texte, echelle=echelle)
         for ligne in data["langages_informatiques"].split("\n"):
-            ligne = ligne.strip()
+            ligne = _nettoyer_ligne(ligne)
             if ligne:
                 _puce(cell_bandeau, ligne, echelle=echelle)
 
@@ -453,7 +489,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             description = exp.get("description", "").strip()
             if description:
                 for ligne in description.split("\n"):
-                    ligne = ligne.strip(" -•")
+                    ligne = _nettoyer_ligne(ligne)
                     if ligne:
                         _puce(cell_principale, ligne, taille=10, echelle=echelle)
 
@@ -487,14 +523,27 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 # ---------------------------------------------------------------------------
 # Synchronisation avec l'onglet "Tendance par profil"
 # ---------------------------------------------------------------------------
-def _synchroniser_metier_recherche():
+def _synchroniser_titre_vers_motcle():
     """
-    Callback déclenché quand le "Titre du poste recherché" change dans le CV.
-    Préremplit le "Métier recherché" de l'onglet Tendance par profil (clé
-    widget "mots_profil"). Les callbacks Streamlit s'exécutent AVANT le rerun
-    complet du script, donc ça fonctionne quel que soit l'ordre des onglets.
+    Callback déclenché quand le "Titre du poste recherché" (celui affiché sur le
+    CV) change. Prérempli le champ "Mot-clé pour l'analyse de tendances" avec la
+    même valeur — l'utilisateur peut ensuite le modifier indépendamment si le
+    titre du CV n'est pas un terme de recherche générique reconnu par France Travail.
     """
     valeur = st.session_state.get("cv_titre", "")
+    if valeur:
+        st.session_state["cv_mot_cle_analyse"] = valeur
+        st.session_state["mots_profil"] = valeur
+
+
+def _synchroniser_motcle_vers_profil():
+    """
+    Callback déclenché quand le "Mot-clé pour l'analyse de tendances" change.
+    Répercute uniquement vers "Métier recherché" (Tendance par profil) — jamais
+    vers le titre affiché sur le CV. Les callbacks Streamlit s'exécutent AVANT
+    le rerun complet, donc ça fonctionne quel que soit l'ordre des onglets.
+    """
+    valeur = st.session_state.get("cv_mot_cle_analyse", "")
     if valeur:
         st.session_state["mots_profil"] = valeur
 
@@ -511,43 +560,72 @@ def _ajouter_suggestion(cle_session, valeur):
         st.session_state[cle_session] = "\n".join(lignes)
 
 
-def _afficher_suggestions(df_suggestions, cle_session, nb_total_offres, prefixe_bouton):
-    """Affiche des boutons cliquables "+ Compétence (XX%)" qui alimentent le textarea ciblé."""
-    if df_suggestions.empty:
-        st.caption("Aucune suggestion détectée pour ce poste (le champ compétences n'est pas toujours renseigné par les recruteurs).")
-        return
+def _ajouter_suggestion(cle_session, valeur):
+    """Ajoute une valeur à une liste d'options (session_state) si elle n'y est pas déjà."""
+    if cle_session not in st.session_state:
+        st.session_state[cle_session] = []
+    if valeur not in st.session_state[cle_session]:
+        st.session_state[cle_session].append(valeur)
 
-    if nb_total_offres < 10:
-        st.caption(
-            f"⚠️ Échantillon réduit ({nb_total_offres} offre(s) analysée(s)) — les pourcentages "
-            "sont indicatifs, à prendre avec prudence."
-        )
 
-    colonnes = st.columns(3)
-    for i, ligne in df_suggestions.iterrows():
-        col = colonnes[i % 3]
-        libelle = ligne["libelle"]
-        pct = ligne["pourcentage"]
-        if col.button(f"+ {libelle} ({pct}%)", key=f"{prefixe_bouton}_{i}_{libelle}"):
-            _ajouter_suggestion(cle_session, libelle)
+# Listes de base toujours proposées, même sans recherche de profil préalable
+# (pour que le champ ne soit jamais "vide" par défaut).
+_DEFAUTS_COMPETENCES = [
+    "Gestion de projet", "Communication", "Travail d'équipe", "Résolution de problèmes",
+    "Organisation", "Leadership", "Analyse", "Négociation", "Gestion du temps", "Esprit critique",
+]
+_DEFAUTS_OUTILS = ["Excel", "Word", "PowerPoint", "Outlook", "Teams"]
+_DEFAUTS_LANGAGES = []  # vide par défaut : pertinent seulement pour les profils tech
+
+
+def _champ_liste_avec_ajout(titre, cle_base, valeurs_par_defaut, aide=None):
+    """
+    Affiche une liste à choix multiples (options par défaut + suggestions éventuelles)
+    avec possibilité d'ajouter ses propres éléments à la liste. Retourne le résultat
+    au format 'une valeur par ligne' (compatible avec generer_cv_docx).
+    """
+    cle_options = f"{cle_base}_options"
+    if cle_options not in st.session_state:
+        st.session_state[cle_options] = list(valeurs_par_defaut)
+
+    cle_select = f"{cle_base}_select"
+    selection = st.multiselect(titre, options=st.session_state[cle_options], key=cle_select, help=aide)
+
+    col_ajout, col_bouton = st.columns([4, 1])
+    nouvel_element = col_ajout.text_input(
+        f"Ajouter un élément à « {titre} »",
+        key=f"{cle_base}_nouveau",
+        label_visibility="collapsed",
+        placeholder="Ajouter un élément non listé...",
+    )
+    if col_bouton.button("➕ Ajouter", key=f"{cle_base}_bouton_ajout"):
+        valeur = nouvel_element.strip()
+        if valeur:
+            _ajouter_suggestion(cle_options, valeur)
+            if valeur not in st.session_state[cle_select]:
+                st.session_state[cle_select] = st.session_state[cle_select] + [valeur]
             st.rerun()
+
+    return "\n".join(selection)
 
 
 def _section_suggestions_competences(fonction_analyse_competences):
     """
-    Bloc de suggestions basé sur les offres du poste sélectionné dans
-    "Tendance par profil". Nécessite qu'une recherche y ait déjà été lancée.
+    Récupère (sur clic) les compétences/outils/langages les plus demandés pour le
+    poste sélectionné dans "Tendance par profil", et enrichit les listes d'options
+    correspondantes. Affiche aussi un aperçu des % les plus demandés à titre indicatif.
     """
     if not fonction_analyse_competences:
-        return None, None, None
+        return
     if "code_rome_choisi" not in st.session_state:
         st.info(
             "👉 Lance d'abord une recherche dans l'onglet **🎯 Tendance par profil** pour "
-            "voir des suggestions de compétences basées sur les offres réelles de ce métier."
+            "enrichir ces listes avec les compétences réellement demandées sur ce métier "
+            "(sinon, une liste générique de base reste disponible ci-dessous)."
         )
-        return None, None, None
+        return
 
-    if st.button("🔍 Suggérer des compétences, outils et langages pour ce poste", key="btn_suggestions_competences"):
+    if st.button("🔍 Enrichir les listes avec les offres de ce poste", key="btn_suggestions_competences"):
         with st.spinner("Analyse des offres en cours..."):
             df_comp, df_outils, df_langages, nb_total = fonction_analyse_competences(
                 st.session_state["code_rome_choisi"],
@@ -555,13 +633,33 @@ def _section_suggestions_competences(fonction_analyse_competences):
                 mots_cles=st.session_state.get("mots_cles_profil_actif"),
                 secteur_activite=st.session_state.get("secteur_profil_actif"),
             )
-        st.session_state["cv_suggestions"] = (df_comp, df_outils, df_langages, nb_total)
+        for cle_options, df in [
+            ("cv_competences_options", df_comp),
+            ("cv_outils_options", df_outils),
+            ("cv_langages_options", df_langages),
+        ]:
+            if cle_options not in st.session_state:
+                st.session_state[cle_options] = []
+            for lib in df["libelle"]:
+                if lib not in st.session_state[cle_options]:
+                    st.session_state[cle_options].append(lib)
+        st.session_state["cv_suggestions_apercu"] = (df_comp, df_outils, df_langages, nb_total)
+        st.rerun()
 
-    if "cv_suggestions" in st.session_state:
-        df_comp, df_outils, df_langages, nb_total = st.session_state["cv_suggestions"]
-        st.caption(f"Basé sur {nb_total} offre(s) trouvée(s) pour ce poste.")
-        return df_comp, df_outils, df_langages
-    return None, None, None
+    if "cv_suggestions_apercu" in st.session_state:
+        df_comp, df_outils, df_langages, nb_total = st.session_state["cv_suggestions_apercu"]
+        if nb_total < 10:
+            st.caption(f"⚠️ Échantillon réduit ({nb_total} offre(s)) — indicatif seulement.")
+        else:
+            st.caption(f"Listes enrichies à partir de {nb_total} offre(s) trouvée(s) pour ce poste.")
+        for titre_apercu, df in [
+            ("Compétences les + demandées", df_comp),
+            ("Outils les + demandés", df_outils),
+            ("Langages les + demandés", df_langages),
+        ]:
+            if not df.empty:
+                apercu = ", ".join(f"{r.libelle} ({r.pourcentage}%)" for _, r in df.head(6).iterrows())
+                st.caption(f"💡 **{titre_apercu}** : {apercu}")
 
 
 # ---------------------------------------------------------------------------
@@ -602,8 +700,24 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     titre_recherche = st.text_input(
         "Titre du poste recherché (ex: PMO Finance)",
         key="cv_titre",
-        on_change=_synchroniser_metier_recherche,
-        help="Ce champ alimente automatiquement le \"Métier recherché\" de l'onglet Tendance par profil.",
+        on_change=_synchroniser_titre_vers_motcle,
+        help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peux être personnalisé librement.",
+    )
+
+    mot_cle_analyse = st.text_input(
+        "🔎 Mot-clé pour l'analyse de tendances",
+        key="cv_mot_cle_analyse",
+        on_change=_synchroniser_motcle_vers_profil,
+        help=(
+            "N'apparaît jamais sur ton CV — utilisé uniquement pour chercher des offres dans "
+            "l'onglet 'Tendance par profil'. Préfère un terme générique reconnu par France "
+            "Travail (ex: 'Consultant', 'Chef de projet') plutôt qu'un intitulé personnalisé "
+            "comme 'PMO Finance', qui risque de ne remonter aucun résultat."
+        ),
+    )
+    st.caption(
+        "💡 Ce mot-clé alimente automatiquement le champ \"Métier recherché\" de l'onglet "
+        "**🎯 Tendance par profil** — il ne sera jamais imprimé sur ton CV."
     )
 
     c3, c4, c5 = st.columns(3)
@@ -634,35 +748,23 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     )
 
     st.divider()
-    st.markdown("#### 💡 Suggestions basées sur les offres réelles")
-    df_sugg_comp, df_sugg_outils, df_sugg_langages = _section_suggestions_competences(fonction_analyse_competences)
+    st.markdown("#### 💡 Compétences, outils & langages")
+    _section_suggestions_competences(fonction_analyse_competences)
 
-    st.markdown("#### 🧠 Compétences")
-    if df_sugg_comp is not None:
-        _afficher_suggestions(df_sugg_comp, "cv_competences", st.session_state["cv_suggestions"][3], "sugg_comp")
-    competences = st.text_area(
-        "Une compétence par ligne (ex: Gestion de projet, Audit des processus...)",
-        key="cv_competences",
-        height=90,
+    st.markdown("###### 🧠 Compétences")
+    competences = _champ_liste_avec_ajout(
+        "Sélectionne ou ajoute tes compétences", "cv_competences", _DEFAUTS_COMPETENCES
     )
 
-    st.markdown("#### 🛠️ Outils informatiques")
-    if df_sugg_outils is not None:
-        _afficher_suggestions(df_sugg_outils, "cv_outils", st.session_state["cv_suggestions"][3], "sugg_outil")
-    outils = st.text_area(
-        "Un outil par ligne (ex: Jira, SAP, SalesForce...)",
-        key="cv_outils",
-        height=90,
+    st.markdown("###### 🛠️ Outils informatiques")
+    outils = _champ_liste_avec_ajout(
+        "Sélectionne ou ajoute tes outils", "cv_outils", _DEFAUTS_OUTILS
     )
 
-    st.markdown("#### 💻 Langages informatiques")
+    st.markdown("###### 💻 Langages informatiques")
     st.caption("Facultatif — pertinent surtout pour les profils tech/data.")
-    if df_sugg_langages is not None:
-        _afficher_suggestions(df_sugg_langages, "cv_langages", st.session_state["cv_suggestions"][3], "sugg_langage")
-    langages_informatiques = st.text_area(
-        "Un langage par ligne (ex: Python, SQL, JavaScript...)",
-        key="cv_langages",
-        height=80,
+    langages_informatiques = _champ_liste_avec_ajout(
+        "Sélectionne ou ajoute tes langages", "cv_langages", _DEFAUTS_LANGAGES
     )
 
     st.markdown("#### 🎯 Centres d'intérêt")
