@@ -6,9 +6,9 @@ cf. priorité 3 de la synthèse technique). Réutilise exactement les mêmes
 fonctions de calcul que l'Espace Candidat (moteur_recherche.py), appliquées
 à PLUSIEURS profils candidats simultanément plutôt qu'à un seul.
 
-Ceci est un MVP volontairement minimal pour valider l'architecture (page
-séparée + moteur partagé) — le stockage reste en session (non persistant :
-priorité 2 de la synthèse) et l'accès n'est pas encore protégé (priorité 3).
+Les profils candidats sont désormais persistés en base PostgreSQL (Neon —
+DATABASE_URL) via stockage_recruteur.py, avec repli automatique sur
+st.session_state (perdu à la fermeture) si la base n'est pas configurée.
 """
 
 import streamlit as st
@@ -23,6 +23,7 @@ from moteur_recherche import (
     offres_par_ville,
     calculer_correspondance_offre,
 )
+import stockage_recruteur as db
 
 st.title("🏢 Espace Recruteur")
 st.info(
@@ -74,16 +75,23 @@ if "recruteur_poste_confirme" in st.session_state:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# 2. Profils candidats (stockage en session — non persistant pour l'instant)
+# 2. Profils candidats (persistés en base si DATABASE_URL configurée, sinon
+#    repli sur st.session_state — perdu à la fermeture dans ce cas)
 # ---------------------------------------------------------------------------
 st.markdown("#### 👥 Profils candidats")
-st.caption(
-    "⚠️ Stockage temporaire (session en cours uniquement) — la gestion multi-profils "
-    "persistante est prévue en priorité 2 de la feuille de route."
-)
+
+db.initialiser_table()
+
+if db.base_disponible():
+    st.caption("✅ Profils enregistrés de façon persistante (base PostgreSQL).")
+else:
+    st.warning(
+        "⚠️ DATABASE_URL non configurée — les profils ajoutés ici seront perdus à la "
+        "fermeture de la session. Ajoute ce secret pour activer la persistance."
+    )
 
 if "recruteur_profils" not in st.session_state:
-    st.session_state["recruteur_profils"] = []
+    st.session_state["recruteur_profils"] = db.charger_profils() if db.base_disponible() else []
 
 # --- Import Excel/CSV (import de données internes du client — version simple) ---
 with st.expander("📥 Importer plusieurs profils depuis un fichier Excel/CSV"):
@@ -139,17 +147,22 @@ with st.expander("📥 Importer plusieurs profils depuis un fichier Excel/CSV"):
             col_outils = _colonne("outils")
             col_langages = _colonne("langages")
 
-            nb_importes = 0
+            profils_importes = []
             for _, ligne in df_import.iterrows():
-                st.session_state["recruteur_profils"].append({
+                profils_importes.append({
                     "nom": str(ligne[col_nom]) if col_nom and pd.notna(ligne[col_nom]) else "",
                     "competences": str(ligne[col_comp]) if col_comp and pd.notna(ligne[col_comp]) else "",
                     "outils": str(ligne[col_outils]) if col_outils and pd.notna(ligne[col_outils]) else "",
                     "langages": str(ligne[col_langages]) if col_langages and pd.notna(ligne[col_langages]) else "",
                 })
-                nb_importes += 1
 
-            st.success(f"{nb_importes} profil(s) importé(s) avec succès.")
+            if db.base_disponible():
+                db.ajouter_profils_en_masse(profils_importes)
+                st.session_state["recruteur_profils"] = db.charger_profils()
+            else:
+                st.session_state["recruteur_profils"].extend(profils_importes)
+
+            st.success(f"{len(profils_importes)} profil(s) importé(s) avec succès.")
             st.rerun()
         except Exception as e:
             st.error(f"Impossible de lire ce fichier : {e}")
@@ -169,15 +182,34 @@ for i, profil in enumerate(st.session_state["recruteur_profils"]):
         profil["langages"] = c4.text_input(
             "Langages informatiques (séparés par une virgule)", value=profil.get("langages", ""), key=f"rec_lang_{i}"
         )
-        if st.button("🗑️ Retirer ce profil", key=f"rec_suppr_{i}"):
+        c5, c6 = st.columns(2)
+        if db.base_disponible() and c5.button("💾 Enregistrer", key=f"rec_save_{i}"):
+            if profil.get("id") is None:
+                profil["id"] = db.ajouter_profil(
+                    profil.get("nom", ""), profil.get("competences", ""),
+                    profil.get("outils", ""), profil.get("langages", ""),
+                )
+            else:
+                db.mettre_a_jour_profil(
+                    profil["id"], profil.get("nom", ""), profil.get("competences", ""),
+                    profil.get("outils", ""), profil.get("langages", ""),
+                )
+            st.toast(f"Profil « {profil.get('nom') or 'sans nom'} » enregistré.")
+        if c6.button("🗑️ Retirer ce profil", key=f"rec_suppr_{i}"):
             a_supprimer = i
 
 if a_supprimer is not None:
+    profil_vise = st.session_state["recruteur_profils"][a_supprimer]
+    if db.base_disponible() and profil_vise.get("id") is not None:
+        db.supprimer_profil(profil_vise["id"])
     st.session_state["recruteur_profils"].pop(a_supprimer)
     st.rerun()
 
 if st.button("➕ Ajouter un profil candidat"):
-    st.session_state["recruteur_profils"].append({})
+    nouveau_profil = {}
+    if db.base_disponible():
+        nouveau_profil["id"] = db.ajouter_profil()
+    st.session_state["recruteur_profils"].append(nouveau_profil)
     st.rerun()
 
 st.divider()
