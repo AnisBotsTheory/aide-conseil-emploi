@@ -146,6 +146,54 @@ def calculer_correspondance_offre(offre, competences_utilisateur, outils_utilisa
     return score_global, detail
 
 
+def calculer_correspondance_recruteur(
+    offre, poste_souhaite, competences_utilisateur, outils_utilisateur, langages_utilisateur, secteur_souhaite_code
+):
+    """
+    Score de correspondance pondéré, spécifique à l'Espace Recruteur, sur 3 critères :
+    - Intitulé du poste souhaité par le candidat vs intitulé réel de l'offre (recherche
+      floue rapidfuzz) — poids 50%
+    - Compétences/outils/langages déclarés vs compétences demandées par l'offre (réutilise
+      calculer_correspondance_offre) — poids 30%
+    - Secteur d'activité souhaité vs secteur de l'entreprise qui recrute (comparaison de
+      code NAF, exacte) — poids 20%
+    Une dimension sans donnée à comparer (ni côté candidat, ni côté offre) est retirée du
+    calcul et le poids des dimensions restantes est réajusté proportionnellement — pas de
+    pénalité pour une donnée manquante.
+    """
+    POIDS = {"poste": 0.5, "competences": 0.3, "secteur": 0.2}
+    contributions = {}
+
+    if poste_souhaite and poste_souhaite.strip() and offre.get("intitule"):
+        contributions["poste"] = fuzz.WRatio(poste_souhaite, offre["intitule"]) / 100
+
+    score_competences, _ = calculer_correspondance_offre(
+        offre, competences_utilisateur, outils_utilisateur, langages_utilisateur, ""
+    )
+    if score_competences is not None:
+        contributions["competences"] = score_competences / 100
+
+    secteur_offre_code = offre.get("secteurActivite")
+    if secteur_souhaite_code and secteur_offre_code:
+        contributions["secteur"] = 1.0 if secteur_souhaite_code == secteur_offre_code else 0.0
+
+    if not contributions:
+        return None, {}
+
+    poids_total = sum(POIDS[cle] for cle in contributions)
+    score_global = round(100 * sum(contributions[cle] * POIDS[cle] for cle in contributions) / poids_total)
+
+    detail = {}
+    if "poste" in contributions:
+        detail["Poste"] = f"{round(contributions['poste'] * 100)}%"
+    if "competences" in contributions:
+        detail["Compétences"] = f"{round(contributions['competences'] * 100)}%"
+    if "secteur" in contributions:
+        detail["Secteur"] = "✓ identique" if contributions["secteur"] == 1.0 else "✗ différent"
+
+    return score_global, detail
+
+
 @st.cache_data(ttl=1800)
 def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
     """
@@ -468,6 +516,33 @@ def secteurs_pour_poste(code_rome, departement=None, max_pages=2):
     if not df.empty:
         df = df.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
     return df
+
+
+@st.cache_data(ttl=1800)
+def rechercher_offres_completes(code_rome, departement, max_pages=1):
+    """
+    Récupère les offres complètes (tous les champs bruts : intitulé, entreprise,
+    compétences, secteur d'activité...) pour un code ROME et un département —
+    jusqu'à 150 x max_pages offres. Utilisée pour le matching détaillé côté
+    Espace Recruteur (contrairement à offres_par_ville, qui n'agrège que par ville).
+    """
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    toutes_offres = []
+    taille_page = 150
+    for page in range(max_pages):
+        debut = page * taille_page
+        fin = debut + taille_page - 1
+        params = {"codeROME": code_rome, "departement": departement, "range": f"{debut}-{fin}"}
+        r = requests.get(url, headers=headers, params=params)
+        if r.status_code not in (200, 206):
+            break
+        resultats = r.json().get("resultats", [])
+        toutes_offres.extend(resultats)
+        if len(resultats) < taille_page:
+            break
+    return toutes_offres
 
 
 @st.cache_data(ttl=1800)
@@ -809,6 +884,7 @@ __all__ = [
     "_classifier_competence",
     "_normaliser",
     "calculer_correspondance_offre",
+    "calculer_correspondance_recruteur",
     "analyser_competences",
     "get_secteurs_activite",
     "get_referentiel_appellations",
@@ -820,6 +896,7 @@ __all__ = [
     "resoudre_codes_rome",
     "secteurs_pour_poste",
     "offres_par_ville",
+    "rechercher_offres_completes",
     "volumes_departement_offres",
     "_CANDIDATS_SCOPE_STATS_MARCHE",
     "BASE_STATS_MARCHE",
