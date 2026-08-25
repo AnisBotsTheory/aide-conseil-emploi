@@ -25,7 +25,11 @@ def _connexion():
 
 
 def initialiser_table():
-    """Crée la table si elle n'existe pas encore. Sans effet si déjà en place."""
+    """
+    Crée la table si elle n'existe pas encore, et ajoute les colonnes
+    poste_souhaite/secteur_souhaite si la table existait déjà sans elles
+    (migration légère, sans effet si déjà en place).
+    """
     if not base_disponible():
         return
     with _connexion() as conn:
@@ -37,9 +41,13 @@ def initialiser_table():
                     competences TEXT DEFAULT '',
                     outils TEXT DEFAULT '',
                     langages TEXT DEFAULT '',
+                    poste_souhaite TEXT DEFAULT '',
+                    secteur_souhaite TEXT DEFAULT '',
                     date_creation TIMESTAMP DEFAULT NOW()
                 )
             """)
+            cur.execute("ALTER TABLE profils_candidats ADD COLUMN IF NOT EXISTS poste_souhaite TEXT DEFAULT ''")
+            cur.execute("ALTER TABLE profils_candidats ADD COLUMN IF NOT EXISTS secteur_souhaite TEXT DEFAULT ''")
         conn.commit()
 
 
@@ -50,21 +58,23 @@ def charger_profils():
     with _connexion() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, nom, competences, outils, langages FROM profils_candidats ORDER BY id"
+                "SELECT id, nom, competences, outils, langages, poste_souhaite, secteur_souhaite "
+                "FROM profils_candidats ORDER BY id"
             )
             return [dict(ligne) for ligne in cur.fetchall()]
 
 
-def ajouter_profil(nom="", competences="", outils="", langages=""):
+def ajouter_profil(nom="", competences="", outils="", langages="", poste_souhaite="", secteur_souhaite=""):
     """Insère un nouveau profil et retourne son id."""
     if not base_disponible():
         return None
     with _connexion() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO profils_candidats (nom, competences, outils, langages) "
-                "VALUES (%s, %s, %s, %s) RETURNING id",
-                (nom, competences, outils, langages),
+                "INSERT INTO profils_candidats "
+                "(nom, competences, outils, langages, poste_souhaite, secteur_souhaite) "
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                (nom, competences, outils, langages, poste_souhaite, secteur_souhaite),
             )
             id_nouveau = cur.fetchone()[0]
         conn.commit()
@@ -79,22 +89,27 @@ def ajouter_profils_en_masse(profils):
         with conn.cursor() as cur:
             for p in profils:
                 cur.execute(
-                    "INSERT INTO profils_candidats (nom, competences, outils, langages) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (p.get("nom", ""), p.get("competences", ""), p.get("outils", ""), p.get("langages", "")),
+                    "INSERT INTO profils_candidats "
+                    "(nom, competences, outils, langages, poste_souhaite, secteur_souhaite) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        p.get("nom", ""), p.get("competences", ""), p.get("outils", ""),
+                        p.get("langages", ""), p.get("poste_souhaite", ""), p.get("secteur_souhaite", ""),
+                    ),
                 )
         conn.commit()
     return len(profils)
 
 
-def mettre_a_jour_profil(id_profil, nom, competences, outils, langages):
+def mettre_a_jour_profil(id_profil, nom, competences, outils, langages, poste_souhaite="", secteur_souhaite=""):
     if not base_disponible() or id_profil is None:
         return
     with _connexion() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE profils_candidats SET nom=%s, competences=%s, outils=%s, langages=%s WHERE id=%s",
-                (nom, competences, outils, langages, id_profil),
+                "UPDATE profils_candidats SET nom=%s, competences=%s, outils=%s, langages=%s, "
+                "poste_souhaite=%s, secteur_souhaite=%s WHERE id=%s",
+                (nom, competences, outils, langages, poste_souhaite, secteur_souhaite, id_profil),
             )
         conn.commit()
 
