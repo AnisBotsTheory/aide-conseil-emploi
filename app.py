@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 from collections import Counter
+from rapidfuzz import process, fuzz
 
 from cv_builder import afficher_generateur_cv
 
@@ -254,6 +255,97 @@ def _extraire_code_rome(item_appellation):
             if metier.get(cle):
                 return metier[cle]
     return None
+
+
+# ---------------------------------------------------------------------------
+# Suggestion de postes à partir d'un intitulé libre / moderne (dictionnaire +
+# recherche floue), pour pallier les intitulés absents de la nomenclature ROME
+# telle quelle (ex: "Data Analyst", "Product Owner"...).
+# ---------------------------------------------------------------------------
+DICTIONNAIRE_INTITULES_MODERNES = {
+    "data analyst": ["analyste de données", "chargé d'études statistiques"],
+    "data scientist": ["data scientist", "statisticien"],
+    "data engineer": ["ingénieur data", "data engineer"],
+    "product owner": ["chef de produit", "responsable produit"],
+    "product manager": ["chef de produit", "responsable produit"],
+    "scrum master": ["chef de projet", "coordinateur de projet"],
+    "ux designer": ["ergonome", "designer d'interface"],
+    "ui designer": ["designer graphique", "webdesigner"],
+    "ux/ui designer": ["ergonome", "designer d'interface", "designer graphique"],
+    "devops": ["administrateur systèmes et réseaux", "ingénieur systèmes"],
+    "sre": ["administrateur systèmes et réseaux", "ingénieur systèmes"],
+    "business analyst": ["analyste fonctionnel", "consultant en organisation"],
+    "growth hacker": ["chargé de marketing digital"],
+    "growth manager": ["chargé de marketing digital"],
+    "customer success manager": ["chargé de relation clientèle", "gestionnaire de la relation client"],
+    "community manager": ["chargé de communication", "animateur de communauté web"],
+    "social media manager": ["chargé de communication digitale"],
+    "full stack developer": ["développeur informatique", "développeur web"],
+    "front end developer": ["développeur web"],
+    "back end developer": ["développeur informatique"],
+    "software engineer": ["développeur informatique", "ingénieur logiciel"],
+    "qa engineer": ["testeur logiciel", "chargé de tests"],
+    "project manager": ["chef de projet"],
+    "pmo": ["chargé de reporting", "assistant chef de projet", "coordinateur de projet"],
+    "hr business partner": ["chargé de ressources humaines", "responsable ressources humaines"],
+    "talent acquisition": ["chargé de recrutement"],
+    "recruiter": ["chargé de recrutement"],
+    "office manager": ["assistant de direction", "responsable administratif"],
+    "sales manager": ["responsable commercial", "chef des ventes"],
+    "account manager": ["chargé de clientèle", "responsable de comptes"],
+    "supply chain manager": ["responsable logistique", "responsable supply chain"],
+    "revenue manager": ["contrôleur de gestion", "analyste financier"],
+    "financial controller": ["contrôleur de gestion"],
+    "legal counsel": ["juriste"],
+    "brand manager": ["chef de produit marketing", "responsable marketing"],
+}
+
+
+def _normaliser_texte(texte):
+    """Minuscules et retrait des accents, pour des comparaisons robustes."""
+    texte = texte.lower().strip()
+    remplacements = str.maketrans("àâäéèêëîïôöùûüç", "aaaeeeeiioouuuc")
+    return texte.translate(remplacements)
+
+
+@st.cache_data(ttl=1800)
+def suggerer_postes(saisie, max_resultats=8):
+    """
+    Suggère des postes du référentiel ROME à partir d'un intitulé libre/moderne,
+    en combinant un petit dictionnaire de correspondances connues (ex: "Data
+    Analyst" -> "Analyste de données") et une recherche floue directe sur la
+    saisie brute (rattrape les variantes/fautes de frappe absentes du
+    dictionnaire). Retourne une liste de libellés d'appellations officielles.
+    """
+    saisie_normalisee = _normaliser_texte(saisie)
+    if len(saisie_normalisee) < 2:
+        return []
+
+    appellations = get_referentiel_appellations()
+    labels = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
+    if not labels:
+        return []
+
+    candidats = {}  # libelle -> meilleur score
+
+    # 1) Dictionnaire : si un terme connu est contenu dans la saisie, on cherche
+    # les appellations officielles correspondant aux mots-clés français associés.
+    for terme_moderne, mots_cles_fr in DICTIONNAIRE_INTITULES_MODERNES.items():
+        if terme_moderne in saisie_normalisee:
+            for mot_cle in mots_cles_fr:
+                mot_cle_normalise = _normaliser_texte(mot_cle)
+                for label in labels:
+                    if mot_cle_normalise in _normaliser_texte(label):
+                        candidats[label] = max(candidats.get(label, 0), 100)  # priorité maximale
+
+    # 2) Recherche floue directe sur la saisie brute, en complément.
+    resultats_flous = process.extract(saisie, labels, scorer=fuzz.WRatio, limit=max_resultats * 2)
+    for label, score, _ in resultats_flous:
+        if score >= 55:  # seuil pour écarter le bruit non pertinent
+            candidats[label] = max(candidats.get(label, 0), score)
+
+    resultats_tries = sorted(candidats.items(), key=lambda x: x[1], reverse=True)
+    return [label for label, _ in resultats_tries[:max_resultats]]
 
 
 def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mots_cles=None, range_str="0-149"):
@@ -747,18 +839,45 @@ with tab_profil:
     appellations = get_referentiel_appellations()
     labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
 
+    if "poste_confirme" not in st.session_state:
+        st.session_state["poste_confirme"] = "🌐 Tous les postes"
+
     col1, col2 = st.columns(2)
     with col1:
         if labels_appellations:
-            poste_choisi_label = st.selectbox(
-                "Poste recherché",
-                options=["🌐 Tous les postes"] + labels_appellations,
-                key="poste_profil_select",
+            poste_texte_libre = st.text_input(
+                "Poste recherché (tape même un intitulé moderne ou en anglais : "
+                "'Data Analyst', 'Product Owner'...)",
+                key="poste_profil_texte_libre",
             )
+            if poste_texte_libre.strip():
+                suggestions = suggerer_postes(poste_texte_libre)
+                if suggestions:
+                    st.caption("💡 Suggestions — clique pour sélectionner :")
+                    colonnes_tags = st.columns(2)
+                    for i, suggestion in enumerate(suggestions):
+                        col_tag = colonnes_tags[i % 2]
+                        if col_tag.button(suggestion, key=f"tag_poste_{i}_{suggestion}"):
+                            st.session_state["poste_confirme"] = suggestion
+                            st.rerun()
+                else:
+                    st.caption(
+                        "Aucune suggestion trouvée — essaie un autre terme, ou choisis "
+                        "\"Tous les postes\" ci-dessous."
+                    )
+
+            if st.button("🌐 Rechercher sur tous les postes (pas de poste précis)", key="btn_tous_les_postes"):
+                st.session_state["poste_confirme"] = "🌐 Tous les postes"
+                st.rerun()
+
+            poste_choisi_label = st.session_state["poste_confirme"]
+            st.success(f"Poste sélectionné : **{poste_choisi_label}**")
         else:
             st.caption("⚠️ Référentiel des postes indisponible pour le moment — recherche par mot-clé en secours.")
-            poste_texte_libre = st.text_input("Poste recherché (mot-clé)", key="poste_profil_texte")
-            poste_choisi_label = poste_texte_libre.strip() if poste_texte_libre.strip() else "🌐 Tous les postes"
+            poste_texte_libre_secours = st.text_input("Poste recherché (mot-clé)", key="poste_profil_texte")
+            poste_choisi_label = (
+                poste_texte_libre_secours.strip() if poste_texte_libre_secours.strip() else "🌐 Tous les postes"
+            )
     with col2:
         departement_profil = st.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
 
