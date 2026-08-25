@@ -14,6 +14,8 @@ Intégration dans app.py :
 
 import streamlit as st
 import re
+import os
+import requests
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -43,6 +45,78 @@ THEMES = {
         "bandeau_texte": "2F5233",
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Traduction du CV (FR / EN / ES)
+# ---------------------------------------------------------------------------
+LANGUES_CV = {
+    "🇫🇷 Français": "FR",
+    "🇬🇧 English": "EN-GB",
+    "🇪🇸 Español": "ES",
+}
+
+# Libellés de section fixes — pas besoin d'appel API, ils ne changent jamais.
+LIBELLES = {
+    "FR": {
+        "contact": "Contact", "email": "E-mail", "telephone": "Téléphone", "adresse": "Adresse",
+        "langues": "Langues", "competences": "Compétences", "outils": "Outils informatiques",
+        "langages": "Langages informatiques", "interets": "Centres d'intérêt",
+        "experiences": "Expériences professionnelles", "formation": "Formation",
+        "presentation": "Présentation", "disponibilite": "Disponibilité",
+    },
+    "EN-GB": {
+        "contact": "Contact", "email": "Email", "telephone": "Phone", "adresse": "Address",
+        "langues": "Languages", "competences": "Skills", "outils": "IT Tools",
+        "langages": "Programming Languages", "interets": "Interests",
+        "experiences": "Professional Experience", "formation": "Education",
+        "presentation": "Profile", "disponibilite": "Availability",
+    },
+    "ES": {
+        "contact": "Contacto", "email": "Correo electrónico", "telephone": "Teléfono", "adresse": "Dirección",
+        "langues": "Idiomas", "competences": "Competencias", "outils": "Herramientas informáticas",
+        "langages": "Lenguajes informáticos", "interets": "Intereses",
+        "experiences": "Experiencia profesional", "formation": "Formación",
+        "presentation": "Presentación", "disponibilite": "Disponibilidad",
+    },
+}
+
+
+def _traduire_lot(textes, langue_cible):
+    """
+    Traduit une liste de textes en un seul appel DeepL (économise les appels et
+    la latence). Dégradation silencieuse vers le texte original (français) si la
+    clé API n'est pas configurée ou si l'appel échoue — ne bloque jamais la
+    génération du CV.
+    """
+    if langue_cible == "FR":
+        return textes
+
+    cle_api = os.environ.get("DEEPL_API_KEY")
+    if not cle_api:
+        return textes
+
+    index_non_vides = [i for i, t in enumerate(textes) if t and t.strip()]
+    if not index_non_vides:
+        return textes
+
+    try:
+        url = "https://api-free.deepl.com/v2/translate"
+        headers = {"Authorization": f"DeepL-Auth-Key {cle_api}"}
+        data = [("text", textes[i]) for i in index_non_vides]
+        data += [("target_lang", langue_cible), ("source_lang", "FR")]
+        r = requests.post(url, headers=headers, data=data, timeout=15)
+        if r.status_code != 200:
+            return textes
+        traductions = r.json().get("translations", [])
+        if len(traductions) != len(index_non_vides):
+            return textes
+        resultats = list(textes)
+        for position, index_original in enumerate(index_non_vides):
+            resultats[index_original] = traductions[position]["text"]
+        return resultats
+    except Exception:
+        return textes
 
 
 # ---------------------------------------------------------------------------
@@ -325,12 +399,49 @@ def _majuscule_premiere_lettre(texte):
 # ---------------------------------------------------------------------------
 # Génération du document Word (mise en page 2 colonnes)
 # ---------------------------------------------------------------------------
-def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, afficher_drapeaux=True):
+def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, afficher_drapeaux=True, langue="FR"):
     theme = THEMES.get(theme_nom, THEMES["🔵 Bleu classique"])
     accent = theme["accent"]
     bandeau_fond = theme["bandeau_fond"]
     bandeau_texte = theme["bandeau_texte"]
     echelle = _calculer_echelle(_estimer_volume_contenu(data))
+    libelles = LIBELLES.get(langue, LIBELLES["FR"])
+
+    # --- Traduction groupée des champs texte libre (un seul appel API DeepL) ---
+    experiences_brutes = data.get("experiences", [])
+    formations_brutes = data.get("formations", [])
+
+    textes_a_traduire = [data.get("profil", ""), data.get("titre_recherche", "")]
+    for exp in experiences_brutes:
+        textes_a_traduire.append(exp.get("poste", ""))
+        textes_a_traduire.append(exp.get("description", ""))
+    for form in formations_brutes:
+        textes_a_traduire.append(form.get("diplome", ""))
+
+    textes_traduits = _traduire_lot(textes_a_traduire, langue)
+
+    experiences_traduites = []
+    formations_traduites = []
+    curseur = 2
+    for exp in experiences_brutes:
+        exp_copie = dict(exp)
+        exp_copie["poste"] = textes_traduits[curseur]
+        exp_copie["description"] = textes_traduits[curseur + 1]
+        curseur += 2
+        experiences_traduites.append(exp_copie)
+    for form in formations_brutes:
+        form_copie = dict(form)
+        form_copie["diplome"] = textes_traduits[curseur]
+        curseur += 1
+        formations_traduites.append(form_copie)
+
+    # On poursuit sur une copie de data avec les champs traduits substitués —
+    # noms, dates, villes, pays, e-mail... restent inchangés (non traduits).
+    data = dict(data)
+    data["profil"] = textes_traduits[0]
+    data["titre_recherche"] = textes_traduits[1]
+    data["experiences"] = experiences_traduites
+    data["formations"] = formations_traduites
 
     doc = Document()
     # Interligne compact par défaut (évite l'espacement 1.08/1.15 par défaut de Word,
@@ -386,11 +497,11 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         run_photo.add_picture(BytesIO(photo_bytes), width=Inches(1.6))
 
     # --- Contact ---
-    _titre_section(cell_bandeau, "Contact", bandeau_texte, echelle=echelle, espace_avant=0)
+    _titre_section(cell_bandeau, libelles["contact"], bandeau_texte, echelle=echelle, espace_avant=0)
     for icone, label, valeur in [
-        ("📧", "E-mail", data.get("email")),
-        ("📱", "Téléphone", data.get("telephone")),
-        ("🏠", "Adresse", data.get("adresse")),
+        ("📧", libelles["email"], data.get("email")),
+        ("📱", libelles["telephone"], data.get("telephone")),
+        ("🏠", libelles["adresse"], data.get("adresse")),
     ]:
         if valeur:
             p = cell_bandeau.add_paragraph()
@@ -404,7 +515,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
     # --- Langues ---
     if data.get("langues"):
-        _titre_section(cell_bandeau, "Langues", bandeau_texte, echelle=echelle)
+        _titre_section(cell_bandeau, libelles["langues"], bandeau_texte, echelle=echelle)
         for ligne in data["langues"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
@@ -413,7 +524,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
     # --- Compétences ---
     if data.get("competences"):
-        _titre_section(cell_bandeau, "Compétences", bandeau_texte, echelle=echelle)
+        _titre_section(cell_bandeau, libelles["competences"], bandeau_texte, echelle=echelle)
         for ligne in data["competences"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
@@ -421,7 +532,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
     # --- Outils informatiques ---
     if data.get("outils"):
-        _titre_section(cell_bandeau, "Outils informatiques", bandeau_texte, echelle=echelle)
+        _titre_section(cell_bandeau, libelles["outils"], bandeau_texte, echelle=echelle)
         for ligne in data["outils"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
@@ -429,7 +540,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
     # --- Langages informatiques (facultatif, invisible si vide — profils non-tech) ---
     if data.get("langages_informatiques"):
-        _titre_section(cell_bandeau, "Langages informatiques", bandeau_texte, echelle=echelle)
+        _titre_section(cell_bandeau, libelles["langages"], bandeau_texte, echelle=echelle)
         for ligne in data["langages_informatiques"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
@@ -437,7 +548,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
     # --- Centres d'intérêt ---
     if data.get("interets"):
-        _titre_section(cell_bandeau, "Centres d'intérêt", bandeau_texte, echelle=echelle)
+        _titre_section(cell_bandeau, libelles["interets"], bandeau_texte, echelle=echelle)
         interets_list = [i.strip() for i in data["interets"].replace("\n", ",").split(",") if i.strip()]
         p = cell_bandeau.add_paragraph()
         run = p.add_run(" · ".join(interets_list))
@@ -479,7 +590,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     if data.get("profil"):
         p = cell_principale.add_paragraph()
         p.paragraph_format.space_after = _pt(4, echelle)
-        run_label = p.add_run("Présentation : ")
+        run_label = p.add_run(f"{libelles['presentation']} : ")
         run_label.bold = True
         run_label.font.size = _pt(10.5, echelle)
         run_texte = p.add_run(data["profil"])
@@ -489,7 +600,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     if data.get("disponibilite"):
         p_dispo = cell_principale.add_paragraph()
         p_dispo.paragraph_format.space_after = _pt(8, echelle)
-        run_dispo_label = p_dispo.add_run("Disponibilité : ")
+        run_dispo_label = p_dispo.add_run(f"{libelles['disponibilite']} : ")
         run_dispo_label.bold = True
         run_dispo_label.italic = True
         run_dispo_label.font.size = _pt(10, echelle)
@@ -501,7 +612,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     experiences = [e for e in data.get("experiences", []) if e.get("poste") or e.get("entreprise")]
     experiences = _trier_par_date(experiences, "date_fin", "date_debut")
     if experiences:
-        _titre_section(cell_principale, "Expériences professionnelles", accent, taille=16, echelle=echelle)
+        _titre_section(cell_principale, libelles["experiences"], accent, taille=16, echelle=echelle)
         for exp in experiences:
             p = cell_principale.add_paragraph()
             p.paragraph_format.space_before = _pt(6, echelle)
@@ -537,7 +648,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     formations = [f for f in data.get("formations", []) if f.get("diplome") or f.get("etablissement")]
     formations = _trier_par_date(formations, "annee")
     if formations:
-        _titre_section(cell_principale, "Formation", accent, taille=16, echelle=echelle)
+        _titre_section(cell_principale, libelles["formation"], accent, taille=16, echelle=echelle)
         for form in formations:
             p = cell_principale.add_paragraph()
             p.paragraph_format.space_before = _pt(4, echelle)
@@ -716,6 +827,19 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         key="cv_theme",
     )
 
+    langue_choisie_label = st.radio(
+        "🌍 Langue du CV",
+        list(LANGUES_CV.keys()),
+        horizontal=True,
+        key="cv_langue",
+    )
+    langue_choisie = LANGUES_CV[langue_choisie_label]
+    if langue_choisie != "FR" and not os.environ.get("DEEPL_API_KEY"):
+        st.warning(
+            "⚠️ La traduction automatique n'est pas configurée pour l'instant (clé DeepL "
+            "manquante) — le CV sera généré en français malgré la langue choisie."
+        )
+
     photo_uploadee = st.file_uploader(
         "📷 Photo (facultatif, format carré recommandé)", type=["png", "jpg", "jpeg"], key="cv_photo"
     )
@@ -837,9 +961,17 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "interets": interets,
             }
             photo_bytes = photo_uploadee.getvalue() if photo_uploadee else None
-            buffer, echelle = generer_cv_docx(
-                data, theme_nom=theme_choisi, photo_bytes=photo_bytes, afficher_drapeaux=afficher_drapeaux
+            message_attente = (
+                "Traduction et génération en cours..." if langue_choisie != "FR" else "Génération en cours..."
             )
+            with st.spinner(message_attente):
+                buffer, echelle = generer_cv_docx(
+                    data,
+                    theme_nom=theme_choisi,
+                    photo_bytes=photo_bytes,
+                    afficher_drapeaux=afficher_drapeaux,
+                    langue=langue_choisie,
+                )
             st.success("Votre CV est prêt !")
             if echelle < 0.85:
                 st.warning(
@@ -851,6 +983,6 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             st.download_button(
                 label="⬇️ Télécharger mon CV (.docx)",
                 data=buffer,
-                file_name=f"CV_{prenom}_{nom}.docx",
+                file_name=f"CV_{prenom}_{nom}{'' if langue_choisie == 'FR' else '_' + langue_choisie}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
