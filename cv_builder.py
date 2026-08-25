@@ -13,6 +13,7 @@ Intégration dans app.py :
 """
 
 import streamlit as st
+import re
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -27,9 +28,9 @@ from io import BytesIO
 # ---------------------------------------------------------------------------
 THEMES = {
     "🔵 Bleu classique": {
-        "accent": "1F4E79",       # titres, nom, filets
+        "accent": "2E74B5",       # titres, nom, filets — couleur exacte de la référence
         "bandeau_fond": "EAF1F8",  # fond du bandeau latéral
-        "bandeau_texte": "1F4E79",
+        "bandeau_texte": "2E74B5",
     },
     "🍷 Bordeaux élégant": {
         "accent": "7B2C3B",
@@ -140,10 +141,11 @@ def _section_experiences():
             exp["poste"] = c1.text_input("Poste", value=exp.get("poste", ""), key=f"exp_poste_{i}")
             exp["entreprise"] = c2.text_input("Entreprise", value=exp.get("entreprise", ""), key=f"exp_entreprise_{i}")
 
-            c3, c4, c5 = st.columns(3)
+            c3, c4, c5, c6 = st.columns(4)
             exp["ville"] = c3.text_input("Ville", value=exp.get("ville", ""), key=f"exp_ville_{i}")
-            exp["date_debut"] = c4.text_input("Début (ex: Jan. 2022)", value=exp.get("date_debut", ""), key=f"exp_debut_{i}")
-            exp["date_fin"] = c5.text_input("Fin (ex: Déc. 2023 ou En cours)", value=exp.get("date_fin", ""), key=f"exp_fin_{i}")
+            exp["pays"] = c4.text_input("Pays", value=exp.get("pays", ""), key=f"exp_pays_{i}")
+            exp["date_debut"] = c5.text_input("Début (ex: Jan. 2022)", value=exp.get("date_debut", ""), key=f"exp_debut_{i}")
+            exp["date_fin"] = c6.text_input("Fin (ex: Déc. 2023 ou En cours)", value=exp.get("date_fin", ""), key=f"exp_fin_{i}")
 
             exp["description"] = st.text_area(
                 "Missions / réalisations (une ligne = une puce)",
@@ -174,9 +176,10 @@ def _section_formations():
             form["diplome"] = c1.text_input("Diplôme", value=form.get("diplome", ""), key=f"form_diplome_{i}")
             form["etablissement"] = c2.text_input("Établissement", value=form.get("etablissement", ""), key=f"form_etab_{i}")
 
-            c3, c4 = st.columns(2)
+            c3, c4, c5 = st.columns(3)
             form["ville"] = c3.text_input("Ville", value=form.get("ville", ""), key=f"form_ville_{i}")
-            form["annee"] = c4.text_input("Année (ex: sept 2017 / oct 2018)", value=form.get("annee", ""), key=f"form_annee_{i}")
+            form["pays"] = c4.text_input("Pays", value=form.get("pays", ""), key=f"form_pays_{i}")
+            form["annee"] = c5.text_input("Année (ex: sept 2017 / oct 2018)", value=form.get("annee", ""), key=f"form_annee_{i}")
 
             if st.button("🗑️ Supprimer cette formation", key=f"form_supprimer_{i}"):
                 a_supprimer = i
@@ -239,7 +242,7 @@ def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0, espa
     return p
 
 
-_CARACTERES_PUCE_PARASITES = " -•➤▸●○*>·‣"
+_CARACTERES_PUCE_PARASITES = " -•➤▸●○*>·‣¬▪"
 
 
 def _nettoyer_ligne(texte):
@@ -248,14 +251,75 @@ def _nettoyer_ligne(texte):
     return texte.strip(_CARACTERES_PUCE_PARASITES).strip()
 
 
-def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10, echelle=1.0):
+def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10, echelle=1.0, caractere="¬"):
     p = cell_ou_doc.add_paragraph()
-    p.paragraph_format.space_after = _pt(2, echelle)
-    run = p.add_run(f"• {texte}")
+    # Espacement conforme à la valeur mesurée dans le format de référence (~3pt)
+    p.paragraph_format.space_after = _pt(3, echelle)
+    run = p.add_run(f"{caractere} {texte}")
     run.font.size = _pt(taille, echelle)
     if couleur_puce:
         run.font.color.rgb = RGBColor.from_string(couleur_puce)
     return p
+
+
+# ---------------------------------------------------------------------------
+# Tri automatique par date (expériences / formations, anti-chronologique)
+# ---------------------------------------------------------------------------
+_MOIS_FR_NUM = {
+    "janvier": 1, "jan": 1, "février": 2, "fevrier": 2, "fév": 2, "fev": 2,
+    "mars": 3, "avril": 4, "avr": 4, "mai": 5, "juin": 6, "juillet": 7, "juil": 7,
+    "août": 8, "aout": 8, "septembre": 9, "sept": 9, "sep": 9,
+    "octobre": 10, "oct": 10, "novembre": 11, "nov": 11,
+    "décembre": 12, "decembre": 12, "déc": 12, "dec": 12,
+}
+
+
+def _valeur_tri_date(texte):
+    """
+    Extrait une valeur triable (année x 12 + mois) à partir d'un texte de date
+    libre en français (ex: "Août 2025", "sept 2017 / oct 2018", "En cours").
+    "En cours" est traité comme la date la plus récente possible. Retourne 0
+    si aucune date n'est reconnue (l'élément descend en fin de liste).
+    """
+    if not texte:
+        return 0
+    texte_normalise = texte.lower().strip()
+    if any(mot in texte_normalise for mot in ("en cours", "aujourd'hui", "present", "présent")):
+        return 999999
+
+    annees = [int(a) for a in re.findall(r"(?:19|20)\d{2}", texte_normalise)]
+    if not annees:
+        return 0
+    annee_retenue = max(annees)  # la plus tardive mentionnée (ex: "sept 2017 / oct 2018" -> 2018)
+
+    mois_retenu = 1
+    for nom_mois, num_mois in _MOIS_FR_NUM.items():
+        if nom_mois in texte_normalise:
+            mois_retenu = num_mois
+
+    return annee_retenue * 12 + mois_retenu
+
+
+def _trier_par_date(elements, cle_principale, cle_secondaire=None):
+    """Trie une liste d'expériences/formations du plus récent au plus ancien."""
+
+    def _cle_tri(element):
+        texte = element.get(cle_principale, "")
+        if not texte and cle_secondaire:
+            texte = element.get(cle_secondaire, "")
+        return _valeur_tri_date(texte)
+
+    return sorted(elements, key=_cle_tri, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Majuscule automatique (première lettre uniquement, conventions françaises)
+# ---------------------------------------------------------------------------
+def _majuscule_premiere_lettre(texte):
+    texte = (texte or "").strip()
+    if not texte:
+        return texte
+    return texte[0].upper() + texte[1:]
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +331,6 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     bandeau_fond = theme["bandeau_fond"]
     bandeau_texte = theme["bandeau_texte"]
     echelle = _calculer_echelle(_estimer_volume_contenu(data))
-    marge_verticale = _calculer_marge_verticale(echelle)
 
     doc = Document()
     # Interligne compact par défaut (évite l'espacement 1.08/1.15 par défaut de Word,
@@ -277,10 +340,10 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     style_normal.paragraph_format.space_after = Pt(0)
 
     for section in doc.sections:
-        section.top_margin = Cm(marge_verticale)
-        section.bottom_margin = Cm(marge_verticale)
-        section.left_margin = Cm(1.2)
-        section.right_margin = Cm(1.2)
+        section.top_margin = Cm(0.46)
+        section.bottom_margin = Cm(0.46)
+        section.left_margin = Cm(0.46)
+        section.right_margin = Cm(0.46)
         largeur_utile = section.page_width - section.left_margin - section.right_margin
 
     largeur_bandeau = Inches(2.3)
@@ -324,15 +387,15 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
     # --- Contact ---
     _titre_section(cell_bandeau, "Contact", bandeau_texte, echelle=echelle, espace_avant=0)
-    for label, valeur in [
-        ("E-mail", data.get("email")),
-        ("Téléphone", data.get("telephone")),
-        ("Ville", data.get("ville")),
+    for icone, label, valeur in [
+        ("📧", "E-mail", data.get("email")),
+        ("📱", "Téléphone", data.get("telephone")),
+        ("🏠", "Adresse", data.get("adresse")),
     ]:
         if valeur:
             p = cell_bandeau.add_paragraph()
-            p.paragraph_format.space_after = _pt(2, echelle)
-            run_label = p.add_run(f"{label}\n")
+            p.paragraph_format.space_after = _pt(6, echelle)
+            run_label = p.add_run(f"{icone} {label}\n")
             run_label.bold = True
             run_label.font.size = _pt(9, echelle)
             run_label.font.color.rgb = RGBColor.from_string(bandeau_texte)
@@ -346,7 +409,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             ligne = _nettoyer_ligne(ligne)
             if ligne:
                 prefixe = _drapeau_pour_langue(ligne) if afficher_drapeaux else ""
-                _puce(cell_bandeau, f"{prefixe}{ligne}", echelle=echelle)
+                _puce(cell_bandeau, f"{prefixe}{ligne}", echelle=echelle, caractere="▪")
 
     # --- Compétences ---
     if data.get("competences"):
@@ -354,7 +417,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for ligne in data["competences"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
-                _puce(cell_bandeau, ligne, echelle=echelle)
+                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
 
     # --- Outils informatiques ---
     if data.get("outils"):
@@ -362,7 +425,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for ligne in data["outils"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
-                _puce(cell_bandeau, ligne, echelle=echelle)
+                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
 
     # --- Langages informatiques (facultatif, invisible si vide — profils non-tech) ---
     if data.get("langages_informatiques"):
@@ -370,7 +433,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for ligne in data["langages_informatiques"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
-                _puce(cell_bandeau, ligne, echelle=echelle)
+                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
 
     # --- Centres d'intérêt ---
     if data.get("interets"):
@@ -388,7 +451,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     p_nom.paragraph_format.space_after = Pt(0)
     run_nom = p_nom.add_run(f"{data.get('prenom', '')} {data.get('nom', '')}".strip().upper())
     run_nom.bold = True
-    run_nom.font.size = _pt(20, echelle)
+    run_nom.font.size = _pt(28, echelle)
     run_nom.font.color.rgb = RGBColor.from_string(accent)
 
     if data.get("titre_recherche"):
@@ -412,35 +475,53 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     bord.append(bas)
     pPr.append(bord)
 
-    # --- Profil ---
+    # --- Présentation (label en gras intégré au paragraphe, pas de titre de section séparé) ---
     if data.get("profil"):
-        _titre_section(cell_principale, "Profil", accent, taille=13, echelle=echelle)
         p = cell_principale.add_paragraph()
-        run = p.add_run(data["profil"])
-        run.font.size = _pt(10.5, echelle)
+        p.paragraph_format.space_after = _pt(4, echelle)
+        run_label = p.add_run("Présentation : ")
+        run_label.bold = True
+        run_label.font.size = _pt(10.5, echelle)
+        run_texte = p.add_run(data["profil"])
+        run_texte.font.size = _pt(10.5, echelle)
+
+    # --- Disponibilité ---
+    if data.get("disponibilite"):
+        p_dispo = cell_principale.add_paragraph()
+        p_dispo.paragraph_format.space_after = _pt(8, echelle)
+        run_dispo_label = p_dispo.add_run("Disponibilité : ")
+        run_dispo_label.bold = True
+        run_dispo_label.italic = True
+        run_dispo_label.font.size = _pt(10, echelle)
+        run_dispo_val = p_dispo.add_run(data["disponibilite"])
+        run_dispo_val.italic = True
+        run_dispo_val.font.size = _pt(10, echelle)
 
     # --- Expériences ---
     experiences = [e for e in data.get("experiences", []) if e.get("poste") or e.get("entreprise")]
+    experiences = _trier_par_date(experiences, "date_fin", "date_debut")
     if experiences:
-        _titre_section(cell_principale, "Expériences professionnelles", accent, taille=13, echelle=echelle)
+        _titre_section(cell_principale, "Expériences professionnelles", accent, taille=16, echelle=echelle)
         for exp in experiences:
             p = cell_principale.add_paragraph()
             p.paragraph_format.space_before = _pt(6, echelle)
             p.paragraph_format.space_after = Pt(0)
-            run = p.add_run(f"{exp.get('poste', '')} — {exp.get('entreprise', '')}")
+            poste_maj = _majuscule_premiere_lettre(exp.get("poste", ""))
+            run = p.add_run(poste_maj)
             run.bold = True
             run.font.size = _pt(11, echelle)
 
-            dates_ville = " · ".join(
-                x for x in [
-                    f"{exp.get('date_debut', '')} - {exp.get('date_fin', '')}".strip(" -"),
-                    exp.get("ville", ""),
-                ] if x
-            )
-            if dates_ville:
+            dates = f"{exp.get('date_debut', '')} - {exp.get('date_fin', '')}".strip(" -")
+            meta_parties = [x for x in [exp.get("entreprise", ""), dates] if x]
+            meta_texte = " | ".join(meta_parties)
+            lieu_pays = " · ".join(x for x in [exp.get("ville", ""), exp.get("pays", "")] if x)
+            if lieu_pays:
+                meta_texte = f"{meta_texte} · {lieu_pays}" if meta_texte else lieu_pays
+
+            if meta_texte:
                 p_meta = cell_principale.add_paragraph()
                 p_meta.paragraph_format.space_after = _pt(3, echelle)
-                run_meta = p_meta.add_run(dates_ville)
+                run_meta = p_meta.add_run(meta_texte)
                 run_meta.italic = True
                 run_meta.font.size = _pt(9.5, echelle)
                 run_meta.font.color.rgb = RGBColor.from_string(accent)
@@ -454,17 +535,21 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
     # --- Formation ---
     formations = [f for f in data.get("formations", []) if f.get("diplome") or f.get("etablissement")]
+    formations = _trier_par_date(formations, "annee")
     if formations:
-        _titre_section(cell_principale, "Formation", accent, taille=13, echelle=echelle)
+        _titre_section(cell_principale, "Formation", accent, taille=16, echelle=echelle)
         for form in formations:
             p = cell_principale.add_paragraph()
             p.paragraph_format.space_before = _pt(4, echelle)
             p.paragraph_format.space_after = Pt(0)
-            run = p.add_run(f"{form.get('diplome', '')} — {form.get('etablissement', '')}")
+            diplome_maj = _majuscule_premiere_lettre(form.get("diplome", ""))
+            run = p.add_run(f"{diplome_maj} — {form.get('etablissement', '')}")
             run.bold = True
             run.font.size = _pt(10.5, echelle)
 
-            meta = " · ".join(x for x in [form.get("ville", ""), form.get("annee", "")] if x)
+            meta = " · ".join(
+                x for x in [form.get("annee", ""), form.get("ville", ""), form.get("pays", "")] if x
+            )
             if meta:
                 p_meta = cell_principale.add_paragraph()
                 p_meta.paragraph_format.space_after = _pt(2, echelle)
@@ -671,15 +756,20 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "pour activer le score de correspondance sur les offres."
     )
 
-    c3, c4, c5 = st.columns(3)
+    c3, c4 = st.columns(2)
     email = c3.text_input("Email", key="cv_email")
     telephone = c4.text_input("Téléphone", key="cv_telephone")
-    ville = c5.text_input("Ville", key="cv_ville")
+    adresse = st.text_input(
+        "Adresse", key="cv_adresse", placeholder="ex: 6 Calle Cronista Veravens, 3012 Alicante, España"
+    )
 
     profil = st.text_area(
         "Profil / accroche (2-3 phrases qui résument votre parcours et votre projet)",
         key="cv_profil",
         height=100,
+    )
+    disponibilite = st.text_input(
+        "Disponibilité", key="cv_disponibilite", placeholder="ex: immédiate, sous 1 mois..."
     )
 
     st.divider()
@@ -735,8 +825,9 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "titre_recherche": titre_recherche,
                 "email": email,
                 "telephone": telephone,
-                "ville": ville,
+                "adresse": adresse,
                 "profil": profil,
+                "disponibilite": disponibilite,
                 "experiences": st.session_state.cv_experiences,
                 "formations": st.session_state.cv_formations,
                 "langues": langues,
