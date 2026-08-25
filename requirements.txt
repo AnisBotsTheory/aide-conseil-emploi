@@ -5,3 +5,5 @@ python-docx
 folium
 streamlit-folium
 plotly
+altair
+rapidfuzz
