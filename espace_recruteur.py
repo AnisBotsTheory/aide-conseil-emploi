@@ -13,6 +13,7 @@ priorité 2 de la synthèse) et l'accès n'est pas encore protégé (priorité 3
 
 import streamlit as st
 import pandas as pd
+from io import BytesIO
 
 from moteur_recherche import (
     get_referentiel_appellations,
@@ -83,6 +84,75 @@ st.caption(
 
 if "recruteur_profils" not in st.session_state:
     st.session_state["recruteur_profils"] = []
+
+# --- Import Excel/CSV (import de données internes du client — version simple) ---
+with st.expander("📥 Importer plusieurs profils depuis un fichier Excel/CSV"):
+    st.caption(
+        "Colonnes attendues : **Nom**, **Compétences**, **Outils**, **Langages** — plusieurs "
+        "valeurs par cellule séparées par une virgule. Télécharge le modèle si besoin."
+    )
+
+    modele = pd.DataFrame([
+        {
+            "Nom": "Jean Dupont",
+            "Compétences": "Gestion de projet, Communication",
+            "Outils": "Excel, SAP",
+            "Langages": "SQL, Python",
+        }
+    ])
+    buffer_modele = BytesIO()
+    modele.to_excel(buffer_modele, index=False, sheet_name="Profils")
+    st.download_button(
+        "⬇️ Télécharger le modèle Excel",
+        data=buffer_modele.getvalue(),
+        file_name="modele_import_profils.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    fichier_importe = st.file_uploader(
+        "Fichier à importer (.xlsx ou .csv)", type=["xlsx", "csv"], key="recruteur_import_fichier"
+    )
+    if fichier_importe and st.button("Importer les profils de ce fichier", key="recruteur_btn_import"):
+        try:
+            if fichier_importe.name.endswith(".csv"):
+                df_import = pd.read_csv(fichier_importe)
+            else:
+                df_import = pd.read_excel(fichier_importe)
+
+            # Correspondance des colonnes insensible à la casse/aux accents simples
+            colonnes_normalisees = {c.strip().lower(): c for c in df_import.columns}
+            correspondances = {
+                "nom": ["nom", "candidat", "name"],
+                "competences": ["compétences", "competences", "skills"],
+                "outils": ["outils", "outils informatiques", "tools"],
+                "langages": ["langages", "langages informatiques", "languages"],
+            }
+
+            def _colonne(cle):
+                for variante in correspondances[cle]:
+                    if variante in colonnes_normalisees:
+                        return colonnes_normalisees[variante]
+                return None
+
+            col_nom = _colonne("nom")
+            col_comp = _colonne("competences")
+            col_outils = _colonne("outils")
+            col_langages = _colonne("langages")
+
+            nb_importes = 0
+            for _, ligne in df_import.iterrows():
+                st.session_state["recruteur_profils"].append({
+                    "nom": str(ligne[col_nom]) if col_nom and pd.notna(ligne[col_nom]) else "",
+                    "competences": str(ligne[col_comp]) if col_comp and pd.notna(ligne[col_comp]) else "",
+                    "outils": str(ligne[col_outils]) if col_outils and pd.notna(ligne[col_outils]) else "",
+                    "langages": str(ligne[col_langages]) if col_langages and pd.notna(ligne[col_langages]) else "",
+                })
+                nb_importes += 1
+
+            st.success(f"{nb_importes} profil(s) importé(s) avec succès.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Impossible de lire ce fichier : {e}")
 
 a_supprimer = None
 for i, profil in enumerate(st.session_state["recruteur_profils"]):
