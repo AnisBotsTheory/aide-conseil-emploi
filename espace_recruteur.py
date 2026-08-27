@@ -11,11 +11,12 @@ DATABASE_URL) via stockage_recruteur.py, avec repli automatique sur
 st.session_state (perdu à la fermeture) si la base n'est pas configurée.
 
 Parcours utilisateur (mis à jour) :
-  1. Onglet "🎯 Besoin candidat" — on part du poste ciblé, on recherche les
-     entreprises qui recrutent dessus (parcours "Besoin des entreprises"),
-     puis on lance le matching sur une offre précise. La comparaison globale
-     (score moyen sur toutes les offres d'un poste) reste disponible ici en
-     complément, dans un expander pour ne pas alourdir le parcours principal.
+  1. Onglet "🎯 Besoin candidat" — recherche par nom de société (mot-clé =
+     nom de l'entreprise qui recrute, via motsCles + filtre de précision côté
+     client sur entreprise.nom), jusqu'au détail de ses offres, puis matching
+     sur une offre précise. La comparaison globale par poste ciblé (score
+     moyen sur toutes les offres d'un poste) reste disponible en complément,
+     dans un expander, pour ne pas alourdir le parcours principal.
   2. Onglet "👥 Profils candidats" — gestion dédiée des profils (ajout
      manuel, import Excel/CSV, édition, suppression), séparée de la
      recherche/matching.
@@ -116,40 +117,38 @@ with tab_besoin_candidat:
     # -----------------------------------------------------------------
     st.markdown("#### 🏢 Besoin des entreprises")
     st.caption(
-        "Explore les entreprises qui recrutent sur le poste ciblé plus haut, jusqu'au détail "
-        "de chaque offre, pour lancer un matching ciblé avec ta base de candidats."
+        "Recherche directement la société qui recrute (mot-clé = nom de l'entreprise), "
+        "jusqu'au détail de chaque offre, pour lancer un matching ciblé avec ta base de candidats."
     )
 
-    if not poste_confirme_label:
-        st.info("Sélectionne d'abord un poste ciblé (section 🎯 ci-dessus) pour explorer les entreprises.")
-    else:
-        if st.button("🔍 Charger les entreprises qui recrutent", key="btn_charger_entreprises"):
-            item_poste_entreprises = next(
-                (a for a in appellations if a.get("libelle", "").strip() == poste_confirme_label), None
-            )
-            code_rome_entreprises = _extraire_code_rome(item_poste_entreprises) if item_poste_entreprises else None
-            if not code_rome_entreprises:
-                with st.spinner("Résolution du poste..."):
-                    df_resolu_entreprises = resoudre_codes_rome(
-                        mots_cles=poste_confirme_label, departement=departement_recruteur
-                    )
-                code_rome_entreprises = (
-                    df_resolu_entreprises.iloc[0]["code_rome"] if not df_resolu_entreprises.empty else None
-                )
+    nom_societe_recherche = st.text_input(
+        "Nom de la société qui recrute",
+        key="recruteur_nom_societe",
+        placeholder="ex: Airbus Helicopters, BNP Paribas...",
+    )
 
-            if not code_rome_entreprises:
-                st.error("Impossible de résoudre ce poste pour l'instant.")
-            else:
-                with st.spinner("Récupération des offres..."):
-                    st.session_state["recruteur_offres_entreprises"] = rechercher_offres_completes(
-                        code_rome_entreprises, departement_recruteur
-                    )
+    if not nom_societe_recherche.strip():
+        st.info("Saisis le nom d'une société pour lancer la recherche.")
+    else:
+        if st.button("🔍 Rechercher cette société", key="btn_charger_entreprises"):
+            with st.spinner("Recherche des offres de cette société..."):
+                offres_brutes = rechercher_offres_completes(
+                    "TOUS", departement_recruteur, max_pages=3, mots_cles=nom_societe_recherche
+                )
+                # Filtre de précision côté client : motsCles peut remonter des offres
+                # dont le texte mentionne la société sans qu'elle soit l'employeur —
+                # on ne garde que celles où le nom de l'entreprise correspond vraiment.
+                terme = nom_societe_recherche.strip().lower()
+                st.session_state["recruteur_offres_entreprises"] = [
+                    o for o in offres_brutes
+                    if terme in ((o.get("entreprise", {}) or {}).get("nom") or "").strip().lower()
+                ]
 
         if "recruteur_offres_entreprises" in st.session_state:
             offres_disponibles = st.session_state["recruteur_offres_entreprises"]
 
             if not offres_disponibles:
-                st.info("Aucune offre trouvée pour ce poste/département.")
+                st.info("Aucune offre trouvée pour cette société dans ce département.")
             else:
                 # --- Étape 1 : regroupement par entreprise ---
                 offres_par_entreprise = {}
