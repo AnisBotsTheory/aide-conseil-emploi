@@ -35,8 +35,8 @@ def _connexion():
 def initialiser_table():
     """
     Crée la table si elle n'existe pas encore, et ajoute les colonnes
-    poste_souhaite/secteur_souhaite si la table existait déjà sans elles
-    (migration légère, sans effet si déjà en place).
+    poste_souhaite/secteur_souhaite/cv_lien si la table existait déjà sans
+    elles (migration légère, sans effet si déjà en place).
     """
     if not base_disponible():
         return
@@ -51,11 +51,13 @@ def initialiser_table():
                     langages TEXT DEFAULT '',
                     poste_souhaite TEXT DEFAULT '',
                     secteur_souhaite TEXT DEFAULT '',
+                    cv_lien TEXT DEFAULT '',
                     date_creation TIMESTAMP DEFAULT NOW()
                 )
             """)
             cur.execute("ALTER TABLE profils_candidats ADD COLUMN IF NOT EXISTS poste_souhaite TEXT DEFAULT ''")
             cur.execute("ALTER TABLE profils_candidats ADD COLUMN IF NOT EXISTS secteur_souhaite TEXT DEFAULT ''")
+            cur.execute("ALTER TABLE profils_candidats ADD COLUMN IF NOT EXISTS cv_lien TEXT DEFAULT ''")
         conn.commit()
 
 
@@ -66,13 +68,13 @@ def charger_profils():
     with _connexion() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, nom, competences, outils, langages, poste_souhaite, secteur_souhaite "
+                "SELECT id, nom, competences, outils, langages, poste_souhaite, secteur_souhaite, cv_lien "
                 "FROM profils_candidats ORDER BY id"
             )
             return [dict(ligne) for ligne in cur.fetchall()]
 
 
-def ajouter_profil(nom="", competences="", outils="", langages="", poste_souhaite="", secteur_souhaite=""):
+def ajouter_profil(nom="", competences="", outils="", langages="", poste_souhaite="", secteur_souhaite="", cv_lien=""):
     """Insère un nouveau profil et retourne son id."""
     if not base_disponible():
         return None
@@ -80,9 +82,9 @@ def ajouter_profil(nom="", competences="", outils="", langages="", poste_souhait
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO profils_candidats "
-                "(nom, competences, outils, langages, poste_souhaite, secteur_souhaite) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                (nom, competences, outils, langages, poste_souhaite, secteur_souhaite),
+                "(nom, competences, outils, langages, poste_souhaite, secteur_souhaite, cv_lien) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (nom, competences, outils, langages, poste_souhaite, secteur_souhaite, cv_lien),
             )
             id_nouveau = cur.fetchone()[0]
         conn.commit()
@@ -98,26 +100,27 @@ def ajouter_profils_en_masse(profils):
             for p in profils:
                 cur.execute(
                     "INSERT INTO profils_candidats "
-                    "(nom, competences, outils, langages, poste_souhaite, secteur_souhaite) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    "(nom, competences, outils, langages, poste_souhaite, secteur_souhaite, cv_lien) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     (
                         p.get("nom", ""), p.get("competences", ""), p.get("outils", ""),
                         p.get("langages", ""), p.get("poste_souhaite", ""), p.get("secteur_souhaite", ""),
+                        p.get("cv_lien", ""),
                     ),
                 )
         conn.commit()
     return len(profils)
 
 
-def mettre_a_jour_profil(id_profil, nom, competences, outils, langages, poste_souhaite="", secteur_souhaite=""):
+def mettre_a_jour_profil(id_profil, nom, competences, outils, langages, poste_souhaite="", secteur_souhaite="", cv_lien=""):
     if not base_disponible() or id_profil is None:
         return
     with _connexion() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE profils_candidats SET nom=%s, competences=%s, outils=%s, langages=%s, "
-                "poste_souhaite=%s, secteur_souhaite=%s WHERE id=%s",
-                (nom, competences, outils, langages, poste_souhaite, secteur_souhaite, id_profil),
+                "poste_souhaite=%s, secteur_souhaite=%s, cv_lien=%s WHERE id=%s",
+                (nom, competences, outils, langages, poste_souhaite, secteur_souhaite, cv_lien, id_profil),
             )
         conn.commit()
 
@@ -148,6 +151,7 @@ def initialiser_table_candidatures():
                     candidat_id INTEGER,
                     candidat_nom TEXT DEFAULT '',
                     candidat_poste_souhaite TEXT DEFAULT '',
+                    candidat_cv_lien TEXT DEFAULT '',
                     offre_id TEXT DEFAULT '',
                     offre_intitule TEXT DEFAULT '',
                     entreprise_nom TEXT DEFAULT '',
@@ -156,6 +160,7 @@ def initialiser_table_candidatures():
                 )
             """)
             cur.execute("ALTER TABLE candidatures ADD COLUMN IF NOT EXISTS candidat_poste_souhaite TEXT DEFAULT ''")
+            cur.execute("ALTER TABLE candidatures ADD COLUMN IF NOT EXISTS candidat_cv_lien TEXT DEFAULT ''")
         conn.commit()
 
 
@@ -166,8 +171,8 @@ def charger_candidatures():
     with _connexion() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, candidat_id, candidat_nom, candidat_poste_souhaite, offre_id, "
-                "offre_intitule, entreprise_nom, statut, date_creation "
+                "SELECT id, candidat_id, candidat_nom, candidat_poste_souhaite, candidat_cv_lien, "
+                "offre_id, offre_intitule, entreprise_nom, statut, date_creation "
                 "FROM candidatures ORDER BY date_creation DESC"
             )
             return [dict(ligne) for ligne in cur.fetchall()]
@@ -175,7 +180,7 @@ def charger_candidatures():
 
 def ajouter_candidature(
     candidat_id, candidat_nom, candidat_poste_souhaite, offre_id, offre_intitule,
-    entreprise_nom, statut="Candidature envoyée",
+    entreprise_nom, statut="Candidature envoyée", candidat_cv_lien="",
 ):
     """Enregistre la présentation d'un candidat à une offre. Retourne l'id créé."""
     if not base_disponible():
@@ -184,9 +189,12 @@ def ajouter_candidature(
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO candidatures "
-                "(candidat_id, candidat_nom, candidat_poste_souhaite, offre_id, offre_intitule, "
-                "entreprise_nom, statut) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                (candidat_id, candidat_nom, candidat_poste_souhaite, offre_id, offre_intitule, entreprise_nom, statut),
+                "(candidat_id, candidat_nom, candidat_poste_souhaite, candidat_cv_lien, offre_id, "
+                "offre_intitule, entreprise_nom, statut) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (
+                    candidat_id, candidat_nom, candidat_poste_souhaite, candidat_cv_lien,
+                    offre_id, offre_intitule, entreprise_nom, statut,
+                ),
             )
             id_nouveau = cur.fetchone()[0]
         conn.commit()
