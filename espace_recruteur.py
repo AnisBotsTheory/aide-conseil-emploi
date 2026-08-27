@@ -9,6 +9,16 @@ fonctions de calcul que l'Espace Candidat (moteur_recherche.py), appliquées
 Les profils candidats sont désormais persistés en base PostgreSQL (Neon —
 DATABASE_URL) via stockage_recruteur.py, avec repli automatique sur
 st.session_state (perdu à la fermeture) si la base n'est pas configurée.
+
+Parcours utilisateur (mis à jour) :
+  1. Onglet "🎯 Besoin candidat" — on part du poste ciblé, on recherche les
+     entreprises qui recrutent dessus (parcours "Besoin des entreprises"),
+     puis on lance le matching sur une offre précise. La comparaison globale
+     (score moyen sur toutes les offres d'un poste) reste disponible ici en
+     complément, dans un expander pour ne pas alourdir le parcours principal.
+  2. Onglet "👥 Profils candidats" — gestion dédiée des profils (ajout
+     manuel, import Excel/CSV, édition, suppression), séparée de la
+     recherche/matching.
 """
 
 import streamlit as st
@@ -44,403 +54,419 @@ st.info(
     "l'Espace Candidat, appliqué à plusieurs profils à la fois."
 )
 
-st.markdown(
-    "**Principe** : indique un poste ciblé et un département, ajoute les profils de "
-    "tes candidats (compétences, outils, langages), puis compare leur score de "
-    "correspondance moyen sur les offres réelles actuellement disponibles pour ce poste."
-)
-
-# ---------------------------------------------------------------------------
-# 1. Poste ciblé (même mécanique que l'Espace Candidat : référentiel ROME +
-#    suggestions hybrides dictionnaire/recherche floue)
-# ---------------------------------------------------------------------------
-st.markdown("#### 🎯 Poste ciblé")
-
 appellations = get_referentiel_appellations()
-col1, col2 = st.columns(2)
-with col1:
-    poste_texte = st.text_input(
-        "Intitulé du poste recherché par l'agence pour ses clients",
-        key="recruteur_poste_texte",
-        placeholder="ex: Chef de projet, Data Analyst...",
-    )
-with col2:
-    departement_recruteur = st.text_input("Département", value="13", key="recruteur_departement")
-
-poste_confirme_label = None
-if poste_texte.strip():
-    suggestions = suggerer_postes(poste_texte)
-    if suggestions:
-        st.caption("💡 Suggestions — clique pour sélectionner :")
-        colonnes_tags = st.columns(2)
-        for i, suggestion in enumerate(suggestions):
-            col_tag = colonnes_tags[i % 2]
-            if col_tag.button(suggestion, key=f"recruteur_tag_{i}_{suggestion}"):
-                st.session_state["recruteur_poste_confirme"] = suggestion
-                st.rerun()
-
-if "recruteur_poste_confirme" in st.session_state:
-    poste_confirme_label = st.session_state["recruteur_poste_confirme"]
-    st.success(f"Poste sélectionné : **{poste_confirme_label}**")
-
-st.divider()
 
 # ---------------------------------------------------------------------------
-# 2. Profils candidats (persistés en base si DATABASE_URL configurée, sinon
-#    repli sur st.session_state — perdu à la fermeture dans ce cas)
+# Profils candidats : chargement en session (nécessaire dans les deux onglets,
+# donc initialisé ici, avant la répartition en onglets).
 # ---------------------------------------------------------------------------
-st.markdown("#### 👥 Profils candidats")
-
 db.initialiser_table()
-
-if db.base_disponible():
-    st.caption("✅ Profils enregistrés de façon persistante (base PostgreSQL).")
-else:
-    st.warning(
-        "⚠️ DATABASE_URL non configurée — les profils ajoutés ici seront perdus à la "
-        "fermeture de la session. Ajoute ce secret pour activer la persistance."
-    )
 
 if "recruteur_profils" not in st.session_state:
     st.session_state["recruteur_profils"] = db.charger_profils() if db.base_disponible() else []
 
-# --- Import Excel/CSV (import de données internes du client — version simple) ---
-with st.expander("📥 Importer plusieurs profils depuis un fichier Excel/CSV"):
+tab_besoin_candidat, tab_profils = st.tabs(["🎯 Besoin candidat", "👥 Profils candidats"])
+
+# ===========================================================================
+# ONGLET 1 — Besoin candidat : poste ciblé -> recherche entreprises -> matching
+# ===========================================================================
+with tab_besoin_candidat:
+    st.markdown(
+        "**Principe** : indique un poste ciblé, explore les entreprises qui recrutent "
+        "dessus, puis lance le matching d'une offre précise contre ta base de profils "
+        "candidats (gérée dans l'onglet « Profils candidats »)."
+    )
+
+    # -----------------------------------------------------------------
+    # 1. Poste ciblé
+    # -----------------------------------------------------------------
+    st.markdown("#### 🎯 Poste ciblé")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        poste_texte = st.text_input(
+            "Intitulé du poste recherché par l'agence pour ses clients",
+            key="recruteur_poste_texte",
+            placeholder="ex: Chef de projet, Data Analyst...",
+        )
+    with col2:
+        departement_recruteur = st.text_input("Département", value="13", key="recruteur_departement")
+
+    poste_confirme_label = None
+    if poste_texte.strip():
+        suggestions = suggerer_postes(poste_texte)
+        if suggestions:
+            st.caption("💡 Suggestions — clique pour sélectionner :")
+            colonnes_tags = st.columns(2)
+            for i, suggestion in enumerate(suggestions):
+                col_tag = colonnes_tags[i % 2]
+                if col_tag.button(suggestion, key=f"recruteur_tag_{i}_{suggestion}"):
+                    st.session_state["recruteur_poste_confirme"] = suggestion
+                    st.rerun()
+
+    if "recruteur_poste_confirme" in st.session_state:
+        poste_confirme_label = st.session_state["recruteur_poste_confirme"]
+        st.success(f"Poste sélectionné : **{poste_confirme_label}**")
+
+    st.divider()
+
+    # -----------------------------------------------------------------
+    # 2. Besoin des entreprises — recherche des sociétés qui recrutent,
+    #    puis matching sur une offre précise (parcours principal).
+    # -----------------------------------------------------------------
+    st.markdown("#### 🏢 Besoin des entreprises")
     st.caption(
-        "Colonnes attendues : **Nom**, **Poste souhaité**, **Compétences**, **Outils**, "
-        "**Langages** — plusieurs valeurs par cellule séparées par une virgule. Le secteur "
-        "souhaité se choisit ensuite manuellement sur chaque profil importé. Télécharge le "
-        "modèle si besoin."
+        "Explore les entreprises qui recrutent sur le poste ciblé plus haut, jusqu'au détail "
+        "de chaque offre, pour lancer un matching ciblé avec ta base de candidats."
     )
 
-    modele = pd.DataFrame([
-        {
-            "Nom": "Jean Dupont",
-            "Poste souhaité": "Chef de projet IT",
-            "Compétences": "Gestion de projet, Communication",
-            "Outils": "Excel, SAP",
-            "Langages": "SQL, Python",
-        }
-    ])
-    buffer_modele = BytesIO()
-    modele.to_excel(buffer_modele, index=False, sheet_name="Profils")
-    st.download_button(
-        "⬇️ Télécharger le modèle Excel",
-        data=buffer_modele.getvalue(),
-        file_name="modele_import_profils.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-    fichier_importe = st.file_uploader(
-        "Fichier à importer (.xlsx ou .csv)", type=["xlsx", "csv"], key="recruteur_import_fichier"
-    )
-    if fichier_importe and st.button("Importer les profils de ce fichier", key="recruteur_btn_import"):
-        try:
-            if fichier_importe.name.endswith(".csv"):
-                df_import = pd.read_csv(fichier_importe)
-            else:
-                df_import = pd.read_excel(fichier_importe)
-
-            # Correspondance des colonnes insensible à la casse/aux accents simples
-            colonnes_normalisees = {c.strip().lower(): c for c in df_import.columns}
-            correspondances = {
-                "nom": ["nom", "candidat", "name"],
-                "poste_souhaite": ["poste souhaité", "poste recherché", "poste", "job title"],
-                "competences": ["compétences", "competences", "skills"],
-                "outils": ["outils", "outils informatiques", "tools"],
-                "langages": ["langages", "langages informatiques", "languages"],
-            }
-
-            def _colonne(cle):
-                for variante in correspondances[cle]:
-                    if variante in colonnes_normalisees:
-                        return colonnes_normalisees[variante]
-                return None
-
-            col_nom = _colonne("nom")
-            col_poste = _colonne("poste_souhaite")
-            col_comp = _colonne("competences")
-            col_outils = _colonne("outils")
-            col_langages = _colonne("langages")
-
-            profils_importes = []
-            for _, ligne in df_import.iterrows():
-                profils_importes.append({
-                    "nom": str(ligne[col_nom]) if col_nom and pd.notna(ligne[col_nom]) else "",
-                    "poste_souhaite": str(ligne[col_poste]) if col_poste and pd.notna(ligne[col_poste]) else "",
-                    "competences": str(ligne[col_comp]) if col_comp and pd.notna(ligne[col_comp]) else "",
-                    "outils": str(ligne[col_outils]) if col_outils and pd.notna(ligne[col_outils]) else "",
-                    "langages": str(ligne[col_langages]) if col_langages and pd.notna(ligne[col_langages]) else "",
-                    "secteur_souhaite": "",
-                })
-
-            if db.base_disponible():
-                db.ajouter_profils_en_masse(profils_importes)
-                st.session_state["recruteur_profils"] = db.charger_profils()
-            else:
-                st.session_state["recruteur_profils"].extend(profils_importes)
-
-            st.success(f"{len(profils_importes)} profil(s) importé(s) avec succès.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Impossible de lire ce fichier : {e}")
-
-a_supprimer = None
-for i, profil in enumerate(st.session_state["recruteur_profils"]):
-    with st.container(border=True):
-        c1, c2 = st.columns(2)
-        profil["nom"] = c1.text_input("Nom / repère candidat", value=profil.get("nom", ""), key=f"rec_nom_{i}")
-        profil["poste_souhaite"] = c2.text_input(
-            "Poste recherché par ce candidat", value=profil.get("poste_souhaite", ""), key=f"rec_poste_{i}",
-            placeholder="ex: Chef de projet IT",
-        )
-        c3, c4 = st.columns(2)
-        profil["competences"] = c3.text_input(
-            "Compétences (séparées par une virgule)", value=profil.get("competences", ""), key=f"rec_comp_{i}"
-        )
-        secteur_valeur_actuelle = profil.get("secteur_souhaite", "")
-        libelles_secteurs = list(options_secteurs_recruteur.keys())
-        index_secteur = 0
-        for idx, libelle in enumerate(libelles_secteurs):
-            if options_secteurs_recruteur[libelle] == secteur_valeur_actuelle:
-                index_secteur = idx
-                break
-        secteur_choisi = c4.selectbox(
-            "Secteur souhaité", libelles_secteurs, index=index_secteur, key=f"rec_secteur_{i}"
-        )
-        profil["secteur_souhaite"] = options_secteurs_recruteur[secteur_choisi]
-        c5, c6 = st.columns(2)
-        profil["outils"] = c5.text_input(
-            "Outils (séparés par une virgule)", value=profil.get("outils", ""), key=f"rec_outils_{i}"
-        )
-        profil["langages"] = c6.text_input(
-            "Langages informatiques (séparés par une virgule)", value=profil.get("langages", ""), key=f"rec_lang_{i}"
-        )
-        c7, c8 = st.columns(2)
-        if db.base_disponible() and c7.button("💾 Enregistrer", key=f"rec_save_{i}"):
-            if profil.get("id") is None:
-                profil["id"] = db.ajouter_profil(
-                    profil.get("nom", ""), profil.get("competences", ""),
-                    profil.get("outils", ""), profil.get("langages", ""),
-                    profil.get("poste_souhaite", ""), profil.get("secteur_souhaite", ""),
-                )
-            else:
-                db.mettre_a_jour_profil(
-                    profil["id"], profil.get("nom", ""), profil.get("competences", ""),
-                    profil.get("outils", ""), profil.get("langages", ""),
-                    profil.get("poste_souhaite", ""), profil.get("secteur_souhaite", ""),
-                )
-            st.toast(f"Profil « {profil.get('nom') or 'sans nom'} » enregistré.")
-        if c8.button("🗑️ Retirer ce profil", key=f"rec_suppr_{i}"):
-            a_supprimer = i
-
-if a_supprimer is not None:
-    profil_vise = st.session_state["recruteur_profils"][a_supprimer]
-    if db.base_disponible() and profil_vise.get("id") is not None:
-        db.supprimer_profil(profil_vise["id"])
-    st.session_state["recruteur_profils"].pop(a_supprimer)
-    st.rerun()
-
-if st.button("➕ Ajouter un profil candidat"):
-    nouveau_profil = {}
-    if db.base_disponible():
-        nouveau_profil["id"] = db.ajouter_profil()
-    st.session_state["recruteur_profils"].append(nouveau_profil)
-    st.rerun()
-
-st.divider()
-
-# ---------------------------------------------------------------------------
-# 3. Comparaison — calculer_correspondance_recruteur (poste 50% · compétences
-#    30% · secteur 20%), appliquée à chaque profil sur chaque offre trouvée.
-# ---------------------------------------------------------------------------
-if st.button("🚀 Comparer les profils sur ce poste", type="primary"):
     if not poste_confirme_label:
-        st.warning("Sélectionne d'abord un poste ciblé (via les suggestions ci-dessus).")
-    elif not st.session_state["recruteur_profils"]:
-        st.warning("Ajoute au moins un profil candidat avant de lancer la comparaison.")
+        st.info("Sélectionne d'abord un poste ciblé (section 🎯 ci-dessus) pour explorer les entreprises.")
     else:
-        item_poste = next(
-            (a for a in appellations if a.get("libelle", "").strip() == poste_confirme_label), None
-        )
-        code_rome = _extraire_code_rome(item_poste) if item_poste else None
-        if not code_rome:
-            with st.spinner("Résolution du poste..."):
-                df_resolu = resoudre_codes_rome(mots_cles=poste_confirme_label, departement=departement_recruteur)
-            code_rome = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
+        if st.button("🔍 Charger les entreprises qui recrutent", key="btn_charger_entreprises"):
+            item_poste_entreprises = next(
+                (a for a in appellations if a.get("libelle", "").strip() == poste_confirme_label), None
+            )
+            code_rome_entreprises = _extraire_code_rome(item_poste_entreprises) if item_poste_entreprises else None
+            if not code_rome_entreprises:
+                with st.spinner("Résolution du poste..."):
+                    df_resolu_entreprises = resoudre_codes_rome(
+                        mots_cles=poste_confirme_label, departement=departement_recruteur
+                    )
+                code_rome_entreprises = (
+                    df_resolu_entreprises.iloc[0]["code_rome"] if not df_resolu_entreprises.empty else None
+                )
 
-        if not code_rome:
-            st.error("Impossible de résoudre ce poste pour l'instant. Essaie un autre intitulé.")
-        else:
-            with st.spinner("Récupération des offres et calcul des scores..."):
-                df_villes, total_region, _, _, _, _ = offres_par_ville(code_rome, departement_recruteur)
-                offres_completes = rechercher_offres_completes(code_rome, departement_recruteur)
+            if not code_rome_entreprises:
+                st.error("Impossible de résoudre ce poste pour l'instant.")
+            else:
+                with st.spinner("Récupération des offres..."):
+                    st.session_state["recruteur_offres_entreprises"] = rechercher_offres_completes(
+                        code_rome_entreprises, departement_recruteur
+                    )
 
-                resultats_classement = []
-                for profil in st.session_state["recruteur_profils"]:
-                    competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
-                    outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
-                    langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
-                    poste_souhaite = profil.get("poste_souhaite", "")
-                    secteur_souhaite = profil.get("secteur_souhaite", "")
+        if "recruteur_offres_entreprises" in st.session_state:
+            offres_disponibles = st.session_state["recruteur_offres_entreprises"]
 
-                    scores = []
-                    for offre in offres_completes:
-                        score, _ = calculer_correspondance_recruteur(
-                            offre, poste_souhaite, competences_liste, outils_liste, langages_liste, secteur_souhaite
+            if not offres_disponibles:
+                st.info("Aucune offre trouvée pour ce poste/département.")
+            else:
+                # --- Étape 1 : regroupement par entreprise ---
+                offres_par_entreprise = {}
+                for o in offres_disponibles:
+                    nom_entreprise = (o.get("entreprise", {}) or {}).get("nom") or "Entreprise non précisée"
+                    offres_par_entreprise.setdefault(nom_entreprise, []).append(o)
+
+                df_entreprises_compte = pd.DataFrame(
+                    [
+                        {"Entreprise": nom, "Postes à promouvoir": len(offres)}
+                        for nom, offres in offres_par_entreprise.items()
+                    ]
+                ).sort_values("Postes à promouvoir", ascending=False).reset_index(drop=True)
+
+                st.dataframe(df_entreprises_compte, use_container_width=True, hide_index=True)
+
+                # --- Étape 2 : détail des postes de l'entreprise choisie ---
+                entreprise_choisie = st.selectbox(
+                    "Choisis une entreprise pour voir le détail de ses postes",
+                    options=df_entreprises_compte["Entreprise"].tolist(),
+                    key="recruteur_entreprise_choisie",
+                )
+                offres_de_lentreprise = offres_par_entreprise[entreprise_choisie]
+                st.caption(f"{len(offres_de_lentreprise)} poste(s) chez **{entreprise_choisie}**")
+
+                labels_offres = [
+                    f"{o.get('intitule', '(sans titre)')} — {(o.get('lieuTravail', {}) or {}).get('libelle', '')}"
+                    for o in offres_de_lentreprise
+                ]
+                index_offre_choisie = st.selectbox(
+                    "Choisis une offre pour lancer le matching",
+                    options=range(len(offres_de_lentreprise)),
+                    format_func=lambda i: labels_offres[i],
+                    key="recruteur_offre_choisie",
+                )
+                offre_selectionnee = offres_de_lentreprise[index_offre_choisie]
+
+                with st.expander("Voir le détail de cette offre"):
+                    type_contrat = offre_selectionnee.get("typeContratLibelle") or offre_selectionnee.get("typeContrat")
+                    if type_contrat:
+                        st.markdown(f"**Type de contrat :** {type_contrat}")
+                    salaire_offre = (offre_selectionnee.get("salaire", {}) or {}).get("libelle")
+                    if salaire_offre:
+                        st.markdown(f"**Salaire :** {salaire_offre}")
+                    if offre_selectionnee.get("description"):
+                        st.markdown("**Description :**")
+                        st.write(offre_selectionnee["description"])
+                    competences_offre = offre_selectionnee.get("competences", [])
+                    if competences_offre:
+                        libelles_comp = ", ".join(c.get("libelle", "") for c in competences_offre if c.get("libelle"))
+                        if libelles_comp:
+                            st.markdown(f"**Compétences demandées :** {libelles_comp}")
+
+                # --- Étape 3 : matching de CETTE offre contre tous les profils enregistrés ---
+                if st.button("🎯 Lancer le matching pour cette offre", type="primary", key="btn_matching_offre"):
+                    if not st.session_state["recruteur_profils"]:
+                        st.warning(
+                            "Aucun profil candidat enregistré — ajoute-en dans l'onglet "
+                            "« 👥 Profils candidats » avant de lancer le matching."
                         )
-                        if score is not None:
-                            scores.append(score)
+                    else:
+                        lignes_resultat = []
+                        for profil in st.session_state["recruteur_profils"]:
+                            competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
+                            outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
+                            langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
 
-                    score_moyen = round(sum(scores) / len(scores)) if scores else None
-                    resultats_classement.append({
-                        "Candidat": profil.get("nom") or "(sans nom)",
-                        "Poste recherché": poste_souhaite or "—",
-                        "Score moyen de correspondance": f"{score_moyen}%" if score_moyen is not None else "N/C",
-                        "Offres analysées": len(offres_completes),
+                            score, detail = calculer_correspondance_recruteur(
+                                offre_selectionnee,
+                                profil.get("poste_souhaite", ""),
+                                competences_liste, outils_liste, langages_liste,
+                                profil.get("secteur_souhaite", ""),
+                            )
+                            lignes_resultat.append((
+                                score if score is not None else -1,
+                                {
+                                    "Candidat": profil.get("nom") or "(sans nom)",
+                                    "Score": f"{score}%" if score is not None else "N/C",
+                                    **detail,
+                                },
+                            ))
+
+                        lignes_resultat.sort(key=lambda x: x[0], reverse=True)
+                        df_resultat_offre = pd.DataFrame([ligne for _, ligne in lignes_resultat])
+
+                        st.markdown(f"#### 🏆 Classement des candidats pour « {offre_selectionnee.get('intitule', '')} »")
+                        st.dataframe(df_resultat_offre, use_container_width=True, hide_index=True)
+                        st.caption(
+                            "Score pondéré sur 3 critères (poste 50% · compétences 30% · secteur 20%), "
+                            "calculé pour cette offre précise — pas une moyenne sur plusieurs offres."
+                        )
+
+    st.divider()
+
+    # -----------------------------------------------------------------
+    # 3. Comparaison globale — outil complémentaire, en retrait du
+    #    parcours principal (calcule un score moyen sur toutes les
+    #    offres disponibles pour le poste ciblé, plutôt qu'une offre
+    #    précise).
+    # -----------------------------------------------------------------
+    with st.expander("📊 Comparaison globale (score moyen sur toutes les offres du poste ciblé)"):
+        if st.button("🚀 Comparer les profils sur ce poste", type="primary", key="btn_comparaison_globale"):
+            if not poste_confirme_label:
+                st.warning("Sélectionne d'abord un poste ciblé (section 🎯 ci-dessus).")
+            elif not st.session_state["recruteur_profils"]:
+                st.warning(
+                    "Aucun profil candidat enregistré — ajoute-en dans l'onglet "
+                    "« 👥 Profils candidats » avant de lancer la comparaison."
+                )
+            else:
+                item_poste = next(
+                    (a for a in appellations if a.get("libelle", "").strip() == poste_confirme_label), None
+                )
+                code_rome = _extraire_code_rome(item_poste) if item_poste else None
+                if not code_rome:
+                    with st.spinner("Résolution du poste..."):
+                        df_resolu = resoudre_codes_rome(mots_cles=poste_confirme_label, departement=departement_recruteur)
+                    code_rome = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
+
+                if not code_rome:
+                    st.error("Impossible de résoudre ce poste pour l'instant. Essaie un autre intitulé.")
+                else:
+                    with st.spinner("Récupération des offres et calcul des scores..."):
+                        df_villes, total_region, _, _, _, _ = offres_par_ville(code_rome, departement_recruteur)
+                        offres_completes = rechercher_offres_completes(code_rome, departement_recruteur)
+
+                        resultats_classement = []
+                        for profil in st.session_state["recruteur_profils"]:
+                            competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
+                            outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
+                            langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
+                            poste_souhaite = profil.get("poste_souhaite", "")
+                            secteur_souhaite = profil.get("secteur_souhaite", "")
+
+                            scores = []
+                            for offre in offres_completes:
+                                score, _ = calculer_correspondance_recruteur(
+                                    offre, poste_souhaite, competences_liste, outils_liste, langages_liste, secteur_souhaite
+                                )
+                                if score is not None:
+                                    scores.append(score)
+
+                            score_moyen = round(sum(scores) / len(scores)) if scores else None
+                            resultats_classement.append({
+                                "Candidat": profil.get("nom") or "(sans nom)",
+                                "Poste recherché": poste_souhaite or "—",
+                                "Score moyen de correspondance": f"{score_moyen}%" if score_moyen is not None else "N/C",
+                                "Offres analysées": len(offres_completes),
+                            })
+
+                    st.markdown(f"##### 📊 Classement — {total_region} offre(s) trouvée(s) dans le département {departement_recruteur}")
+                    if not offres_completes:
+                        st.info("Aucune offre trouvée pour ce poste/département — comparaison non calculable.")
+                    else:
+                        df_classement = pd.DataFrame(resultats_classement)
+                        st.dataframe(df_classement, use_container_width=True, hide_index=True)
+                        st.caption(
+                            "Score pondéré sur 3 critères : intitulé du poste souhaité (50%), "
+                            "compétences/outils/langages déclarés (30%), secteur d'activité souhaité "
+                            "(20%) — une dimension sans donnée à comparer est retirée du calcul et le "
+                            "poids des autres est réajusté en conséquence."
+                        )
+
+# ===========================================================================
+# ONGLET 2 — Profils candidats : gestion dédiée (ajout, import, édition, suppression)
+# ===========================================================================
+with tab_profils:
+    st.markdown("#### 👥 Profils candidats")
+
+    if db.base_disponible():
+        st.caption("✅ Profils enregistrés de façon persistante (base PostgreSQL).")
+    else:
+        st.warning(
+            "⚠️ DATABASE_URL non configurée — les profils ajoutés ici seront perdus à la "
+            "fermeture de la session. Ajoute ce secret pour activer la persistance."
+        )
+
+    # --- Import Excel/CSV (import de données internes du client — version simple) ---
+    with st.expander("📥 Importer plusieurs profils depuis un fichier Excel/CSV"):
+        st.caption(
+            "Colonnes attendues : **Nom**, **Poste souhaité**, **Compétences**, **Outils**, "
+            "**Langages** — plusieurs valeurs par cellule séparées par une virgule. Le secteur "
+            "souhaité se choisit ensuite manuellement sur chaque profil importé. Télécharge le "
+            "modèle si besoin."
+        )
+
+        modele = pd.DataFrame([
+            {
+                "Nom": "Jean Dupont",
+                "Poste souhaité": "Chef de projet IT",
+                "Compétences": "Gestion de projet, Communication",
+                "Outils": "Excel, SAP",
+                "Langages": "SQL, Python",
+            }
+        ])
+        buffer_modele = BytesIO()
+        modele.to_excel(buffer_modele, index=False, sheet_name="Profils")
+        st.download_button(
+            "⬇️ Télécharger le modèle Excel",
+            data=buffer_modele.getvalue(),
+            file_name="modele_import_profils.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        fichier_importe = st.file_uploader(
+            "Fichier à importer (.xlsx ou .csv)", type=["xlsx", "csv"], key="recruteur_import_fichier"
+        )
+        if fichier_importe and st.button("Importer les profils de ce fichier", key="recruteur_btn_import"):
+            try:
+                if fichier_importe.name.endswith(".csv"):
+                    df_import = pd.read_csv(fichier_importe)
+                else:
+                    df_import = pd.read_excel(fichier_importe)
+
+                # Correspondance des colonnes insensible à la casse/aux accents simples
+                colonnes_normalisees = {c.strip().lower(): c for c in df_import.columns}
+                correspondances = {
+                    "nom": ["nom", "candidat", "name"],
+                    "poste_souhaite": ["poste souhaité", "poste recherché", "poste", "job title"],
+                    "competences": ["compétences", "competences", "skills"],
+                    "outils": ["outils", "outils informatiques", "tools"],
+                    "langages": ["langages", "langages informatiques", "languages"],
+                }
+
+                def _colonne(cle):
+                    for variante in correspondances[cle]:
+                        if variante in colonnes_normalisees:
+                            return colonnes_normalisees[variante]
+                    return None
+
+                col_nom = _colonne("nom")
+                col_poste = _colonne("poste_souhaite")
+                col_comp = _colonne("competences")
+                col_outils = _colonne("outils")
+                col_langages = _colonne("langages")
+
+                profils_importes = []
+                for _, ligne in df_import.iterrows():
+                    profils_importes.append({
+                        "nom": str(ligne[col_nom]) if col_nom and pd.notna(ligne[col_nom]) else "",
+                        "poste_souhaite": str(ligne[col_poste]) if col_poste and pd.notna(ligne[col_poste]) else "",
+                        "competences": str(ligne[col_comp]) if col_comp and pd.notna(ligne[col_comp]) else "",
+                        "outils": str(ligne[col_outils]) if col_outils and pd.notna(ligne[col_outils]) else "",
+                        "langages": str(ligne[col_langages]) if col_langages and pd.notna(ligne[col_langages]) else "",
+                        "secteur_souhaite": "",
                     })
 
-            st.markdown(f"#### 📊 Classement — {total_region} offre(s) trouvée(s) dans le département {departement_recruteur}")
-            if not offres_completes:
-                st.info("Aucune offre trouvée pour ce poste/département — comparaison non calculable.")
-            else:
-                df_classement = pd.DataFrame(resultats_classement)
-                st.dataframe(df_classement, use_container_width=True, hide_index=True)
-                st.caption(
-                    "Score pondéré sur 3 critères : intitulé du poste souhaité (50%), "
-                    "compétences/outils/langages déclarés (30%), secteur d'activité souhaité "
-                    "(20%) — une dimension sans donnée à comparer est retirée du calcul et le "
-                    "poids des autres est réajusté en conséquence."
-                )
-
-st.divider()
-
-# ---------------------------------------------------------------------------
-# 4. Besoin des entreprises — parcours inverse : on part des offres réelles
-#    (regroupées par entreprise), on choisit une offre précise, puis on lance
-#    le matching de CETTE offre contre tous les profils candidats enregistrés.
-# ---------------------------------------------------------------------------
-st.markdown("#### 🏢 Besoin des entreprises")
-st.caption(
-    "Explore les entreprises qui recrutent sur le poste ciblé plus haut, jusqu'au détail de "
-    "chaque offre, pour lancer un matching ciblé avec ta base de candidats."
-)
-
-if not poste_confirme_label:
-    st.info("Sélectionne d'abord un poste ciblé (section 🎯 ci-dessus) pour explorer les entreprises.")
-else:
-    if st.button("🔍 Charger les entreprises qui recrutent", key="btn_charger_entreprises"):
-        item_poste_entreprises = next(
-            (a for a in appellations if a.get("libelle", "").strip() == poste_confirme_label), None
-        )
-        code_rome_entreprises = _extraire_code_rome(item_poste_entreprises) if item_poste_entreprises else None
-        if not code_rome_entreprises:
-            with st.spinner("Résolution du poste..."):
-                df_resolu_entreprises = resoudre_codes_rome(
-                    mots_cles=poste_confirme_label, departement=departement_recruteur
-                )
-            code_rome_entreprises = (
-                df_resolu_entreprises.iloc[0]["code_rome"] if not df_resolu_entreprises.empty else None
-            )
-
-        if not code_rome_entreprises:
-            st.error("Impossible de résoudre ce poste pour l'instant.")
-        else:
-            with st.spinner("Récupération des offres..."):
-                st.session_state["recruteur_offres_entreprises"] = rechercher_offres_completes(
-                    code_rome_entreprises, departement_recruteur
-                )
-
-    if "recruteur_offres_entreprises" in st.session_state:
-        offres_disponibles = st.session_state["recruteur_offres_entreprises"]
-
-        if not offres_disponibles:
-            st.info("Aucune offre trouvée pour ce poste/département.")
-        else:
-            # --- Étape 1 : regroupement par entreprise ---
-            offres_par_entreprise = {}
-            for o in offres_disponibles:
-                nom_entreprise = (o.get("entreprise", {}) or {}).get("nom") or "Entreprise non précisée"
-                offres_par_entreprise.setdefault(nom_entreprise, []).append(o)
-
-            df_entreprises_compte = pd.DataFrame(
-                [
-                    {"Entreprise": nom, "Postes à promouvoir": len(offres)}
-                    for nom, offres in offres_par_entreprise.items()
-                ]
-            ).sort_values("Postes à promouvoir", ascending=False).reset_index(drop=True)
-
-            st.dataframe(df_entreprises_compte, use_container_width=True, hide_index=True)
-
-            # --- Étape 2 : détail des postes de l'entreprise choisie ---
-            entreprise_choisie = st.selectbox(
-                "Choisis une entreprise pour voir le détail de ses postes",
-                options=df_entreprises_compte["Entreprise"].tolist(),
-                key="recruteur_entreprise_choisie",
-            )
-            offres_de_lentreprise = offres_par_entreprise[entreprise_choisie]
-            st.caption(f"{len(offres_de_lentreprise)} poste(s) chez **{entreprise_choisie}**")
-
-            labels_offres = [
-                f"{o.get('intitule', '(sans titre)')} — {(o.get('lieuTravail', {}) or {}).get('libelle', '')}"
-                for o in offres_de_lentreprise
-            ]
-            index_offre_choisie = st.selectbox(
-                "Choisis une offre pour lancer le matching",
-                options=range(len(offres_de_lentreprise)),
-                format_func=lambda i: labels_offres[i],
-                key="recruteur_offre_choisie",
-            )
-            offre_selectionnee = offres_de_lentreprise[index_offre_choisie]
-
-            with st.expander("Voir le détail de cette offre"):
-                type_contrat = offre_selectionnee.get("typeContratLibelle") or offre_selectionnee.get("typeContrat")
-                if type_contrat:
-                    st.markdown(f"**Type de contrat :** {type_contrat}")
-                salaire_offre = (offre_selectionnee.get("salaire", {}) or {}).get("libelle")
-                if salaire_offre:
-                    st.markdown(f"**Salaire :** {salaire_offre}")
-                if offre_selectionnee.get("description"):
-                    st.markdown("**Description :**")
-                    st.write(offre_selectionnee["description"])
-                competences_offre = offre_selectionnee.get("competences", [])
-                if competences_offre:
-                    libelles_comp = ", ".join(c.get("libelle", "") for c in competences_offre if c.get("libelle"))
-                    if libelles_comp:
-                        st.markdown(f"**Compétences demandées :** {libelles_comp}")
-
-            # --- Étape 3 : matching de CETTE offre contre tous les profils enregistrés ---
-            if st.button("🎯 Lancer le matching pour cette offre", type="primary", key="btn_matching_offre"):
-                if not st.session_state["recruteur_profils"]:
-                    st.warning("Ajoute au moins un profil candidat avant de lancer le matching.")
+                if db.base_disponible():
+                    db.ajouter_profils_en_masse(profils_importes)
+                    st.session_state["recruteur_profils"] = db.charger_profils()
                 else:
-                    lignes_resultat = []
-                    for profil in st.session_state["recruteur_profils"]:
-                        competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
-                        outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
-                        langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
+                    st.session_state["recruteur_profils"].extend(profils_importes)
 
-                        score, detail = calculer_correspondance_recruteur(
-                            offre_selectionnee,
-                            profil.get("poste_souhaite", ""),
-                            competences_liste, outils_liste, langages_liste,
-                            profil.get("secteur_souhaite", ""),
-                        )
-                        lignes_resultat.append((
-                            score if score is not None else -1,
-                            {
-                                "Candidat": profil.get("nom") or "(sans nom)",
-                                "Score": f"{score}%" if score is not None else "N/C",
-                                **detail,
-                            },
-                        ))
+                st.success(f"{len(profils_importes)} profil(s) importé(s) avec succès.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Impossible de lire ce fichier : {e}")
 
-                    lignes_resultat.sort(key=lambda x: x[0], reverse=True)
-                    df_resultat_offre = pd.DataFrame([ligne for _, ligne in lignes_resultat])
-
-                    st.markdown(f"#### 🏆 Classement des candidats pour « {offre_selectionnee.get('intitule', '')} »")
-                    st.dataframe(df_resultat_offre, use_container_width=True, hide_index=True)
-                    st.caption(
-                        "Score pondéré sur 3 critères (poste 50% · compétences 30% · secteur 20%), "
-                        "calculé pour cette offre précise — pas une moyenne sur plusieurs offres."
+    a_supprimer = None
+    for i, profil in enumerate(st.session_state["recruteur_profils"]):
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            profil["nom"] = c1.text_input("Nom / repère candidat", value=profil.get("nom", ""), key=f"rec_nom_{i}")
+            profil["poste_souhaite"] = c2.text_input(
+                "Poste recherché par ce candidat", value=profil.get("poste_souhaite", ""), key=f"rec_poste_{i}",
+                placeholder="ex: Chef de projet IT",
+            )
+            c3, c4 = st.columns(2)
+            profil["competences"] = c3.text_input(
+                "Compétences (séparées par une virgule)", value=profil.get("competences", ""), key=f"rec_comp_{i}"
+            )
+            secteur_valeur_actuelle = profil.get("secteur_souhaite", "")
+            libelles_secteurs = list(options_secteurs_recruteur.keys())
+            index_secteur = 0
+            for idx, libelle in enumerate(libelles_secteurs):
+                if options_secteurs_recruteur[libelle] == secteur_valeur_actuelle:
+                    index_secteur = idx
+                    break
+            secteur_choisi = c4.selectbox(
+                "Secteur souhaité", libelles_secteurs, index=index_secteur, key=f"rec_secteur_{i}"
+            )
+            profil["secteur_souhaite"] = options_secteurs_recruteur[secteur_choisi]
+            c5, c6 = st.columns(2)
+            profil["outils"] = c5.text_input(
+                "Outils (séparés par une virgule)", value=profil.get("outils", ""), key=f"rec_outils_{i}"
+            )
+            profil["langages"] = c6.text_input(
+                "Langages informatiques (séparés par une virgule)", value=profil.get("langages", ""), key=f"rec_lang_{i}"
+            )
+            c7, c8 = st.columns(2)
+            if db.base_disponible() and c7.button("💾 Enregistrer", key=f"rec_save_{i}"):
+                if profil.get("id") is None:
+                    profil["id"] = db.ajouter_profil(
+                        profil.get("nom", ""), profil.get("competences", ""),
+                        profil.get("outils", ""), profil.get("langages", ""),
+                        profil.get("poste_souhaite", ""), profil.get("secteur_souhaite", ""),
                     )
+                else:
+                    db.mettre_a_jour_profil(
+                        profil["id"], profil.get("nom", ""), profil.get("competences", ""),
+                        profil.get("outils", ""), profil.get("langages", ""),
+                        profil.get("poste_souhaite", ""), profil.get("secteur_souhaite", ""),
+                    )
+                st.toast(f"Profil « {profil.get('nom') or 'sans nom'} » enregistré.")
+            if c8.button("🗑️ Retirer ce profil", key=f"rec_suppr_{i}"):
+                a_supprimer = i
+
+    if a_supprimer is not None:
+        profil_vise = st.session_state["recruteur_profils"][a_supprimer]
+        if db.base_disponible() and profil_vise.get("id") is not None:
+            db.supprimer_profil(profil_vise["id"])
+        st.session_state["recruteur_profils"].pop(a_supprimer)
+        st.rerun()
+
+    if st.button("➕ Ajouter un profil candidat", key="btn_ajouter_profil"):
+        nouveau_profil = {}
+        if db.base_disponible():
+            nouveau_profil["id"] = db.ajouter_profil()
+        st.session_state["recruteur_profils"].append(nouveau_profil)
+        st.rerun()
