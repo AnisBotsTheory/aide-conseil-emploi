@@ -32,7 +32,7 @@ Parcours utilisateur (mis à jour) :
      "En cours" ou "Clôturée - retenue" : vue calculée dynamiquement sur le
      suivi des candidatures, pour repérer où l'on peut essayer de placer
      davantage de candidats.
-  5. Onglet "👥 Profils candidats" — gestion dédiée des profils (ajout
+  5. Onglet "📥 Import & Profils" — gestion dédiée des profils (ajout
      manuel, import Excel/CSV, édition, suppression), séparée de la
      recherche/matching.
 """
@@ -88,7 +88,7 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
         if not st.session_state["recruteur_profils"]:
             st.warning(
                 "Aucun profil candidat enregistré — ajoute-en dans l'onglet "
-                "« 👥 Profils candidats » avant de lancer le matching."
+                "« 📥 Import & Profils » avant de lancer le matching."
             )
         else:
             lignes_resultat = []
@@ -254,7 +254,7 @@ if "recruteur_recherche_compteur" not in st.session_state:
 departement_recruteur = st.text_input("Département", value="13", key="recruteur_departement")
 
 tab_besoin_entreprises, tab_poste_cible, tab_comptes_actifs, tab_candidatures, tab_profils = st.tabs(
-    ["🏢 Besoin des entreprises", "📊 Vivier de talents", "🤝 Comptes actifs", "📤 Candidature envoyée", "👥 Profils candidats"]
+    ["🏢 Besoin des entreprises", "📊 Vivier de talents", "🤝 Comptes actifs", "📤 Candidature envoyée", "📥 Import & Profils"]
 )
 
 # ===========================================================================
@@ -264,7 +264,7 @@ with tab_besoin_entreprises:
     st.markdown(
         "**Principe** : recherche la société qui recrute (ou affiche tous les besoins), "
         "explore ses offres jusqu'à la fiche de poste, puis lance le matching contre ta "
-        "base de profils candidats (gérée dans l'onglet « Profils candidats »)."
+        "base de profils candidats (gérée dans l'onglet « Import & Profils »)."
     )
 
     # -----------------------------------------------------------------
@@ -574,7 +574,7 @@ with tab_poste_cible:
         elif not profils_vivier:
             st.warning(
                 "Aucun profil candidat ne correspond au filtre secteur actuel — ajuste le filtre "
-                "ou ajoute des profils dans l'onglet « 👥 Profils candidats »."
+                "ou ajoute des profils dans l'onglet « 📥 Import & Profils »."
             )
         else:
             item_poste = next(
@@ -766,10 +766,10 @@ with tab_comptes_actifs:
             st.dataframe(df_detail_compte, use_container_width=True, hide_index=True)
 
 # ===========================================================================
-# ONGLET 5 — Profils candidats : gestion dédiée (ajout, import, édition, suppression)
+# ONGLET 5 — Import & Profils : gestion dédiée (ajout, import, édition, suppression)
 # ===========================================================================
 with tab_profils:
-    st.markdown("#### 👥 Profils candidats")
+    st.markdown("#### 📥 Import & Profils")
 
     if db.base_disponible():
         st.caption("✅ Profils enregistrés de façon persistante (base PostgreSQL).")
