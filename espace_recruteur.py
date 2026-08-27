@@ -27,6 +27,7 @@ Parcours utilisateur (mis à jour) :
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+from collections import Counter
 
 from moteur_recherche import (
     get_referentiel_appellations,
@@ -100,6 +101,13 @@ with tab_besoin_candidat:
         placeholder="ex: Airbus Helicopters, BNP Paribas...",
         disabled=toutes_les_societes,
     )
+    libelles_secteurs_recherche = list(options_secteurs_recruteur.keys())
+    secteur_choisi_recherche = st.selectbox(
+        "Secteur d'activité (optionnel — pour cibler ou analyser les offres par secteur)",
+        libelles_secteurs_recherche,
+        key="recruteur_secteur_recherche",
+    )
+    secteur_code_recherche = options_secteurs_recruteur[secteur_choisi_recherche]
 
     recherche_possible = toutes_les_societes or bool(nom_societe_recherche.strip())
 
@@ -111,11 +119,12 @@ with tab_besoin_candidat:
             with st.spinner("Recherche des offres..."):
                 if toutes_les_societes:
                     st.session_state["recruteur_offres_entreprises"] = rechercher_offres_completes(
-                        "TOUS", departement_recruteur, max_pages=5
+                        "TOUS", departement_recruteur, max_pages=5, secteur_activite=secteur_code_recherche
                     )
                 else:
                     offres_brutes = rechercher_offres_completes(
-                        "TOUS", departement_recruteur, max_pages=3, mots_cles=nom_societe_recherche
+                        "TOUS", departement_recruteur, max_pages=3,
+                        mots_cles=nom_societe_recherche, secteur_activite=secteur_code_recherche,
                     )
                     # Filtre de précision côté client : motsCles peut remonter des offres
                     # dont le texte mentionne la société sans qu'elle soit l'employeur —
@@ -136,6 +145,17 @@ with tab_besoin_candidat:
             if not offres_disponibles:
                 st.info("Aucune offre trouvée pour cette recherche dans ce département.")
             else:
+                # --- Analyse par secteur : répartition des offres trouvées ---
+                compteur_secteurs = Counter()
+                for o in offres_disponibles:
+                    libelle_secteur = o.get("secteurActiviteLibelle") or "Secteur non précisé"
+                    compteur_secteurs[libelle_secteur] += 1
+                df_secteurs = pd.DataFrame(
+                    compteur_secteurs.items(), columns=["Secteur", "Nombre d'offres"]
+                ).sort_values("Nombre d'offres", ascending=False).reset_index(drop=True)
+                with st.expander("📊 Répartition des offres par secteur"):
+                    st.dataframe(df_secteurs, use_container_width=True, hide_index=True)
+
                 # --- Étape 1 : liste des sociétés + nombre d'offres — cliquer sur une ligne ---
                 offres_par_entreprise = {}
                 for o in offres_disponibles:
@@ -230,8 +250,9 @@ with tab_besoin_candidat:
                                         competences_liste, outils_liste, langages_liste,
                                         profil.get("secteur_souhaite", ""),
                                     )
+                                    score_valeur = score if score is not None else 0
                                     lignes_resultat.append((
-                                        score if score is not None else -1,
+                                        score_valeur,
                                         {
                                             "Candidat": profil.get("nom") or "(sans nom)",
                                             "Score": f"{score}%" if score is not None else "N/C",
@@ -240,14 +261,20 @@ with tab_besoin_candidat:
                                     ))
 
                                 lignes_resultat.sort(key=lambda x: x[0], reverse=True)
-                                df_resultat_offre = pd.DataFrame([ligne for _, ligne in lignes_resultat])
+                                # On ne garde que les candidats avec un score strictement positif —
+                                # un 0% (ou N/C compté comme 0) n'apporte rien à afficher.
+                                lignes_pertinentes = [ligne for score_valeur, ligne in lignes_resultat if score_valeur > 0]
 
                                 st.markdown(f"###### 🏆 Classement des candidats pour « {offre_selectionnee.get('intitule', '')} »")
-                                st.dataframe(df_resultat_offre, use_container_width=True, hide_index=True)
-                                st.caption(
-                                    "Score pondéré sur 3 critères (poste 50% · compétences 30% · secteur 20%), "
-                                    "calculé pour cette offre précise — pas une moyenne sur plusieurs offres."
-                                )
+                                if not lignes_pertinentes:
+                                    st.info("Aucun profil ne correspond à cette offre.")
+                                else:
+                                    df_resultat_offre = pd.DataFrame(lignes_pertinentes)
+                                    st.dataframe(df_resultat_offre, use_container_width=True, hide_index=True)
+                                    st.caption(
+                                        "Score pondéré sur 3 critères (poste 50% · compétences 30% · secteur 20%), "
+                                        "calculé pour cette offre précise — pas une moyenne sur plusieurs offres."
+                                    )
 
     st.divider()
 
@@ -329,25 +356,34 @@ with tab_besoin_candidat:
                                     scores.append(score)
 
                             score_moyen = round(sum(scores) / len(scores)) if scores else None
-                            resultats_classement.append({
-                                "Candidat": profil.get("nom") or "(sans nom)",
-                                "Poste recherché": poste_souhaite or "—",
-                                "Score moyen de correspondance": f"{score_moyen}%" if score_moyen is not None else "N/C",
-                                "Offres analysées": len(offres_completes),
-                            })
+                            score_moyen_valeur = score_moyen if score_moyen is not None else 0
+                            resultats_classement.append((
+                                score_moyen_valeur,
+                                {
+                                    "Candidat": profil.get("nom") or "(sans nom)",
+                                    "Poste recherché": poste_souhaite or "—",
+                                    "Score moyen de correspondance": f"{score_moyen}%" if score_moyen is not None else "N/C",
+                                    "Offres analysées": len(offres_completes),
+                                },
+                            ))
 
                     st.markdown(f"##### 📊 Classement — {total_region} offre(s) trouvée(s) dans le département {departement_recruteur}")
                     if not offres_completes:
                         st.info("Aucune offre trouvée pour ce poste/département — comparaison non calculable.")
                     else:
-                        df_classement = pd.DataFrame(resultats_classement)
-                        st.dataframe(df_classement, use_container_width=True, hide_index=True)
-                        st.caption(
-                            "Score pondéré sur 3 critères : intitulé du poste souhaité (50%), "
-                            "compétences/outils/langages déclarés (30%), secteur d'activité souhaité "
-                            "(20%) — une dimension sans donnée à comparer est retirée du calcul et le "
-                            "poids des autres est réajusté en conséquence."
-                        )
+                        # On ne garde que les candidats avec un score moyen strictement positif.
+                        resultats_pertinents = [ligne for score_valeur, ligne in resultats_classement if score_valeur > 0]
+                        if not resultats_pertinents:
+                            st.info("Aucun profil ne correspond à ce poste.")
+                        else:
+                            df_classement = pd.DataFrame(resultats_pertinents)
+                            st.dataframe(df_classement, use_container_width=True, hide_index=True)
+                            st.caption(
+                                "Score pondéré sur 3 critères : intitulé du poste souhaité (50%), "
+                                "compétences/outils/langages déclarés (30%), secteur d'activité souhaité "
+                                "(20%) — une dimension sans donnée à comparer est retirée du calcul et le "
+                                "poids des autres est réajusté en conséquence."
+                            )
 
 # ===========================================================================
 # ONGLET 2 — Profils candidats : gestion dédiée (ajout, import, édition, suppression)
