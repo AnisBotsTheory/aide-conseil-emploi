@@ -108,7 +108,6 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
                     {
                         "Candidat": profil.get("nom") or "(sans nom)",
                         "Score": f"{score}%" if score is not None else "N/C",
-                        **detail,
                     },
                 ))
 
@@ -132,35 +131,42 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
             st.info("Aucun profil ne correspond à cette offre.")
         else:
             df_resultat_offre = pd.DataFrame(dernier_matching["lignes"])
-            st.dataframe(df_resultat_offre, use_container_width=True, hide_index=True)
+            st.caption("👇 Coche le(s) candidat(s) à présenter directement dans le tableau.")
+            selection_candidats = st.dataframe(
+                df_resultat_offre,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="multi-row",
+                key=f"table_classement_{key_suffix}_{offre_id}",
+            )
             st.caption(
                 "Score pondéré sur 3 critères (poste 50% · compétences 30% · secteur 20%), "
                 "calculé pour cette offre précise — pas une moyenne sur plusieurs offres."
             )
 
-            # --- Présentation d'un ou plusieurs candidats à cette offre ---
-            noms_candidats_pertinents = [l["Candidat"] for l in dernier_matching["lignes"]]
+            lignes_candidats_sel = selection_candidats["selection"]["rows"]
+            candidats_a_presenter = [
+                df_resultat_offre.iloc[i]["Candidat"] for i in lignes_candidats_sel
+            ]
+
+            # --- CV des candidats cochés, pour vérifier avant de présenter ---
             liens_cv_candidats = {
                 p.get("nom") or "(sans nom)": p.get("cv_lien", "")
                 for p in st.session_state["recruteur_profils"]
             }
             liens_cv_a_afficher = [
-                (nom, liens_cv_candidats.get(nom, "")) for nom in noms_candidats_pertinents
+                (nom, liens_cv_candidats.get(nom, "")) for nom in candidats_a_presenter
                 if liens_cv_candidats.get(nom, "").strip()
             ]
             if liens_cv_a_afficher:
-                with st.expander("📄 CV des candidats pertinents"):
+                with st.expander("📄 CV des candidats cochés"):
                     for nom, lien in liens_cv_a_afficher:
                         st.link_button(f"📄 {nom}", lien.strip())
 
-            candidats_a_presenter = st.multiselect(
-                "Candidat(s) à présenter pour cette offre",
-                options=noms_candidats_pertinents,
-                key=f"recruteur_candidats_a_presenter_{key_suffix}",
-            )
             if st.button("📤 Enregistrer la présentation", key=f"btn_enregistrer_presentation_{key_suffix}"):
                 if not candidats_a_presenter:
-                    st.warning("Sélectionne au moins un candidat.")
+                    st.warning("Coche au moins un candidat dans le tableau ci-dessus.")
                 else:
                     nb_ajoutes, nb_deja_presentes = 0, 0
                     for nom_candidat in candidats_a_presenter:
