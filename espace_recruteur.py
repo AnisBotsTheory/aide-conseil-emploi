@@ -803,10 +803,13 @@ with tab_profils:
     with st.expander("📥 Importer plusieurs profils depuis un fichier Excel/CSV"):
         st.caption(
             "Colonnes attendues : **Nom**, **Poste souhaité**, **Compétences**, **Outils**, "
-            "**Langages**, **Lien CV** — plusieurs valeurs par cellule séparées par une "
-            "virgule (sauf Lien CV). Le lien CV pointe vers le fichier déjà stocké sur votre "
-            "Drive/SharePoint — pas d'upload de fichier ici. Le secteur souhaité se choisit "
-            "ensuite manuellement sur chaque profil importé. Télécharge le modèle si besoin."
+            "**Langages** (informatiques), **Langues parlées**, **Secteur souhaité**, "
+            "**Mobilité**, **Lien CV** — plusieurs valeurs par cellule séparées par une "
+            "virgule (sauf Lien CV et Mobilité). Le lien CV pointe vers le fichier déjà "
+            "stocké sur votre Drive/SharePoint — pas d'upload de fichier ici. Le secteur "
+            "souhaité est rapproché automatiquement du référentiel officiel (libellé "
+            "approchant) ; s'il n'est pas reconnu, il reste à choisir manuellement sur le "
+            "profil importé. Télécharge le modèle si besoin."
         )
 
         modele = pd.DataFrame([
@@ -816,6 +819,9 @@ with tab_profils:
                 "Compétences": "Gestion de projet, Communication",
                 "Outils": "Excel, SAP",
                 "Langages": "SQL, Python",
+                "Langues parlées": "Anglais courant",
+                "Secteur souhaité": "Conseil en systèmes et logiciels informatiques",
+                "Mobilité": "Paris",
                 "Lien CV": "https://drive.google.com/...",
             }
         ])
@@ -846,6 +852,9 @@ with tab_profils:
                     "competences": ["compétences", "competences", "skills"],
                     "outils": ["outils", "outils informatiques", "tools"],
                     "langages": ["langages", "langages informatiques", "languages"],
+                    "langues_parlees": ["langues parlées", "langues parlees", "langues", "spoken languages"],
+                    "secteur_souhaite": ["secteur souhaité", "secteur souhaite", "secteur d'activité", "secteur"],
+                    "mobilite": ["mobilité", "mobilite", "ville", "localisation"],
                     "cv_lien": ["lien cv", "cv", "lien du cv", "cv link", "url cv"],
                 }
 
@@ -860,18 +869,50 @@ with tab_profils:
                 col_comp = _colonne("competences")
                 col_outils = _colonne("outils")
                 col_langages = _colonne("langages")
+                col_langues = _colonne("langues_parlees")
+                col_secteur = _colonne("secteur_souhaite")
+                col_mobilite = _colonne("mobilite")
                 col_cv = _colonne("cv_lien")
 
+                # Rapprochement du secteur importé (libellé texte) avec le référentiel
+                # officiel (déjà chargé pour le sélecteur secteur) — recherche exacte
+                # puis, à défaut, sous-chaîne dans un sens ou dans l'autre.
+                secteur_libelle_vers_code = {}
+                for libelle_avec_code, code in options_secteurs_recruteur.items():
+                    if not code:
+                        continue
+                    libelle_seul = libelle_avec_code.rsplit(" (", 1)[0].strip().lower()
+                    secteur_libelle_vers_code[libelle_seul] = code
+
+                def _resoudre_secteur(texte_secteur):
+                    if not texte_secteur:
+                        return ""
+                    texte_normalise = texte_secteur.strip().lower()
+                    if texte_normalise in secteur_libelle_vers_code:
+                        return secteur_libelle_vers_code[texte_normalise]
+                    for libelle_seul, code in secteur_libelle_vers_code.items():
+                        if texte_normalise in libelle_seul or libelle_seul in texte_normalise:
+                            return code
+                    return ""
+
                 profils_importes = []
+                nb_secteurs_non_reconnus = 0
                 for _, ligne in df_import.iterrows():
+                    texte_secteur_brut = str(ligne[col_secteur]).strip() if col_secteur and pd.notna(ligne[col_secteur]) else ""
+                    code_secteur_resolu = _resoudre_secteur(texte_secteur_brut)
+                    if texte_secteur_brut and not code_secteur_resolu:
+                        nb_secteurs_non_reconnus += 1
+
                     profils_importes.append({
                         "nom": str(ligne[col_nom]) if col_nom and pd.notna(ligne[col_nom]) else "",
                         "poste_souhaite": str(ligne[col_poste]) if col_poste and pd.notna(ligne[col_poste]) else "",
                         "competences": str(ligne[col_comp]) if col_comp and pd.notna(ligne[col_comp]) else "",
                         "outils": str(ligne[col_outils]) if col_outils and pd.notna(ligne[col_outils]) else "",
                         "langages": str(ligne[col_langages]) if col_langages and pd.notna(ligne[col_langages]) else "",
+                        "langues_parlees": str(ligne[col_langues]) if col_langues and pd.notna(ligne[col_langues]) else "",
+                        "mobilite": str(ligne[col_mobilite]).strip() if col_mobilite and pd.notna(ligne[col_mobilite]) else "",
                         "cv_lien": str(ligne[col_cv]).strip() if col_cv and pd.notna(ligne[col_cv]) else "",
-                        "secteur_souhaite": "",
+                        "secteur_souhaite": code_secteur_resolu,
                     })
 
                 if db.base_disponible():
@@ -881,6 +922,11 @@ with tab_profils:
                     st.session_state["recruteur_profils"].extend(profils_importes)
 
                 st.success(f"{len(profils_importes)} profil(s) importé(s) avec succès.")
+                if nb_secteurs_non_reconnus:
+                    st.info(
+                        f"{nb_secteurs_non_reconnus} secteur(s) saisi(s) n'ont pas été reconnus "
+                        "automatiquement — à choisir manuellement sur les profils concernés."
+                    )
                 st.rerun()
             except Exception as e:
                 st.error(f"Impossible de lire ce fichier : {e}")
@@ -916,6 +962,15 @@ with tab_profils:
             profil["langages"] = c6.text_input(
                 "Langages informatiques (séparés par une virgule)", value=profil.get("langages", ""), key=f"rec_lang_{i}"
             )
+            c9, c10 = st.columns(2)
+            profil["langues_parlees"] = c9.text_input(
+                "Langues parlées (séparées par une virgule)", value=profil.get("langues_parlees", ""),
+                key=f"rec_langues_{i}", placeholder="ex: Anglais courant, Espagnol",
+            )
+            profil["mobilite"] = c10.text_input(
+                "Mobilité (ville / zone)", value=profil.get("mobilite", ""), key=f"rec_mobilite_{i}",
+                placeholder="ex: Aix-en-Provence",
+            )
             profil["cv_lien"] = st.text_input(
                 "Lien CV (Drive/SharePoint...)", value=profil.get("cv_lien", ""), key=f"rec_cv_{i}",
                 placeholder="https://drive.google.com/...",
@@ -926,17 +981,19 @@ with tab_profils:
             if db.base_disponible() and c7.button("💾 Enregistrer", key=f"rec_save_{i}"):
                 if profil.get("id") is None:
                     profil["id"] = db.ajouter_profil(
-                        profil.get("nom", ""), profil.get("competences", ""),
-                        profil.get("outils", ""), profil.get("langages", ""),
-                        profil.get("poste_souhaite", ""), profil.get("secteur_souhaite", ""),
-                        profil.get("cv_lien", ""),
+                        nom=profil.get("nom", ""), competences=profil.get("competences", ""),
+                        outils=profil.get("outils", ""), langages=profil.get("langages", ""),
+                        poste_souhaite=profil.get("poste_souhaite", ""), secteur_souhaite=profil.get("secteur_souhaite", ""),
+                        cv_lien=profil.get("cv_lien", ""), langues_parlees=profil.get("langues_parlees", ""),
+                        mobilite=profil.get("mobilite", ""),
                     )
                 else:
                     db.mettre_a_jour_profil(
-                        profil["id"], profil.get("nom", ""), profil.get("competences", ""),
-                        profil.get("outils", ""), profil.get("langages", ""),
-                        profil.get("poste_souhaite", ""), profil.get("secteur_souhaite", ""),
-                        profil.get("cv_lien", ""),
+                        profil["id"], nom=profil.get("nom", ""), competences=profil.get("competences", ""),
+                        outils=profil.get("outils", ""), langages=profil.get("langages", ""),
+                        poste_souhaite=profil.get("poste_souhaite", ""), secteur_souhaite=profil.get("secteur_souhaite", ""),
+                        cv_lien=profil.get("cv_lien", ""), langues_parlees=profil.get("langues_parlees", ""),
+                        mobilite=profil.get("mobilite", ""),
                     )
                 st.toast(f"Profil « {profil.get('nom') or 'sans nom'} » enregistré.")
             if c8.button("🗑️ Retirer ce profil", key=f"rec_suppr_{i}"):
