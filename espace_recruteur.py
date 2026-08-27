@@ -140,6 +140,19 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
 
             # --- Présentation d'un ou plusieurs candidats à cette offre ---
             noms_candidats_pertinents = [l["Candidat"] for l in dernier_matching["lignes"]]
+            liens_cv_candidats = {
+                p.get("nom") or "(sans nom)": p.get("cv_lien", "")
+                for p in st.session_state["recruteur_profils"]
+            }
+            liens_cv_a_afficher = [
+                (nom, liens_cv_candidats.get(nom, "")) for nom in noms_candidats_pertinents
+                if liens_cv_candidats.get(nom, "").strip()
+            ]
+            if liens_cv_a_afficher:
+                with st.expander("📄 CV des candidats pertinents"):
+                    for nom, lien in liens_cv_a_afficher:
+                        st.link_button(f"📄 {nom}", lien.strip())
+
             candidats_a_presenter = st.multiselect(
                 "Candidat(s) à présenter pour cette offre",
                 options=noms_candidats_pertinents,
@@ -162,6 +175,9 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
                         poste_souhaite_candidat = (
                             profil_correspondant.get("poste_souhaite", "") if profil_correspondant else ""
                         )
+                        cv_lien_candidat = (
+                            profil_correspondant.get("cv_lien", "") if profil_correspondant else ""
+                        )
 
                         if db.base_disponible():
                             if db.candidature_existe(candidat_id, nom_candidat, dernier_matching["offre_id"]):
@@ -170,13 +186,14 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
                             nouvel_id = db.ajouter_candidature(
                                 candidat_id, nom_candidat, poste_souhaite_candidat,
                                 dernier_matching["offre_id"], dernier_matching["offre_intitule"],
-                                dernier_matching["entreprise_nom"],
+                                dernier_matching["entreprise_nom"], candidat_cv_lien=cv_lien_candidat,
                             )
                             st.session_state["recruteur_candidatures"].insert(0, {
                                 "id": nouvel_id,
                                 "candidat_id": candidat_id,
                                 "candidat_nom": nom_candidat,
                                 "candidat_poste_souhaite": poste_souhaite_candidat,
+                                "candidat_cv_lien": cv_lien_candidat,
                                 "offre_id": dernier_matching["offre_id"],
                                 "offre_intitule": dernier_matching["offre_intitule"],
                                 "entreprise_nom": dernier_matching["entreprise_nom"],
@@ -196,6 +213,7 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
                                 "candidat_id": candidat_id,
                                 "candidat_nom": nom_candidat,
                                 "candidat_poste_souhaite": poste_souhaite_candidat,
+                                "candidat_cv_lien": cv_lien_candidat,
                                 "offre_id": dernier_matching["offre_id"],
                                 "offre_intitule": dernier_matching["offre_intitule"],
                                 "entreprise_nom": dernier_matching["entreprise_nom"],
@@ -684,13 +702,15 @@ with tab_candidatures:
                     "Statut", statuts, index=index_statut, key=f"cand_statut_{i}"
                 )
 
-                c4, c5 = st.columns(2)
+                c4, c5, c6 = st.columns(3)
                 if c4.button("💾 Mettre à jour", key=f"cand_save_{i}"):
                     candidature["statut"] = nouveau_statut
                     if db.base_disponible() and candidature.get("id") is not None:
                         db.mettre_a_jour_statut_candidature(candidature["id"], nouveau_statut)
                     st.toast("Statut mis à jour.")
-                if c5.button("🗑️ Retirer", key=f"cand_suppr_{i}"):
+                if candidature.get("candidat_cv_lien", "").strip():
+                    c5.link_button("📄 Voir le CV", candidature["candidat_cv_lien"].strip())
+                if c6.button("🗑️ Retirer", key=f"cand_suppr_{i}"):
                     a_supprimer_candidature = i
 
         if a_supprimer_candidature is not None:
@@ -783,9 +803,10 @@ with tab_profils:
     with st.expander("📥 Importer plusieurs profils depuis un fichier Excel/CSV"):
         st.caption(
             "Colonnes attendues : **Nom**, **Poste souhaité**, **Compétences**, **Outils**, "
-            "**Langages** — plusieurs valeurs par cellule séparées par une virgule. Le secteur "
-            "souhaité se choisit ensuite manuellement sur chaque profil importé. Télécharge le "
-            "modèle si besoin."
+            "**Langages**, **Lien CV** — plusieurs valeurs par cellule séparées par une "
+            "virgule (sauf Lien CV). Le lien CV pointe vers le fichier déjà stocké sur votre "
+            "Drive/SharePoint — pas d'upload de fichier ici. Le secteur souhaité se choisit "
+            "ensuite manuellement sur chaque profil importé. Télécharge le modèle si besoin."
         )
 
         modele = pd.DataFrame([
@@ -795,6 +816,7 @@ with tab_profils:
                 "Compétences": "Gestion de projet, Communication",
                 "Outils": "Excel, SAP",
                 "Langages": "SQL, Python",
+                "Lien CV": "https://drive.google.com/...",
             }
         ])
         buffer_modele = BytesIO()
@@ -824,6 +846,7 @@ with tab_profils:
                     "competences": ["compétences", "competences", "skills"],
                     "outils": ["outils", "outils informatiques", "tools"],
                     "langages": ["langages", "langages informatiques", "languages"],
+                    "cv_lien": ["lien cv", "cv", "lien du cv", "cv link", "url cv"],
                 }
 
                 def _colonne(cle):
@@ -837,6 +860,7 @@ with tab_profils:
                 col_comp = _colonne("competences")
                 col_outils = _colonne("outils")
                 col_langages = _colonne("langages")
+                col_cv = _colonne("cv_lien")
 
                 profils_importes = []
                 for _, ligne in df_import.iterrows():
@@ -846,6 +870,7 @@ with tab_profils:
                         "competences": str(ligne[col_comp]) if col_comp and pd.notna(ligne[col_comp]) else "",
                         "outils": str(ligne[col_outils]) if col_outils and pd.notna(ligne[col_outils]) else "",
                         "langages": str(ligne[col_langages]) if col_langages and pd.notna(ligne[col_langages]) else "",
+                        "cv_lien": str(ligne[col_cv]).strip() if col_cv and pd.notna(ligne[col_cv]) else "",
                         "secteur_souhaite": "",
                     })
 
@@ -891,6 +916,12 @@ with tab_profils:
             profil["langages"] = c6.text_input(
                 "Langages informatiques (séparés par une virgule)", value=profil.get("langages", ""), key=f"rec_lang_{i}"
             )
+            profil["cv_lien"] = st.text_input(
+                "Lien CV (Drive/SharePoint...)", value=profil.get("cv_lien", ""), key=f"rec_cv_{i}",
+                placeholder="https://drive.google.com/...",
+            )
+            if profil.get("cv_lien", "").strip():
+                st.link_button("📄 Voir le CV", profil["cv_lien"].strip())
             c7, c8 = st.columns(2)
             if db.base_disponible() and c7.button("💾 Enregistrer", key=f"rec_save_{i}"):
                 if profil.get("id") is None:
@@ -898,12 +929,14 @@ with tab_profils:
                         profil.get("nom", ""), profil.get("competences", ""),
                         profil.get("outils", ""), profil.get("langages", ""),
                         profil.get("poste_souhaite", ""), profil.get("secteur_souhaite", ""),
+                        profil.get("cv_lien", ""),
                     )
                 else:
                     db.mettre_a_jour_profil(
                         profil["id"], profil.get("nom", ""), profil.get("competences", ""),
                         profil.get("outils", ""), profil.get("langages", ""),
                         profil.get("poste_souhaite", ""), profil.get("secteur_souhaite", ""),
+                        profil.get("cv_lien", ""),
                     )
                 st.toast(f"Profil « {profil.get('nom') or 'sans nom'} » enregistré.")
             if c8.button("🗑️ Retirer ce profil", key=f"rec_suppr_{i}"):
