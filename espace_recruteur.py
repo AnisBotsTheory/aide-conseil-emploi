@@ -11,15 +11,19 @@ DATABASE_URL) via stockage_recruteur.py, avec repli automatique sur
 st.session_state (perdu à la fermeture) si la base n'est pas configurée.
 
 Parcours utilisateur (mis à jour) :
-  1. Onglet "🎯 Besoin candidat" — le champ "Nom de la société" est affiché
-     en premier (avec une option "Toutes les sociétés" pour ne filtrer sur
-     aucun nom et afficher tous les besoins). Le résultat est une liste de
-     sociétés avec leur nombre d'offres publiées ; cliquer sur une société
-     ouvre la sous-liste de ses offres ; cliquer sur une offre affiche sa
-     fiche de poste et un bouton pour lancer le matching sur cette offre.
-     Le "Poste ciblé" et la comparaison globale (score moyen sur toutes les
-     offres d'un poste) restent disponibles plus bas, en complément.
-  2. Onglet "👥 Profils candidats" — gestion dédiée des profils (ajout
+  1. Onglet "🏢 Besoin des entreprises" — le champ "Nom de la société" est
+     affiché en premier (avec une option "Toutes les sociétés" pour ne
+     filtrer sur aucun nom et afficher tous les besoins), ainsi qu'un filtre
+     secteur d'activité optionnel avec analyse de la répartition par secteur.
+     Le résultat est une liste de sociétés avec leur nombre d'offres
+     publiées ; cliquer sur une société ouvre la sous-liste de ses offres ;
+     cliquer sur une offre affiche sa fiche de poste et un bouton pour
+     lancer le matching sur cette offre (les 0% ne sont pas affichés — un
+     message l'indique si aucun profil ne correspond).
+  2. Onglet "🎯 Poste ciblé" — recherche d'un poste précis (référentiel ROME
+     + suggestions) et comparaison globale : score moyen des profils
+     candidats sur toutes les offres disponibles pour ce poste.
+  3. Onglet "👥 Profils candidats" — gestion dédiée des profils (ajout
      manuel, import Excel/CSV, édition, suppression), séparée de la
      recherche/matching.
 """
@@ -72,12 +76,18 @@ if "recruteur_profils" not in st.session_state:
 if "recruteur_recherche_compteur" not in st.session_state:
     st.session_state["recruteur_recherche_compteur"] = 0
 
-tab_besoin_candidat, tab_profils = st.tabs(["🎯 Besoin candidat", "👥 Profils candidats"])
+# Département : commun aux deux onglets "Besoin des entreprises" et "Poste
+# ciblé" (comparaison globale) — un seul champ, affiché avant les onglets.
+departement_recruteur = st.text_input("Département", value="13", key="recruteur_departement")
+
+tab_besoin_entreprises, tab_poste_cible, tab_profils = st.tabs(
+    ["🏢 Besoin des entreprises", "🎯 Poste ciblé", "👥 Profils candidats"]
+)
 
 # ===========================================================================
-# ONGLET 1 — Besoin candidat : société -> offres -> fiche de poste -> matching
+# ONGLET 1 — Besoin des entreprises : société -> offres -> fiche de poste -> matching
 # ===========================================================================
-with tab_besoin_candidat:
+with tab_besoin_entreprises:
     st.markdown(
         "**Principe** : recherche la société qui recrute (ou affiche tous les besoins), "
         "explore ses offres jusqu'à la fiche de poste, puis lance le matching contre ta "
@@ -85,12 +95,8 @@ with tab_besoin_candidat:
     )
 
     # -----------------------------------------------------------------
-    # 1. Besoin des entreprises — nom de la société affiché en premier.
+    # Nom de la société affiché en premier.
     # -----------------------------------------------------------------
-    st.markdown("#### 🏢 Besoin des entreprises")
-
-    departement_recruteur = st.text_input("Département", value="13", key="recruteur_departement")
-
     toutes_les_societes = st.checkbox(
         "🔘 Toutes les sociétés — afficher tous les besoins, sans filtrer sur un nom",
         key="recruteur_toutes_societes",
@@ -278,10 +284,20 @@ with tab_besoin_candidat:
 
     st.divider()
 
+# ===========================================================================
+# ONGLET 2 — Poste ciblé : recherche d'un poste précis + comparaison globale
+# ===========================================================================
+with tab_poste_cible:
+    st.markdown(
+        "**Principe** : cible un poste précis (référentiel ROME), puis compare le score "
+        "moyen de chaque profil candidat sur toutes les offres actuellement disponibles "
+        "pour ce poste dans le département."
+    )
+
     # -----------------------------------------------------------------
-    # 2. Poste ciblé — utilisé uniquement par la comparaison globale ci-dessous.
+    # Poste ciblé
     # -----------------------------------------------------------------
-    st.markdown("#### 🎯 Poste ciblé (pour la comparaison globale)")
+    st.markdown("#### 🎯 Poste ciblé")
 
     poste_texte = st.text_input(
         "Intitulé du poste recherché par l'agence pour ses clients",
@@ -308,85 +324,82 @@ with tab_besoin_candidat:
     st.divider()
 
     # -----------------------------------------------------------------
-    # 3. Comparaison globale — outil complémentaire, en retrait du
-    #    parcours principal (calcule un score moyen sur toutes les
-    #    offres disponibles pour le poste ciblé, plutôt qu'une offre
-    #    précise).
+    # Comparaison globale — score moyen sur toutes les offres du poste ciblé.
     # -----------------------------------------------------------------
-    with st.expander("📊 Comparaison globale (score moyen sur toutes les offres du poste ciblé)"):
-        if st.button("🚀 Comparer les profils sur ce poste", type="primary", key="btn_comparaison_globale"):
-            if not poste_confirme_label:
-                st.warning("Sélectionne d'abord un poste ciblé (section 🎯 ci-dessus).")
-            elif not st.session_state["recruteur_profils"]:
-                st.warning(
-                    "Aucun profil candidat enregistré — ajoute-en dans l'onglet "
-                    "« 👥 Profils candidats » avant de lancer la comparaison."
-                )
+    st.markdown("#### 📊 Comparaison globale")
+    if st.button("🚀 Comparer les profils sur ce poste", type="primary", key="btn_comparaison_globale"):
+        if not poste_confirme_label:
+            st.warning("Sélectionne d'abord un poste ciblé (section 🎯 ci-dessus).")
+        elif not st.session_state["recruteur_profils"]:
+            st.warning(
+                "Aucun profil candidat enregistré — ajoute-en dans l'onglet "
+                "« 👥 Profils candidats » avant de lancer la comparaison."
+            )
+        else:
+            item_poste = next(
+                (a for a in appellations if a.get("libelle", "").strip() == poste_confirme_label), None
+            )
+            code_rome = _extraire_code_rome(item_poste) if item_poste else None
+            if not code_rome:
+                with st.spinner("Résolution du poste..."):
+                    df_resolu = resoudre_codes_rome(mots_cles=poste_confirme_label, departement=departement_recruteur)
+                code_rome = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
+
+            if not code_rome:
+                st.error("Impossible de résoudre ce poste pour l'instant. Essaie un autre intitulé.")
             else:
-                item_poste = next(
-                    (a for a in appellations if a.get("libelle", "").strip() == poste_confirme_label), None
-                )
-                code_rome = _extraire_code_rome(item_poste) if item_poste else None
-                if not code_rome:
-                    with st.spinner("Résolution du poste..."):
-                        df_resolu = resoudre_codes_rome(mots_cles=poste_confirme_label, departement=departement_recruteur)
-                    code_rome = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
+                with st.spinner("Récupération des offres et calcul des scores..."):
+                    df_villes, total_region, _, _, _, _ = offres_par_ville(code_rome, departement_recruteur)
+                    offres_completes = rechercher_offres_completes(code_rome, departement_recruteur)
 
-                if not code_rome:
-                    st.error("Impossible de résoudre ce poste pour l'instant. Essaie un autre intitulé.")
-                else:
-                    with st.spinner("Récupération des offres et calcul des scores..."):
-                        df_villes, total_region, _, _, _, _ = offres_par_ville(code_rome, departement_recruteur)
-                        offres_completes = rechercher_offres_completes(code_rome, departement_recruteur)
+                    resultats_classement = []
+                    for profil in st.session_state["recruteur_profils"]:
+                        competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
+                        outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
+                        langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
+                        poste_souhaite = profil.get("poste_souhaite", "")
+                        secteur_souhaite = profil.get("secteur_souhaite", "")
 
-                        resultats_classement = []
-                        for profil in st.session_state["recruteur_profils"]:
-                            competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
-                            outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
-                            langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
-                            poste_souhaite = profil.get("poste_souhaite", "")
-                            secteur_souhaite = profil.get("secteur_souhaite", "")
-
-                            scores = []
-                            for offre in offres_completes:
-                                score, _ = calculer_correspondance_recruteur(
-                                    offre, poste_souhaite, competences_liste, outils_liste, langages_liste, secteur_souhaite
-                                )
-                                if score is not None:
-                                    scores.append(score)
-
-                            score_moyen = round(sum(scores) / len(scores)) if scores else None
-                            score_moyen_valeur = score_moyen if score_moyen is not None else 0
-                            resultats_classement.append((
-                                score_moyen_valeur,
-                                {
-                                    "Candidat": profil.get("nom") or "(sans nom)",
-                                    "Poste recherché": poste_souhaite or "—",
-                                    "Score moyen de correspondance": f"{score_moyen}%" if score_moyen is not None else "N/C",
-                                    "Offres analysées": len(offres_completes),
-                                },
-                            ))
-
-                    st.markdown(f"##### 📊 Classement — {total_region} offre(s) trouvée(s) dans le département {departement_recruteur}")
-                    if not offres_completes:
-                        st.info("Aucune offre trouvée pour ce poste/département — comparaison non calculable.")
-                    else:
-                        # On ne garde que les candidats avec un score moyen strictement positif.
-                        resultats_pertinents = [ligne for score_valeur, ligne in resultats_classement if score_valeur > 0]
-                        if not resultats_pertinents:
-                            st.info("Aucun profil ne correspond à ce poste.")
-                        else:
-                            df_classement = pd.DataFrame(resultats_pertinents)
-                            st.dataframe(df_classement, use_container_width=True, hide_index=True)
-                            st.caption(
-                                "Score pondéré sur 3 critères : intitulé du poste souhaité (50%), "
-                                "compétences/outils/langages déclarés (30%), secteur d'activité souhaité "
-                                "(20%) — une dimension sans donnée à comparer est retirée du calcul et le "
-                                "poids des autres est réajusté en conséquence."
+                        scores = []
+                        for offre in offres_completes:
+                            score, _ = calculer_correspondance_recruteur(
+                                offre, poste_souhaite, competences_liste, outils_liste, langages_liste, secteur_souhaite
                             )
+                            if score is not None:
+                                scores.append(score)
+
+                        score_moyen = round(sum(scores) / len(scores)) if scores else None
+                        score_moyen_valeur = score_moyen if score_moyen is not None else 0
+                        resultats_classement.append((
+                            score_moyen_valeur,
+                            {
+                                "Candidat": profil.get("nom") or "(sans nom)",
+                                "Poste recherché": poste_souhaite or "—",
+                                "Score moyen de correspondance": f"{score_moyen}%" if score_moyen is not None else "N/C",
+                                "Offres analysées": len(offres_completes),
+                            },
+                        ))
+
+                st.markdown(f"##### 📊 Classement — {total_region} offre(s) trouvée(s) dans le département {departement_recruteur}")
+                if not offres_completes:
+                    st.info("Aucune offre trouvée pour ce poste/département — comparaison non calculable.")
+                else:
+                    # On ne garde que les candidats avec un score moyen strictement positif.
+                    resultats_pertinents = [ligne for score_valeur, ligne in resultats_classement if score_valeur > 0]
+                    if not resultats_pertinents:
+                        st.info("Aucun profil ne correspond à ce poste.")
+                    else:
+                        df_classement = pd.DataFrame(resultats_pertinents)
+                        st.dataframe(df_classement, use_container_width=True, hide_index=True)
+                        st.caption(
+                            "Score pondéré sur 3 critères : intitulé du poste souhaité (50%), "
+                            "compétences/outils/langages déclarés (30%), secteur d'activité souhaité "
+                            "(20%) — une dimension sans donnée à comparer est retirée du calcul et le "
+                            "poids des autres est réajusté en conséquence."
+                        )
 
 # ===========================================================================
-# ONGLET 2 — Profils candidats : gestion dédiée (ajout, import, édition, suppression)
+# ONGLET 3 — Profils candidats : gestion dédiée (ajout, import, édition, suppression)
 # ===========================================================================
 with tab_profils:
     st.markdown("#### 👥 Profils candidats")
