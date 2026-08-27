@@ -11,19 +11,28 @@ DATABASE_URL) via stockage_recruteur.py, avec repli automatique sur
 st.session_state (perdu à la fermeture) si la base n'est pas configurée.
 
 Parcours utilisateur (mis à jour) :
-  1. Onglet "🏢 Besoin des entreprises" — le champ "Nom de la société" est
-     affiché en premier (avec une option "Toutes les sociétés" pour ne
-     filtrer sur aucun nom et afficher tous les besoins), ainsi qu'un filtre
-     secteur d'activité optionnel avec analyse de la répartition par secteur.
-     Le résultat est une liste de sociétés avec leur nombre d'offres
-     publiées ; cliquer sur une société ouvre la sous-liste de ses offres ;
-     cliquer sur une offre affiche sa fiche de poste et un bouton pour
-     lancer le matching sur cette offre (les 0% ne sont pas affichés — un
-     message l'indique si aucun profil ne correspond).
-  2. Onglet "🎯 Poste ciblé" — recherche d'un poste précis (référentiel ROME
-     + suggestions) et comparaison globale : score moyen des profils
-     candidats sur toutes les offres disponibles pour ce poste.
-  3. Onglet "👥 Profils candidats" — gestion dédiée des profils (ajout
+  1. Onglet "🏢 Besoin des entreprises" — le secteur d'activité est affiché
+     en premier (souvent identifiable même sans connaître le nom exact de
+     la société), avec le nom de société en filtre optionnel en dessous
+     (laissé vide = tout le secteur). Le résultat est une liste de sociétés
+     avec leur nombre d'offres publiées, une répartition par secteur avec
+     drill-down (secteur → postes → offres), les postes les plus recherchés
+     et les top recruteurs. Cliquer sur une société ouvre la sous-liste de
+     ses offres ; cliquer sur une offre affiche sa fiche de poste, un
+     bouton pour lancer le matching, puis pour présenter un ou plusieurs
+     candidats à cette offre (suivi dans l'onglet "Candidature envoyée").
+  2. Onglet "📊 Vivier de talents" — recherche d'un poste précis (référentiel
+     ROME + suggestions) et comparaison globale : score moyen des profils
+     candidats sur toutes les offres disponibles pour ce poste, avec
+     filtre secteur et vue "tous les postes" recherchés par nos candidats.
+  3. Onglet "📤 Candidature envoyée" — suivi de qui a été présenté à quelle
+     offre, avec statut (Candidature envoyée / En cours / Clôturée -
+     retenue / Clôturée - non retenue).
+  4. Onglet "🤝 Comptes actifs" — sociétés où l'on a au moins une candidature
+     "En cours" ou "Clôturée - retenue" : vue calculée dynamiquement sur le
+     suivi des candidatures, pour repérer où l'on peut essayer de placer
+     davantage de candidats.
+  5. Onglet "👥 Profils candidats" — gestion dédiée des profils (ajout
      manuel, import Excel/CSV, édition, suppression), séparée de la
      recherche/matching.
 """
@@ -44,6 +53,166 @@ from moteur_recherche import (
     get_secteurs_activite,
 )
 import stockage_recruteur as db
+
+
+def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
+    """
+    Affiche la fiche de poste d'une offre, un bouton pour lancer le matching
+    contre les profils candidats, le classement obtenu (persistant en session
+    via key_suffix, pour survivre au rerun du bouton "Enregistrer la
+    présentation") et la présentation d'un ou plusieurs candidats à cette
+    offre (avec suivi dans la table candidatures). Réutilisée par les deux
+    parcours de découverte d'offres : société -> offres, et
+    secteur -> poste -> offres.
+    """
+    st.markdown(f"##### 📄 Fiche de poste — {offre.get('intitule', '')}")
+    type_contrat = offre.get("typeContratLibelle") or offre.get("typeContrat")
+    if type_contrat:
+        st.markdown(f"**Type de contrat :** {type_contrat}")
+    salaire_offre = (offre.get("salaire", {}) or {}).get("libelle")
+    if salaire_offre:
+        st.markdown(f"**Salaire :** {salaire_offre}")
+    if offre.get("description"):
+        st.markdown("**Description :**")
+        st.write(offre["description"])
+    competences_offre = offre.get("competences", [])
+    if competences_offre:
+        libelles_comp = ", ".join(c.get("libelle", "") for c in competences_offre if c.get("libelle"))
+        if libelles_comp:
+            st.markdown(f"**Compétences demandées :** {libelles_comp}")
+
+    offre_id = offre.get("id") or f"{offre.get('intitule', '')}_{entreprise_nom}"
+    cle_matching = f"recruteur_dernier_matching_{key_suffix}"
+
+    if st.button("🎯 Faire un matching pour cette offre", type="primary", key=f"btn_matching_{key_suffix}"):
+        if not st.session_state["recruteur_profils"]:
+            st.warning(
+                "Aucun profil candidat enregistré — ajoute-en dans l'onglet "
+                "« 👥 Profils candidats » avant de lancer le matching."
+            )
+        else:
+            lignes_resultat = []
+            for profil in st.session_state["recruteur_profils"]:
+                competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
+                outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
+                langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
+
+                score, detail = calculer_correspondance_recruteur(
+                    offre, profil.get("poste_souhaite", ""),
+                    competences_liste, outils_liste, langages_liste,
+                    profil.get("secteur_souhaite", ""),
+                )
+                score_valeur = score if score is not None else 0
+                lignes_resultat.append((
+                    score_valeur,
+                    {
+                        "Candidat": profil.get("nom") or "(sans nom)",
+                        "Score": f"{score}%" if score is not None else "N/C",
+                        **detail,
+                    },
+                ))
+
+            lignes_resultat.sort(key=lambda x: x[0], reverse=True)
+            # On ne garde que les candidats avec un score strictement positif —
+            # un 0% (ou N/C compté comme 0) n'apporte rien à afficher.
+            lignes_pertinentes = [ligne for score_valeur, ligne in lignes_resultat if score_valeur > 0]
+
+            st.session_state[cle_matching] = {
+                "offre_id": offre_id,
+                "offre_intitule": offre.get("intitule", ""),
+                "entreprise_nom": entreprise_nom,
+                "lignes": lignes_pertinentes,
+            }
+
+    # --- Affichage du dernier matching (persiste hors du clic du bouton) ---
+    dernier_matching = st.session_state.get(cle_matching)
+    if dernier_matching and dernier_matching["offre_id"] == offre_id:
+        st.markdown(f"###### 🏆 Classement des candidats pour « {dernier_matching['offre_intitule']} »")
+        if not dernier_matching["lignes"]:
+            st.info("Aucun profil ne correspond à cette offre.")
+        else:
+            df_resultat_offre = pd.DataFrame(dernier_matching["lignes"])
+            st.dataframe(df_resultat_offre, use_container_width=True, hide_index=True)
+            st.caption(
+                "Score pondéré sur 3 critères (poste 50% · compétences 30% · secteur 20%), "
+                "calculé pour cette offre précise — pas une moyenne sur plusieurs offres."
+            )
+
+            # --- Présentation d'un ou plusieurs candidats à cette offre ---
+            noms_candidats_pertinents = [l["Candidat"] for l in dernier_matching["lignes"]]
+            candidats_a_presenter = st.multiselect(
+                "Candidat(s) à présenter pour cette offre",
+                options=noms_candidats_pertinents,
+                key=f"recruteur_candidats_a_presenter_{key_suffix}",
+            )
+            if st.button("📤 Enregistrer la présentation", key=f"btn_enregistrer_presentation_{key_suffix}"):
+                if not candidats_a_presenter:
+                    st.warning("Sélectionne au moins un candidat.")
+                else:
+                    nb_ajoutes, nb_deja_presentes = 0, 0
+                    for nom_candidat in candidats_a_presenter:
+                        profil_correspondant = next(
+                            (
+                                p for p in st.session_state["recruteur_profils"]
+                                if (p.get("nom") or "(sans nom)") == nom_candidat
+                            ),
+                            None,
+                        )
+                        candidat_id = profil_correspondant.get("id") if profil_correspondant else None
+                        poste_souhaite_candidat = (
+                            profil_correspondant.get("poste_souhaite", "") if profil_correspondant else ""
+                        )
+
+                        if db.base_disponible():
+                            if db.candidature_existe(candidat_id, nom_candidat, dernier_matching["offre_id"]):
+                                nb_deja_presentes += 1
+                                continue
+                            nouvel_id = db.ajouter_candidature(
+                                candidat_id, nom_candidat, poste_souhaite_candidat,
+                                dernier_matching["offre_id"], dernier_matching["offre_intitule"],
+                                dernier_matching["entreprise_nom"],
+                            )
+                            st.session_state["recruteur_candidatures"].insert(0, {
+                                "id": nouvel_id,
+                                "candidat_id": candidat_id,
+                                "candidat_nom": nom_candidat,
+                                "candidat_poste_souhaite": poste_souhaite_candidat,
+                                "offre_id": dernier_matching["offre_id"],
+                                "offre_intitule": dernier_matching["offre_intitule"],
+                                "entreprise_nom": dernier_matching["entreprise_nom"],
+                                "statut": db.STATUTS_CANDIDATURE[0],
+                            })
+                        else:
+                            deja_presente = any(
+                                c.get("candidat_nom") == nom_candidat
+                                and c.get("offre_id") == dernier_matching["offre_id"]
+                                for c in st.session_state["recruteur_candidatures"]
+                            )
+                            if deja_presente:
+                                nb_deja_presentes += 1
+                                continue
+                            st.session_state["recruteur_candidatures"].insert(0, {
+                                "id": None,
+                                "candidat_id": candidat_id,
+                                "candidat_nom": nom_candidat,
+                                "candidat_poste_souhaite": poste_souhaite_candidat,
+                                "offre_id": dernier_matching["offre_id"],
+                                "offre_intitule": dernier_matching["offre_intitule"],
+                                "entreprise_nom": dernier_matching["entreprise_nom"],
+                                "statut": db.STATUTS_CANDIDATURE[0],
+                            })
+                        nb_ajoutes += 1
+
+                    if nb_ajoutes:
+                        st.success(
+                            f"{nb_ajoutes} candidature(s) enregistrée(s) — à suivre dans l'onglet "
+                            "« 📤 Candidature envoyée »."
+                        )
+                    if nb_deja_presentes:
+                        st.info(
+                            f"{nb_deja_presentes} candidat(s) déjà présenté(s) à cette offre, non dupliqué(s)."
+                        )
+
 
 secteurs_recruteur = get_secteurs_activite()
 options_secteurs_recruteur = {"Peu importe": ""}
@@ -84,8 +253,8 @@ if "recruteur_recherche_compteur" not in st.session_state:
 # talents" (comparaison globale) — un seul champ, affiché avant les onglets.
 departement_recruteur = st.text_input("Département", value="13", key="recruteur_departement")
 
-tab_besoin_entreprises, tab_poste_cible, tab_candidatures, tab_profils = st.tabs(
-    ["🏢 Besoin des entreprises", "📊 Vivier de talents", "📤 Candidature envoyée", "👥 Profils candidats"]
+tab_besoin_entreprises, tab_poste_cible, tab_comptes_actifs, tab_candidatures, tab_profils = st.tabs(
+    ["🏢 Besoin des entreprises", "📊 Vivier de talents", "🤝 Comptes actifs", "📤 Candidature envoyée", "👥 Profils candidats"]
 )
 
 # ===========================================================================
@@ -99,311 +268,230 @@ with tab_besoin_entreprises:
     )
 
     # -----------------------------------------------------------------
-    # Nom de la société affiché en premier.
+    # Secteur d'activité affiché en premier — souvent identifiable même
+    # sans connaître le nom de la société (via le poste ou le marché visé).
     # -----------------------------------------------------------------
-    toutes_les_societes = st.checkbox(
-        "🔘 Toutes les sociétés — afficher tous les besoins, sans filtrer sur un nom",
-        key="recruteur_toutes_societes",
-    )
-    nom_societe_recherche = st.text_input(
-        "Nom de la société qui recrute",
-        key="recruteur_nom_societe",
-        placeholder="ex: Airbus Helicopters, BNP Paribas...",
-        disabled=toutes_les_societes,
-    )
     libelles_secteurs_recherche = list(options_secteurs_recruteur.keys())
     secteur_choisi_recherche = st.selectbox(
-        "Secteur d'activité (optionnel — pour cibler ou analyser les offres par secteur)",
+        "Secteur d'activité",
         libelles_secteurs_recherche,
         key="recruteur_secteur_recherche",
     )
     secteur_code_recherche = options_secteurs_recruteur[secteur_choisi_recherche]
 
-    recherche_possible = toutes_les_societes or bool(nom_societe_recherche.strip())
+    nom_societe_recherche = st.text_input(
+        "Nom de la société (optionnel — laisse vide pour voir tout le secteur)",
+        key="recruteur_nom_societe",
+        placeholder="ex: Airbus Helicopters, BNP Paribas...",
+    )
 
-    if not recherche_possible:
-        st.info("Saisis le nom d'une société, ou coche « Toutes les sociétés », pour lancer la recherche.")
-    else:
-        label_bouton = "🔍 Afficher tous les besoins" if toutes_les_societes else "🔍 Rechercher cette société"
-        if st.button(label_bouton, key="btn_charger_entreprises"):
-            with st.spinner("Recherche des offres..."):
-                if toutes_les_societes:
-                    st.session_state["recruteur_offres_entreprises"] = rechercher_offres_completes(
-                        "TOUS", departement_recruteur, max_pages=5, secteur_activite=secteur_code_recherche
-                    )
-                else:
-                    offres_brutes = rechercher_offres_completes(
-                        "TOUS", departement_recruteur, max_pages=3,
-                        mots_cles=nom_societe_recherche, secteur_activite=secteur_code_recherche,
-                    )
-                    # Filtre de précision côté client : motsCles peut remonter des offres
-                    # dont le texte mentionne la société sans qu'elle soit l'employeur —
-                    # on ne garde que celles où le nom de l'entreprise correspond vraiment.
-                    terme = nom_societe_recherche.strip().lower()
-                    st.session_state["recruteur_offres_entreprises"] = [
-                        o for o in offres_brutes
-                        if terme in ((o.get("entreprise", {}) or {}).get("nom") or "").strip().lower()
-                    ]
-                # Nouvelle recherche : les tables de sélection ci-dessous sont recréées
-                # (clé incluant ce compteur), pour ne pas garder une sélection obsolète.
-                st.session_state["recruteur_recherche_compteur"] += 1
-
-        if "recruteur_offres_entreprises" in st.session_state:
-            offres_disponibles = st.session_state["recruteur_offres_entreprises"]
-            compteur_recherche = st.session_state["recruteur_recherche_compteur"]
-
-            if not offres_disponibles:
-                st.info("Aucune offre trouvée pour cette recherche dans ce département.")
-            else:
-                # --- Analyse par secteur : répartition des offres trouvées ---
-                compteur_secteurs = Counter()
-                for o in offres_disponibles:
-                    libelle_secteur = o.get("secteurActiviteLibelle") or "Secteur non précisé"
-                    compteur_secteurs[libelle_secteur] += 1
-                df_secteurs = pd.DataFrame(
-                    compteur_secteurs.items(), columns=["Secteur", "Nombre d'offres"]
-                ).sort_values("Nombre d'offres", ascending=False).reset_index(drop=True)
-                with st.expander("📊 Répartition des offres par secteur"):
-                    st.dataframe(df_secteurs, use_container_width=True, hide_index=True)
-
-                # --- Étape 1 : liste des sociétés + nombre d'offres — cliquer sur une ligne ---
-                offres_par_entreprise = {}
-                for o in offres_disponibles:
-                    nom_entreprise = (o.get("entreprise", {}) or {}).get("nom") or "Entreprise non précisée"
-                    offres_par_entreprise.setdefault(nom_entreprise, []).append(o)
-
-                df_entreprises_compte = pd.DataFrame(
-                    [
-                        {"Société": nom, "Offres publiées": len(offres)}
-                        for nom, offres in offres_par_entreprise.items()
-                    ]
-                ).sort_values("Offres publiées", ascending=False).reset_index(drop=True)
-
-                # --- Analyse : postes les plus recherchés + top recruteurs ---
-                compteur_postes = Counter()
-                for o in offres_disponibles:
-                    intitule = (o.get("intitule") or "").strip()
-                    if intitule:
-                        compteur_postes[intitule] += 1
-                df_postes_recherches = pd.DataFrame(
-                    compteur_postes.most_common(15), columns=["Poste", "Nombre d'offres"]
+    if st.button("🔍 Rechercher", key="btn_charger_entreprises", type="primary"):
+        with st.spinner("Recherche des offres..."):
+            if nom_societe_recherche.strip():
+                offres_brutes = rechercher_offres_completes(
+                    "TOUS", departement_recruteur, max_pages=3,
+                    mots_cles=nom_societe_recherche, secteur_activite=secteur_code_recherche,
                 )
+                # Filtre de précision côté client : motsCles peut remonter des offres
+                # dont le texte mentionne la société sans qu'elle soit l'employeur —
+                # on ne garde que celles où le nom de l'entreprise correspond vraiment.
+                terme = nom_societe_recherche.strip().lower()
+                st.session_state["recruteur_offres_entreprises"] = [
+                    o for o in offres_brutes
+                    if terme in ((o.get("entreprise", {}) or {}).get("nom") or "").strip().lower()
+                ]
+            else:
+                st.session_state["recruteur_offres_entreprises"] = rechercher_offres_completes(
+                    "TOUS", departement_recruteur, max_pages=5, secteur_activite=secteur_code_recherche
+                )
+            # Nouvelle recherche : les tables de sélection ci-dessous sont recréées
+            # (clé incluant ce compteur), pour ne pas garder une sélection obsolète.
+            st.session_state["recruteur_recherche_compteur"] += 1
 
-                col_postes, col_recruteurs = st.columns(2)
-                with col_postes:
-                    with st.expander("🏆 Postes les plus recherchés"):
-                        st.dataframe(df_postes_recherches, use_container_width=True, hide_index=True)
-                with col_recruteurs:
-                    with st.expander("🏆 Top recruteurs"):
-                        st.dataframe(
-                            df_entreprises_compte.head(15), use_container_width=True, hide_index=True
-                        )
+    if "recruteur_offres_entreprises" in st.session_state:
+        offres_disponibles = st.session_state["recruteur_offres_entreprises"]
+        compteur_recherche = st.session_state["recruteur_recherche_compteur"]
 
-                st.caption("👇 Clique sur une société pour voir ses offres.")
-                selection_entreprise = st.dataframe(
-                    df_entreprises_compte,
+        if not offres_disponibles:
+            st.info("Aucune offre trouvée pour cette recherche dans ce département.")
+        else:
+            # --- Analyse par secteur : répartition des offres trouvées ---
+            compteur_secteurs = Counter()
+            for o in offres_disponibles:
+                libelle_secteur = o.get("secteurActiviteLibelle") or "Secteur non précisé"
+                compteur_secteurs[libelle_secteur] += 1
+            df_secteurs = pd.DataFrame(
+                compteur_secteurs.items(), columns=["Secteur", "Nombre d'offres"]
+            ).sort_values("Nombre d'offres", ascending=False).reset_index(drop=True)
+            with st.expander("📊 Répartition des offres par secteur"):
+                st.caption("👇 Clique sur un secteur pour voir les postes recherchés dans ce secteur.")
+                selection_secteur = st.dataframe(
+                    df_secteurs,
                     use_container_width=True,
                     hide_index=True,
                     on_select="rerun",
                     selection_mode="single-row",
-                    key=f"table_entreprises_besoin_{compteur_recherche}",
+                    key=f"table_secteurs_{compteur_recherche}",
+                )
+                lignes_secteur_sel = selection_secteur["selection"]["rows"]
+                secteur_choisi_analyse = (
+                    df_secteurs.iloc[lignes_secteur_sel[0]]["Secteur"] if lignes_secteur_sel else None
                 )
 
-                lignes_entreprise_sel = selection_entreprise["selection"]["rows"]
-                entreprise_choisie = (
-                    df_entreprises_compte.iloc[lignes_entreprise_sel[0]]["Société"]
-                    if lignes_entreprise_sel else None
-                )
+                if secteur_choisi_analyse:
+                    offres_du_secteur = [
+                        o for o in offres_disponibles
+                        if (o.get("secteurActiviteLibelle") or "Secteur non précisé") == secteur_choisi_analyse
+                    ]
 
-                # --- Étape 2 : sous-liste des offres de la société choisie — cliquer sur une ligne ---
-                if entreprise_choisie:
-                    offres_de_lentreprise = offres_par_entreprise[entreprise_choisie]
-                    st.markdown(f"##### 📋 Offres chez {entreprise_choisie}")
+                    compteur_postes_secteur = Counter()
+                    for o in offres_du_secteur:
+                        intitule = (o.get("intitule") or "").strip()
+                        if intitule:
+                            compteur_postes_secteur[intitule] += 1
+                    df_postes_secteur = pd.DataFrame(
+                        compteur_postes_secteur.most_common(), columns=["Poste", "Nombre d'offres"]
+                    )
 
-                    df_offres_entreprise = pd.DataFrame([
-                        {
-                            "Intitulé": o.get("intitule", "(sans titre)"),
-                            "Ville": (o.get("lieuTravail", {}) or {}).get("libelle", "—"),
-                            "Type de contrat": o.get("typeContratLibelle") or o.get("typeContrat") or "—",
-                        }
-                        for o in offres_de_lentreprise
-                    ])
-
-                    st.caption("👇 Clique sur une offre pour voir la fiche de poste.")
-                    selection_offre = st.dataframe(
-                        df_offres_entreprise,
+                    st.markdown(f"###### 🧑‍💼 Postes recherchés — {secteur_choisi_analyse}")
+                    st.caption("👇 Clique sur un poste pour voir ses offres.")
+                    selection_poste_secteur = st.dataframe(
+                        df_postes_secteur,
                         use_container_width=True,
                         hide_index=True,
                         on_select="rerun",
                         selection_mode="single-row",
-                        key=f"table_offres_besoin_{compteur_recherche}_{entreprise_choisie}",
+                        key=f"table_postes_secteur_{compteur_recherche}_{secteur_choisi_analyse}",
+                    )
+                    lignes_poste_secteur_sel = selection_poste_secteur["selection"]["rows"]
+                    poste_choisi_analyse = (
+                        df_postes_secteur.iloc[lignes_poste_secteur_sel[0]]["Poste"]
+                        if lignes_poste_secteur_sel else None
                     )
 
-                    lignes_offre_sel = selection_offre["selection"]["rows"]
+                    if poste_choisi_analyse:
+                        offres_du_poste_secteur = [
+                            o for o in offres_du_secteur
+                            if (o.get("intitule") or "").strip() == poste_choisi_analyse
+                        ]
 
-                    # --- Étape 3 : fiche de poste + bouton de matching ---
-                    if lignes_offre_sel:
-                        offre_selectionnee = offres_de_lentreprise[lignes_offre_sel[0]]
-
-                        st.markdown(f"##### 📄 Fiche de poste — {offre_selectionnee.get('intitule', '')}")
-                        type_contrat = offre_selectionnee.get("typeContratLibelle") or offre_selectionnee.get("typeContrat")
-                        if type_contrat:
-                            st.markdown(f"**Type de contrat :** {type_contrat}")
-                        salaire_offre = (offre_selectionnee.get("salaire", {}) or {}).get("libelle")
-                        if salaire_offre:
-                            st.markdown(f"**Salaire :** {salaire_offre}")
-                        if offre_selectionnee.get("description"):
-                            st.markdown("**Description :**")
-                            st.write(offre_selectionnee["description"])
-                        competences_offre = offre_selectionnee.get("competences", [])
-                        if competences_offre:
-                            libelles_comp = ", ".join(c.get("libelle", "") for c in competences_offre if c.get("libelle"))
-                            if libelles_comp:
-                                st.markdown(f"**Compétences demandées :** {libelles_comp}")
-
-                        if st.button("🎯 Faire un matching pour cette offre", type="primary", key="btn_matching_offre"):
-                            if not st.session_state["recruteur_profils"]:
-                                st.warning(
-                                    "Aucun profil candidat enregistré — ajoute-en dans l'onglet "
-                                    "« 👥 Profils candidats » avant de lancer le matching."
-                                )
-                            else:
-                                lignes_resultat = []
-                                for profil in st.session_state["recruteur_profils"]:
-                                    competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
-                                    outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
-                                    langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
-
-                                    score, detail = calculer_correspondance_recruteur(
-                                        offre_selectionnee,
-                                        profil.get("poste_souhaite", ""),
-                                        competences_liste, outils_liste, langages_liste,
-                                        profil.get("secteur_souhaite", ""),
-                                    )
-                                    score_valeur = score if score is not None else 0
-                                    lignes_resultat.append((
-                                        score_valeur,
-                                        {
-                                            "Candidat": profil.get("nom") or "(sans nom)",
-                                            "Score": f"{score}%" if score is not None else "N/C",
-                                            **detail,
-                                        },
-                                    ))
-
-                                lignes_resultat.sort(key=lambda x: x[0], reverse=True)
-                                # On ne garde que les candidats avec un score strictement positif —
-                                # un 0% (ou N/C compté comme 0) n'apporte rien à afficher.
-                                lignes_pertinentes = [ligne for score_valeur, ligne in lignes_resultat if score_valeur > 0]
-
-                                # Stocké en session (et pas seulement affiché ici) pour que le
-                                # tableau + le choix de présentation survivent au rerun déclenché
-                                # par le bouton "Enregistrer la présentation" plus bas.
-                                offre_id_selectionnee = offre_selectionnee.get("id") or (
-                                    f"{offre_selectionnee.get('intitule', '')}_{entreprise_choisie}"
-                                )
-                                st.session_state["recruteur_dernier_matching"] = {
-                                    "offre_id": offre_id_selectionnee,
-                                    "offre_intitule": offre_selectionnee.get("intitule", ""),
-                                    "entreprise_nom": entreprise_choisie,
-                                    "lignes": lignes_pertinentes,
-                                }
-
-                        # --- Affichage du dernier matching (persiste hors du clic du bouton) ---
-                        dernier_matching = st.session_state.get("recruteur_dernier_matching")
-                        offre_id_courante = offre_selectionnee.get("id") or (
-                            f"{offre_selectionnee.get('intitule', '')}_{entreprise_choisie}"
+                        st.markdown(f"###### 📋 Offres — {poste_choisi_analyse} ({secteur_choisi_analyse})")
+                        df_offres_poste_secteur = pd.DataFrame([
+                            {
+                                "Société": (o.get("entreprise", {}) or {}).get("nom") or "Entreprise non précisée",
+                                "Ville": (o.get("lieuTravail", {}) or {}).get("libelle", "—"),
+                                "Type de contrat": o.get("typeContratLibelle") or o.get("typeContrat") or "—",
+                            }
+                            for o in offres_du_poste_secteur
+                        ])
+                        st.caption("👇 Clique sur une offre pour voir la fiche de poste.")
+                        selection_offre_secteur = st.dataframe(
+                            df_offres_poste_secteur,
+                            use_container_width=True,
+                            hide_index=True,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key=f"table_offres_secteur_{compteur_recherche}_{secteur_choisi_analyse}_{poste_choisi_analyse}",
                         )
-                        if dernier_matching and dernier_matching["offre_id"] == offre_id_courante:
-                            st.markdown(f"###### 🏆 Classement des candidats pour « {dernier_matching['offre_intitule']} »")
-                            if not dernier_matching["lignes"]:
-                                st.info("Aucun profil ne correspond à cette offre.")
-                            else:
-                                df_resultat_offre = pd.DataFrame(dernier_matching["lignes"])
-                                st.dataframe(df_resultat_offre, use_container_width=True, hide_index=True)
-                                st.caption(
-                                    "Score pondéré sur 3 critères (poste 50% · compétences 30% · secteur 20%), "
-                                    "calculé pour cette offre précise — pas une moyenne sur plusieurs offres."
-                                )
+                        lignes_offre_secteur_sel = selection_offre_secteur["selection"]["rows"]
 
-                                # --- Présentation d'un ou plusieurs candidats à cette offre ---
-                                noms_candidats_pertinents = [l["Candidat"] for l in dernier_matching["lignes"]]
-                                candidats_a_presenter = st.multiselect(
-                                    "Candidat(s) à présenter pour cette offre",
-                                    options=noms_candidats_pertinents,
-                                    key="recruteur_candidats_a_presenter",
-                                )
-                                if st.button("📤 Enregistrer la présentation", key="btn_enregistrer_presentation"):
-                                    if not candidats_a_presenter:
-                                        st.warning("Sélectionne au moins un candidat.")
-                                    else:
-                                        nb_ajoutes, nb_deja_presentes = 0, 0
-                                        for nom_candidat in candidats_a_presenter:
-                                            profil_correspondant = next(
-                                                (
-                                                    p for p in st.session_state["recruteur_profils"]
-                                                    if (p.get("nom") or "(sans nom)") == nom_candidat
-                                                ),
-                                                None,
-                                            )
-                                            candidat_id = profil_correspondant.get("id") if profil_correspondant else None
-                                            poste_souhaite_candidat = (
-                                                profil_correspondant.get("poste_souhaite", "") if profil_correspondant else ""
-                                            )
+                        if lignes_offre_secteur_sel:
+                            offre_secteur_selectionnee = offres_du_poste_secteur[lignes_offre_secteur_sel[0]]
+                            entreprise_offre_secteur = (
+                                (offre_secteur_selectionnee.get("entreprise", {}) or {}).get("nom")
+                                or "Entreprise non précisée"
+                            )
+                            afficher_fiche_offre_et_matching(
+                                offre_secteur_selectionnee, entreprise_offre_secteur,
+                                key_suffix=f"secteur_{compteur_recherche}",
+                            )
 
-                                            if db.base_disponible():
-                                                if db.candidature_existe(candidat_id, nom_candidat, dernier_matching["offre_id"]):
-                                                    nb_deja_presentes += 1
-                                                    continue
-                                                nouvel_id = db.ajouter_candidature(
-                                                    candidat_id, nom_candidat, poste_souhaite_candidat,
-                                                    dernier_matching["offre_id"], dernier_matching["offre_intitule"],
-                                                    dernier_matching["entreprise_nom"],
-                                                )
-                                                st.session_state["recruteur_candidatures"].insert(0, {
-                                                    "id": nouvel_id,
-                                                    "candidat_id": candidat_id,
-                                                    "candidat_nom": nom_candidat,
-                                                    "candidat_poste_souhaite": poste_souhaite_candidat,
-                                                    "offre_id": dernier_matching["offre_id"],
-                                                    "offre_intitule": dernier_matching["offre_intitule"],
-                                                    "entreprise_nom": dernier_matching["entreprise_nom"],
-                                                    "statut": db.STATUTS_CANDIDATURE[0],
-                                                })
-                                            else:
-                                                deja_presente = any(
-                                                    c.get("candidat_nom") == nom_candidat
-                                                    and c.get("offre_id") == dernier_matching["offre_id"]
-                                                    for c in st.session_state["recruteur_candidatures"]
-                                                )
-                                                if deja_presente:
-                                                    nb_deja_presentes += 1
-                                                    continue
-                                                st.session_state["recruteur_candidatures"].insert(0, {
-                                                    "id": None,
-                                                    "candidat_id": candidat_id,
-                                                    "candidat_nom": nom_candidat,
-                                                    "candidat_poste_souhaite": poste_souhaite_candidat,
-                                                    "offre_id": dernier_matching["offre_id"],
-                                                    "offre_intitule": dernier_matching["offre_intitule"],
-                                                    "entreprise_nom": dernier_matching["entreprise_nom"],
-                                                    "statut": db.STATUTS_CANDIDATURE[0],
-                                                })
-                                            nb_ajoutes += 1
+            # --- Étape 1 : liste des sociétés + nombre d'offres — cliquer sur une ligne ---
+            offres_par_entreprise = {}
+            for o in offres_disponibles:
+                nom_entreprise = (o.get("entreprise", {}) or {}).get("nom") or "Entreprise non précisée"
+                offres_par_entreprise.setdefault(nom_entreprise, []).append(o)
 
-                                        if nb_ajoutes:
-                                            st.success(
-                                                f"{nb_ajoutes} candidature(s) enregistrée(s) — à suivre dans l'onglet "
-                                                "« 📤 Candidature envoyée »."
-                                            )
-                                        if nb_deja_presentes:
-                                            st.info(
-                                                f"{nb_deja_presentes} candidat(s) déjà présenté(s) à cette offre, non dupliqué(s)."
-                                            )
+            df_entreprises_compte = pd.DataFrame(
+                [
+                    {"Société": nom, "Offres publiées": len(offres)}
+                    for nom, offres in offres_par_entreprise.items()
+                ]
+            ).sort_values("Offres publiées", ascending=False).reset_index(drop=True)
+
+            # --- Analyse : postes les plus recherchés + top recruteurs ---
+            compteur_postes = Counter()
+            for o in offres_disponibles:
+                intitule = (o.get("intitule") or "").strip()
+                if intitule:
+                    compteur_postes[intitule] += 1
+            df_postes_recherches = pd.DataFrame(
+                compteur_postes.most_common(15), columns=["Poste", "Nombre d'offres"]
+            )
+
+            col_postes, col_recruteurs = st.columns(2)
+            with col_postes:
+                with st.expander("🏆 Postes les plus recherchés"):
+                    st.dataframe(df_postes_recherches, use_container_width=True, hide_index=True)
+            with col_recruteurs:
+                with st.expander("🏆 Top recruteurs"):
+                    st.dataframe(
+                        df_entreprises_compte.head(15), use_container_width=True, hide_index=True
+                    )
+
+            st.caption("👇 Clique sur une société pour voir ses offres.")
+            selection_entreprise = st.dataframe(
+                df_entreprises_compte,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=f"table_entreprises_besoin_{compteur_recherche}",
+            )
+
+            lignes_entreprise_sel = selection_entreprise["selection"]["rows"]
+            entreprise_choisie = (
+                df_entreprises_compte.iloc[lignes_entreprise_sel[0]]["Société"]
+                if lignes_entreprise_sel else None
+            )
+
+            # --- Étape 2 : sous-liste des offres de la société choisie — cliquer sur une ligne ---
+            if entreprise_choisie:
+                offres_de_lentreprise = offres_par_entreprise[entreprise_choisie]
+                st.markdown(f"##### 📋 Offres chez {entreprise_choisie}")
+
+                df_offres_entreprise = pd.DataFrame([
+                    {
+                        "Intitulé": o.get("intitule", "(sans titre)"),
+                        "Ville": (o.get("lieuTravail", {}) or {}).get("libelle", "—"),
+                        "Type de contrat": o.get("typeContratLibelle") or o.get("typeContrat") or "—",
+                    }
+                    for o in offres_de_lentreprise
+                ])
+
+                st.caption("👇 Clique sur une offre pour voir la fiche de poste.")
+                selection_offre = st.dataframe(
+                    df_offres_entreprise,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key=f"table_offres_besoin_{compteur_recherche}_{entreprise_choisie}",
+                )
+
+                lignes_offre_sel = selection_offre["selection"]["rows"]
+
+                # --- Étape 3 : fiche de poste + bouton de matching ---
+                if lignes_offre_sel:
+                    offre_selectionnee = offres_de_lentreprise[lignes_offre_sel[0]]
+                    afficher_fiche_offre_et_matching(
+                        offre_selectionnee, entreprise_choisie, key_suffix=f"entreprise_{compteur_recherche}"
+                    )
 
     st.divider()
 
 # ===========================================================================
-# ONGLET 2 — Poste ciblé : recherche d'un poste précis + comparaison globale
+# ONGLET 2 — Vivier de talents : recherche d'un poste précis + comparaison globale
 # ===========================================================================
 with tab_poste_cible:
     st.markdown(
@@ -616,7 +704,72 @@ with tab_candidatures:
             st.rerun()
 
 # ===========================================================================
-# ONGLET 4 — Profils candidats : gestion dédiée (ajout, import, édition, suppression)
+# ONGLET 4 — Comptes actifs : sociétés où l'on a au moins une candidature
+# "En cours" ou "Clôturée - retenue". Vue calculée dynamiquement sur le
+# suivi des candidatures (pas de donnée propre à stocker) — une candidature
+# qui passe en "Clôturée - non retenue" ne compte plus, et la société sort
+# de la liste si elle n'a plus aucune candidature active.
+# ===========================================================================
+with tab_comptes_actifs:
+    st.markdown("#### 🤝 Comptes actifs")
+    st.caption(
+        "Sociétés où l'on a déjà des candidats en cours ou placés — pour repérer où "
+        "essayer d'en présenter d'autres."
+    )
+
+    STATUTS_COMPTE_ACTIF = ("En cours", "Clôturée - retenue")
+    candidatures_actives = [
+        c for c in st.session_state["recruteur_candidatures"]
+        if c.get("statut") in STATUTS_COMPTE_ACTIF
+    ]
+
+    if not candidatures_actives:
+        st.info(
+            "Aucun compte actif pour l'instant — une société apparaît ici dès qu'une "
+            "candidature y est « En cours » ou « Clôturée - retenue »."
+        )
+    else:
+        candidatures_par_entreprise = {}
+        for c in candidatures_actives:
+            nom_entreprise = c.get("entreprise_nom") or "Entreprise non précisée"
+            candidatures_par_entreprise.setdefault(nom_entreprise, []).append(c)
+
+        df_comptes_actifs = pd.DataFrame(
+            [
+                {"Société": nom, "Candidat(s) actif(s)": len(liste)}
+                for nom, liste in candidatures_par_entreprise.items()
+            ]
+        ).sort_values("Candidat(s) actif(s)", ascending=False).reset_index(drop=True)
+
+        st.caption("👇 Clique sur une société pour voir le détail de ses candidatures actives.")
+        selection_compte = st.dataframe(
+            df_comptes_actifs,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="table_comptes_actifs",
+        )
+        lignes_compte_sel = selection_compte["selection"]["rows"]
+        entreprise_compte_choisie = (
+            df_comptes_actifs.iloc[lignes_compte_sel[0]]["Société"] if lignes_compte_sel else None
+        )
+
+        if entreprise_compte_choisie:
+            st.markdown(f"##### 📋 Candidatures actives chez {entreprise_compte_choisie}")
+            df_detail_compte = pd.DataFrame([
+                {
+                    "Candidat": c.get("candidat_nom") or "(sans nom)",
+                    "Poste recherché": c.get("candidat_poste_souhaite") or "—",
+                    "Offre": c.get("offre_intitule") or "—",
+                    "Statut": c.get("statut") or "—",
+                }
+                for c in candidatures_par_entreprise[entreprise_compte_choisie]
+            ])
+            st.dataframe(df_detail_compte, use_container_width=True, hide_index=True)
+
+# ===========================================================================
+# ONGLET 5 — Profils candidats : gestion dédiée (ajout, import, édition, suppression)
 # ===========================================================================
 with tab_profils:
     st.markdown("#### 👥 Profils candidats")
