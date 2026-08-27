@@ -38,7 +38,6 @@ from moteur_recherche import (
     suggerer_postes,
     _extraire_code_rome,
     resoudre_codes_rome,
-    offres_par_ville,
     rechercher_offres_completes,
     calculer_correspondance_offre,
     calculer_correspondance_recruteur,
@@ -175,6 +174,26 @@ with tab_besoin_entreprises:
                     ]
                 ).sort_values("Offres publiées", ascending=False).reset_index(drop=True)
 
+                # --- Analyse : postes les plus recherchés + top recruteurs ---
+                compteur_postes = Counter()
+                for o in offres_disponibles:
+                    intitule = (o.get("intitule") or "").strip()
+                    if intitule:
+                        compteur_postes[intitule] += 1
+                df_postes_recherches = pd.DataFrame(
+                    compteur_postes.most_common(15), columns=["Poste", "Nombre d'offres"]
+                )
+
+                col_postes, col_recruteurs = st.columns(2)
+                with col_postes:
+                    with st.expander("🏆 Postes les plus recherchés"):
+                        st.dataframe(df_postes_recherches, use_container_width=True, hide_index=True)
+                with col_recruteurs:
+                    with st.expander("🏆 Top recruteurs"):
+                        st.dataframe(
+                            df_entreprises_compte.head(15), use_container_width=True, hide_index=True
+                        )
+
                 st.caption("👇 Clique sur une société pour voir ses offres.")
                 selection_entreprise = st.dataframe(
                     df_entreprises_compte,
@@ -295,31 +314,69 @@ with tab_poste_cible:
     )
 
     # -----------------------------------------------------------------
+    # Filtre secteur — s'applique aux profils du vivier pris en compte
+    # plus bas (tableau "Tous les postes" et comparaison globale).
+    # -----------------------------------------------------------------
+    libelles_secteurs_vivier = list(options_secteurs_recruteur.keys())
+    secteur_choisi_vivier = st.selectbox(
+        "Filtrer le vivier par secteur souhaité (optionnel)",
+        libelles_secteurs_vivier,
+        key="recruteur_secteur_vivier",
+    )
+    secteur_code_vivier = options_secteurs_recruteur[secteur_choisi_vivier]
+
+    profils_vivier = st.session_state["recruteur_profils"]
+    if secteur_code_vivier:
+        profils_vivier = [p for p in profils_vivier if p.get("secteur_souhaite") == secteur_code_vivier]
+
+    # -----------------------------------------------------------------
     # Poste ciblé
     # -----------------------------------------------------------------
     st.markdown("#### 🎯 Poste ciblé")
+
+    tous_les_postes = st.checkbox(
+        "🔘 Tous les postes — afficher la répartition des postes recherchés par nos candidats",
+        key="recruteur_tous_les_postes",
+    )
 
     poste_texte = st.text_input(
         "Intitulé du poste recherché par l'agence pour ses clients",
         key="recruteur_poste_texte",
         placeholder="ex: Chef de projet, Data Analyst...",
+        disabled=tous_les_postes,
     )
 
     poste_confirme_label = None
-    if poste_texte.strip():
-        suggestions = suggerer_postes(poste_texte)
-        if suggestions:
-            st.caption("💡 Suggestions — clique pour sélectionner :")
-            colonnes_tags = st.columns(2)
-            for i, suggestion in enumerate(suggestions):
-                col_tag = colonnes_tags[i % 2]
-                if col_tag.button(suggestion, key=f"recruteur_tag_{i}_{suggestion}"):
-                    st.session_state["recruteur_poste_confirme"] = suggestion
-                    st.rerun()
 
-    if "recruteur_poste_confirme" in st.session_state:
-        poste_confirme_label = st.session_state["recruteur_poste_confirme"]
-        st.success(f"Poste sélectionné : **{poste_confirme_label}**")
+    if tous_les_postes:
+        compteur_postes_candidats = Counter()
+        for p in profils_vivier:
+            poste = (p.get("poste_souhaite") or "").strip()
+            compteur_postes_candidats[poste or "(non renseigné)"] += 1
+
+        st.markdown(f"##### 📋 Postes recherchés par nos candidats ({len(profils_vivier)} profil(s))")
+        if not profils_vivier:
+            st.info("Aucun profil candidat ne correspond à ce filtre.")
+        else:
+            df_postes_candidats = pd.DataFrame(
+                compteur_postes_candidats.most_common(), columns=["Poste recherché", "Nombre de candidats"]
+            )
+            st.dataframe(df_postes_candidats, use_container_width=True, hide_index=True)
+    else:
+        if poste_texte.strip():
+            suggestions = suggerer_postes(poste_texte)
+            if suggestions:
+                st.caption("💡 Suggestions — clique pour sélectionner :")
+                colonnes_tags = st.columns(2)
+                for i, suggestion in enumerate(suggestions):
+                    col_tag = colonnes_tags[i % 2]
+                    if col_tag.button(suggestion, key=f"recruteur_tag_{i}_{suggestion}"):
+                        st.session_state["recruteur_poste_confirme"] = suggestion
+                        st.rerun()
+
+        if "recruteur_poste_confirme" in st.session_state:
+            poste_confirme_label = st.session_state["recruteur_poste_confirme"]
+            st.success(f"Poste sélectionné : **{poste_confirme_label}**")
 
     st.divider()
 
@@ -330,10 +387,10 @@ with tab_poste_cible:
     if st.button("🚀 Comparer les profils sur ce poste", type="primary", key="btn_comparaison_globale"):
         if not poste_confirme_label:
             st.warning("Sélectionne d'abord un poste ciblé (section 🎯 ci-dessus).")
-        elif not st.session_state["recruteur_profils"]:
+        elif not profils_vivier:
             st.warning(
-                "Aucun profil candidat enregistré — ajoute-en dans l'onglet "
-                "« 👥 Profils candidats » avant de lancer la comparaison."
+                "Aucun profil candidat ne correspond au filtre secteur actuel — ajuste le filtre "
+                "ou ajoute des profils dans l'onglet « 👥 Profils candidats »."
             )
         else:
             item_poste = next(
@@ -349,11 +406,10 @@ with tab_poste_cible:
                 st.error("Impossible de résoudre ce poste pour l'instant. Essaie un autre intitulé.")
             else:
                 with st.spinner("Récupération des offres et calcul des scores..."):
-                    df_villes, total_region, _, _, _, _ = offres_par_ville(code_rome, departement_recruteur)
                     offres_completes = rechercher_offres_completes(code_rome, departement_recruteur)
 
                     resultats_classement = []
-                    for profil in st.session_state["recruteur_profils"]:
+                    for profil in profils_vivier:
                         competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
                         outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
                         langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
@@ -380,7 +436,7 @@ with tab_poste_cible:
                             },
                         ))
 
-                st.markdown(f"##### 📊 Classement — {total_region} offre(s) trouvée(s) dans le département {departement_recruteur}")
+                st.markdown("##### 📊 Classement des profils candidats")
                 if not offres_completes:
                     st.info("Aucune offre trouvée pour ce poste/département — comparaison non calculable.")
                 else:
