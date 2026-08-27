@@ -470,6 +470,21 @@ with tab_besoin_entreprises:
                         offre_selectionnee, entreprise_choisie, key_suffix=f"entreprise_{compteur_recherche}"
                     )
 
+            st.divider()
+
+            # --- Postes les plus recherchés : s'adapte à la recherche en cours
+            # (secteur et/ou société), calculé sur les offres trouvées ci-dessus. ---
+            compteur_postes_recherche = Counter()
+            for o in offres_disponibles:
+                intitule = (o.get("intitule") or "").strip()
+                if intitule:
+                    compteur_postes_recherche[intitule] += 1
+            df_postes_recherche = pd.DataFrame(
+                compteur_postes_recherche.most_common(15), columns=["Poste", "Nombre d'offres"]
+            )
+            with st.expander("🏆 Postes les plus recherchés"):
+                st.dataframe(df_postes_recherche, use_container_width=True, hide_index=True)
+
     st.divider()
 
 # ===========================================================================
@@ -481,32 +496,6 @@ with tab_poste_cible:
         "moyen de chaque profil candidat sur toutes les offres actuellement disponibles "
         "pour ce poste dans le département."
     )
-
-    # -----------------------------------------------------------------
-    # Postes les plus recherchés — repris de la dernière recherche faite
-    # dans l'onglet "Besoin des entreprises" (marché), pour la comparer
-    # avec le tableau "Postes recherchés par nos candidats" plus bas.
-    # -----------------------------------------------------------------
-    offres_derniere_recherche = st.session_state.get("recruteur_offres_entreprises", [])
-    with st.expander("🏆 Postes les plus recherchés (marché)"):
-        if not offres_derniere_recherche:
-            st.info(
-                "Aucune recherche effectuée pour l'instant — lance une recherche dans l'onglet "
-                "« 🏢 Besoin des entreprises » pour voir apparaître les postes les plus "
-                "demandés sur ce marché."
-            )
-        else:
-            compteur_postes_marche = Counter()
-            for o in offres_derniere_recherche:
-                intitule = (o.get("intitule") or "").strip()
-                if intitule:
-                    compteur_postes_marche[intitule] += 1
-            df_postes_marche = pd.DataFrame(
-                compteur_postes_marche.most_common(15), columns=["Poste", "Nombre d'offres"]
-            )
-            st.dataframe(df_postes_marche, use_container_width=True, hide_index=True)
-
-    st.divider()
 
     # -----------------------------------------------------------------
     # Filtre secteur — s'applique aux profils du vivier pris en compte
