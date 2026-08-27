@@ -81,7 +81,7 @@ if "recruteur_recherche_compteur" not in st.session_state:
 departement_recruteur = st.text_input("Département", value="13", key="recruteur_departement")
 
 tab_besoin_entreprises, tab_poste_cible, tab_profils = st.tabs(
-    ["🏢 Besoin des entreprises", "🎯 Poste ciblé", "👥 Profils candidats"]
+    ["🏢 Besoin des entreprises", "📊 Vivier de talents", "👥 Profils candidats"]
 )
 
 # ===========================================================================
