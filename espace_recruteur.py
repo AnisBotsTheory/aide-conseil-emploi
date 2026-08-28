@@ -554,7 +554,8 @@ with tab_poste_cible:
         disabled=tous_les_postes,
     )
 
-    poste_confirme_label = None
+    if "recruteur_postes_confirmes" not in st.session_state:
+        st.session_state["recruteur_postes_confirmes"] = []
 
     if tous_les_postes:
         compteur_postes_candidats = Counter()
@@ -574,93 +575,115 @@ with tab_poste_cible:
         if poste_texte.strip():
             suggestions = suggerer_postes(poste_texte)
             if suggestions:
-                st.caption("💡 Suggestions — clique pour sélectionner :")
+                st.caption("💡 Suggestions — clique pour ajouter un ou plusieurs postes :")
                 colonnes_tags = st.columns(2)
                 for i, suggestion in enumerate(suggestions):
                     col_tag = colonnes_tags[i % 2]
-                    if col_tag.button(suggestion, key=f"recruteur_tag_{i}_{suggestion}"):
-                        st.session_state["recruteur_poste_confirme"] = suggestion
+                    deja_ajoute = suggestion in st.session_state["recruteur_postes_confirmes"]
+                    label_bouton = f"✓ {suggestion}" if deja_ajoute else suggestion
+                    if col_tag.button(label_bouton, key=f"recruteur_tag_{i}_{suggestion}", disabled=deja_ajoute):
+                        st.session_state["recruteur_postes_confirmes"].append(suggestion)
                         st.rerun()
 
-        if "recruteur_poste_confirme" in st.session_state:
-            poste_confirme_label = st.session_state["recruteur_poste_confirme"]
-            st.success(f"Poste sélectionné : **{poste_confirme_label}**")
+        if st.session_state["recruteur_postes_confirmes"]:
+            st.caption("Postes sélectionnés :")
+            for idx, poste_selectionne in enumerate(st.session_state["recruteur_postes_confirmes"]):
+                col_badge, col_retirer = st.columns([5, 1])
+                col_badge.success(f"**{poste_selectionne}**")
+                if col_retirer.button("✕", key=f"retirer_poste_{idx}"):
+                    st.session_state["recruteur_postes_confirmes"].pop(idx)
+                    st.rerun()
 
     st.divider()
 
     # -----------------------------------------------------------------
-    # Comparaison globale — score moyen sur toutes les offres du poste ciblé.
+    # Comparaison globale — score moyen sur toutes les offres des postes ciblés
+    # (un ou plusieurs), offres fusionnées et dédupliquées entre postes.
     # -----------------------------------------------------------------
     st.markdown("#### 📊 Comparaison globale")
-    if st.button("🚀 Comparer les profils sur ce poste", type="primary", key="btn_comparaison_globale"):
-        if not poste_confirme_label:
-            st.warning("Sélectionne d'abord un poste ciblé (section 🎯 ci-dessus).")
+    if st.button("🚀 Comparer les profils sur ce(s) poste(s)", type="primary", key="btn_comparaison_globale"):
+        postes_cibles = st.session_state["recruteur_postes_confirmes"]
+        if not postes_cibles:
+            st.warning("Sélectionne d'abord au moins un poste ciblé (section 🎯 ci-dessus).")
         elif not profils_vivier:
             st.warning(
                 "Aucun profil candidat ne correspond au filtre secteur actuel — ajuste le filtre "
                 "ou ajoute des profils dans l'onglet « 📥 Import & Profils »."
             )
         else:
-            item_poste = next(
-                (a for a in appellations if a.get("libelle", "").strip() == poste_confirme_label), None
-            )
-            code_rome = _extraire_code_rome(item_poste) if item_poste else None
-            if not code_rome:
-                with st.spinner("Résolution du poste..."):
-                    df_resolu = resoudre_codes_rome(mots_cles=poste_confirme_label, departement=departement_recruteur)
-                code_rome = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
+            with st.spinner("Résolution des postes et récupération des offres..."):
+                offres_par_id = {}
+                postes_non_resolus = []
+                for poste_label in postes_cibles:
+                    item_poste = next(
+                        (a for a in appellations if a.get("libelle", "").strip() == poste_label), None
+                    )
+                    code_rome = _extraire_code_rome(item_poste) if item_poste else None
+                    if not code_rome:
+                        df_resolu = resoudre_codes_rome(mots_cles=poste_label, departement=departement_recruteur)
+                        code_rome = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
 
-            if not code_rome:
-                st.error("Impossible de résoudre ce poste pour l'instant. Essaie un autre intitulé.")
+                    if not code_rome:
+                        postes_non_resolus.append(poste_label)
+                        continue
+
+                    for offre in rechercher_offres_completes(code_rome, departement_recruteur):
+                        cle_offre = offre.get("id") or f"{offre.get('intitule', '')}_{offre.get('entreprise', {}).get('nom', '')}"
+                        offres_par_id[cle_offre] = offre
+
+                offres_completes = list(offres_par_id.values())
+
+            if postes_non_resolus:
+                st.info(
+                    "Aucune offre trouvée pour : **" + ", ".join(postes_non_resolus) + "** — "
+                    "essaie un autre intitulé, ou ajoute d'autres postes ci-dessus pour élargir la comparaison."
+                )
+
+            if not offres_completes:
+                st.error("Aucune offre trouvée pour aucun des postes sélectionnés — comparaison non calculable.")
             else:
-                with st.spinner("Récupération des offres et calcul des scores..."):
-                    offres_completes = rechercher_offres_completes(code_rome, departement_recruteur)
+                resultats_classement = []
+                for profil in profils_vivier:
+                    competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
+                    outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
+                    langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
+                    poste_souhaite = profil.get("poste_souhaite", "")
+                    secteur_souhaite = profil.get("secteur_souhaite", "")
 
-                    resultats_classement = []
-                    for profil in profils_vivier:
-                        competences_liste = [c.strip() for c in profil.get("competences", "").split(",") if c.strip()]
-                        outils_liste = [c.strip() for c in profil.get("outils", "").split(",") if c.strip()]
-                        langages_liste = [c.strip() for c in profil.get("langages", "").split(",") if c.strip()]
-                        poste_souhaite = profil.get("poste_souhaite", "")
-                        secteur_souhaite = profil.get("secteur_souhaite", "")
+                    scores = []
+                    for offre in offres_completes:
+                        score, _ = calculer_correspondance_recruteur(
+                            offre, poste_souhaite, competences_liste, outils_liste, langages_liste, secteur_souhaite
+                        )
+                        if score is not None:
+                            scores.append(score)
 
-                        scores = []
-                        for offre in offres_completes:
-                            score, _ = calculer_correspondance_recruteur(
-                                offre, poste_souhaite, competences_liste, outils_liste, langages_liste, secteur_souhaite
-                            )
-                            if score is not None:
-                                scores.append(score)
-
-                        score_moyen = round(sum(scores) / len(scores)) if scores else None
-                        score_moyen_valeur = score_moyen if score_moyen is not None else 0
-                        resultats_classement.append((
-                            score_moyen_valeur,
-                            {
-                                "Candidat": profil.get("nom") or "(sans nom)",
-                                "Poste recherché": poste_souhaite or "—",
-                                "Score moyen de correspondance": f"{score_moyen}%" if score_moyen is not None else "N/C",
-                                "Offres analysées": len(offres_completes),
-                            },
-                        ))
+                    score_moyen = round(sum(scores) / len(scores)) if scores else None
+                    score_moyen_valeur = score_moyen if score_moyen is not None else 0
+                    resultats_classement.append((
+                        score_moyen_valeur,
+                        {
+                            "Candidat": profil.get("nom") or "(sans nom)",
+                            "Poste recherché": poste_souhaite or "—",
+                            "Score moyen de correspondance": f"{score_moyen}%" if score_moyen is not None else "N/C",
+                            "Offres analysées": len(offres_completes),
+                        },
+                    ))
 
                 st.markdown("##### 📊 Classement des profils candidats")
-                if not offres_completes:
-                    st.info("Aucune offre trouvée pour ce poste/département — comparaison non calculable.")
+                # On ne garde que les candidats avec un score moyen strictement positif.
+                resultats_pertinents = [ligne for score_valeur, ligne in resultats_classement if score_valeur > 0]
+                if not resultats_pertinents:
+                    st.info("Aucun profil ne correspond à ce(s) poste(s).")
                 else:
-                    # On ne garde que les candidats avec un score moyen strictement positif.
-                    resultats_pertinents = [ligne for score_valeur, ligne in resultats_classement if score_valeur > 0]
-                    if not resultats_pertinents:
-                        st.info("Aucun profil ne correspond à ce poste.")
-                    else:
-                        df_classement = pd.DataFrame(resultats_pertinents)
-                        st.dataframe(df_classement, use_container_width=True, hide_index=True)
-                        st.caption(
-                            "Score pondéré sur 3 critères : intitulé du poste souhaité (50%), "
-                            "compétences/outils/langages déclarés (30%), secteur d'activité souhaité "
-                            "(20%) — une dimension sans donnée à comparer est retirée du calcul et le "
-                            "poids des autres est réajusté en conséquence."
-                        )
+                    df_classement = pd.DataFrame(resultats_pertinents)
+                    st.dataframe(df_classement, use_container_width=True, hide_index=True)
+                    st.caption(
+                        "Score pondéré sur 3 critères : intitulé du poste souhaité (50%), "
+                        "compétences/outils/langages déclarés (30%), secteur d'activité souhaité "
+                        "(20%) — une dimension sans donnée à comparer est retirée du calcul et le "
+                        "poids des autres est réajusté en conséquence."
+                    )
 
 # ===========================================================================
 # ONGLET 3 — Candidature envoyée : suivi de qui a été présenté à quelle
@@ -815,7 +838,8 @@ with tab_profils:
             "stocké sur votre Drive/SharePoint — pas d'upload de fichier ici. Le secteur "
             "souhaité est rapproché automatiquement du référentiel officiel (libellé "
             "approchant) ; s'il n'est pas reconnu, il reste à choisir manuellement sur le "
-            "profil importé. Télécharge le modèle si besoin."
+            "profil importé. **Un nom déjà présent (dans le fichier ou déjà en base) est "
+            "écrasé avec les nouvelles données**, pas dupliqué. Télécharge le modèle si besoin."
         )
 
         modele = pd.DataFrame([
@@ -921,13 +945,61 @@ with tab_profils:
                         "secteur_souhaite": code_secteur_resolu,
                     })
 
+                # Doublons DANS le fichier importé lui-même (même nom sur plusieurs
+                # lignes) : on ne garde que la dernière occurrence, pour ne pas créer
+                # deux fois le même profil en une seule importation.
+                profils_importes_dedupliques = {}
+                for p in profils_importes:
+                    cle_nom = p["nom"].strip().lower()
+                    if cle_nom:
+                        profils_importes_dedupliques[cle_nom] = p
+                    else:
+                        profils_importes_dedupliques[id(p)] = p  # nom vide : jamais fusionné
+                profils_importes = list(profils_importes_dedupliques.values())
+
+                # Anti-doublon : un nom déjà présent en base (comparaison insensible à
+                # la casse/aux espaces) est écrasé avec les nouvelles données plutôt que
+                # dupliqué. Sans autre identifiant (email, téléphone) que le nom, deux
+                # candidats homonymes différents seraient à tort fusionnés — cas rare
+                # mais à garder en tête.
+                profils_existants_par_nom = {
+                    (p.get("nom") or "").strip().lower(): p
+                    for p in st.session_state["recruteur_profils"]
+                    if (p.get("nom") or "").strip()
+                }
+
+                profils_nouveaux, profils_a_mettre_a_jour = [], []
+                for p in profils_importes:
+                    cle_nom = p["nom"].strip().lower()
+                    profil_existant = profils_existants_par_nom.get(cle_nom) if cle_nom else None
+                    if profil_existant:
+                        profils_a_mettre_a_jour.append((profil_existant, p))
+                    else:
+                        profils_nouveaux.append(p)
+
                 if db.base_disponible():
-                    db.ajouter_profils_en_masse(profils_importes)
+                    if profils_nouveaux:
+                        db.ajouter_profils_en_masse(profils_nouveaux)
+                    for profil_existant, nouvelles_donnees in profils_a_mettre_a_jour:
+                        db.mettre_a_jour_profil(
+                            profil_existant["id"],
+                            nom=nouvelles_donnees["nom"], competences=nouvelles_donnees["competences"],
+                            outils=nouvelles_donnees["outils"], langages=nouvelles_donnees["langages"],
+                            poste_souhaite=nouvelles_donnees["poste_souhaite"],
+                            secteur_souhaite=nouvelles_donnees["secteur_souhaite"],
+                            cv_lien=nouvelles_donnees["cv_lien"], langues_parlees=nouvelles_donnees["langues_parlees"],
+                            mobilite=nouvelles_donnees["mobilite"],
+                        )
                     st.session_state["recruteur_profils"] = db.charger_profils()
                 else:
-                    st.session_state["recruteur_profils"].extend(profils_importes)
+                    for profil_existant, nouvelles_donnees in profils_a_mettre_a_jour:
+                        profil_existant.update(nouvelles_donnees)
+                    st.session_state["recruteur_profils"].extend(profils_nouveaux)
 
-                st.success(f"{len(profils_importes)} profil(s) importé(s) avec succès.")
+                st.success(
+                    f"{len(profils_nouveaux)} profil(s) ajouté(s), "
+                    f"{len(profils_a_mettre_a_jour)} doublon(s) mis à jour (nom déjà existant)."
+                )
                 if nb_secteurs_non_reconnus:
                     st.info(
                         f"{nb_secteurs_non_reconnus} secteur(s) saisi(s) n'ont pas été reconnus "
