@@ -41,6 +41,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from collections import Counter
+from datetime import datetime, timedelta
 
 from moteur_recherche import (
     get_referentiel_appellations,
@@ -53,6 +54,48 @@ from moteur_recherche import (
     get_secteurs_activite,
 )
 import stockage_recruteur as db
+
+# ---------------------------------------------------------------------------
+# Correspondance ville -> région, pour la répartition géographique du vivier
+# (onglet KPI). Couvre les principales villes françaises ; une ville absente
+# de cette liste est classée "Autre / non renseignée" plutôt que de faire
+# planter le calcul — cette liste est à enrichir au fil de l'usage réel.
+# ---------------------------------------------------------------------------
+VILLE_VERS_REGION = {
+    "paris": "Île-de-France", "versailles": "Île-de-France", "boulogne-billancourt": "Île-de-France",
+    "nanterre": "Île-de-France", "créteil": "Île-de-France", "saint-denis": "Île-de-France",
+    "lyon": "Auvergne-Rhône-Alpes", "grenoble": "Auvergne-Rhône-Alpes", "saint-étienne": "Auvergne-Rhône-Alpes",
+    "clermont-ferrand": "Auvergne-Rhône-Alpes", "annecy": "Auvergne-Rhône-Alpes", "chambéry": "Auvergne-Rhône-Alpes",
+    "valence": "Auvergne-Rhône-Alpes",
+    "marseille": "Provence-Alpes-Côte d'Azur", "nice": "Provence-Alpes-Côte d'Azur",
+    "toulon": "Provence-Alpes-Côte d'Azur", "aix-en-provence": "Provence-Alpes-Côte d'Azur",
+    "avignon": "Provence-Alpes-Côte d'Azur", "cannes": "Provence-Alpes-Côte d'Azur",
+    "toulouse": "Occitanie", "montpellier": "Occitanie", "nîmes": "Occitanie",
+    "perpignan": "Occitanie", "béziers": "Occitanie",
+    "bordeaux": "Nouvelle-Aquitaine", "limoges": "Nouvelle-Aquitaine", "poitiers": "Nouvelle-Aquitaine",
+    "pau": "Nouvelle-Aquitaine", "la rochelle": "Nouvelle-Aquitaine",
+    "lille": "Hauts-de-France", "amiens": "Hauts-de-France", "roubaix": "Hauts-de-France",
+    "tourcoing": "Hauts-de-France", "dunkerque": "Hauts-de-France",
+    "strasbourg": "Grand Est", "reims": "Grand Est", "metz": "Grand Est",
+    "nancy": "Grand Est", "mulhouse": "Grand Est",
+    "nantes": "Pays de la Loire", "angers": "Pays de la Loire", "le mans": "Pays de la Loire",
+    "saint-nazaire": "Pays de la Loire",
+    "rennes": "Bretagne", "brest": "Bretagne", "quimper": "Bretagne", "vannes": "Bretagne",
+    "rouen": "Normandie", "caen": "Normandie", "le havre": "Normandie",
+    "dijon": "Bourgogne-Franche-Comté", "besançon": "Bourgogne-Franche-Comté",
+    "orléans": "Centre-Val de Loire", "tours": "Centre-Val de Loire",
+    "ajaccio": "Corse", "bastia": "Corse",
+}
+
+
+def _resoudre_region(ville):
+    """Résout la région à partir d'une ville déclarée (mobilité candidat) — cf. VILLE_VERS_REGION."""
+    if not ville or not ville.strip():
+        return "Non renseignée"
+    return VILLE_VERS_REGION.get(ville.strip().lower(), "Autre / non répertoriée")
+
+
+STATUTS_COMPTE_ACTIF = ("En cours", "Clôturée - retenue")
 
 
 def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
@@ -168,6 +211,7 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
                 if not candidats_a_presenter:
                     st.warning("Coche au moins un candidat dans le tableau ci-dessus.")
                 else:
+                    offre_ville = (offre.get("lieuTravail", {}) or {}).get("libelle", "")
                     nb_ajoutes, nb_deja_presentes = 0, 0
                     for nom_candidat in candidats_a_presenter:
                         profil_correspondant = next(
@@ -193,6 +237,7 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
                                 candidat_id, nom_candidat, poste_souhaite_candidat,
                                 dernier_matching["offre_id"], dernier_matching["offre_intitule"],
                                 dernier_matching["entreprise_nom"], candidat_cv_lien=cv_lien_candidat,
+                                offre_ville=offre_ville,
                             )
                             st.session_state["recruteur_candidatures"].insert(0, {
                                 "id": nouvel_id,
@@ -202,8 +247,10 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
                                 "candidat_cv_lien": cv_lien_candidat,
                                 "offre_id": dernier_matching["offre_id"],
                                 "offre_intitule": dernier_matching["offre_intitule"],
+                                "offre_ville": offre_ville,
                                 "entreprise_nom": dernier_matching["entreprise_nom"],
                                 "statut": db.STATUTS_CANDIDATURE[0],
+                                "date_creation": datetime.now(),
                             })
                         else:
                             deja_presente = any(
@@ -222,8 +269,10 @@ def afficher_fiche_offre_et_matching(offre, entreprise_nom, key_suffix):
                                 "candidat_cv_lien": cv_lien_candidat,
                                 "offre_id": dernier_matching["offre_id"],
                                 "offre_intitule": dernier_matching["offre_intitule"],
+                                "offre_ville": offre_ville,
                                 "entreprise_nom": dernier_matching["entreprise_nom"],
                                 "statut": db.STATUTS_CANDIDATURE[0],
+                                "date_creation": datetime.now(),
                             })
                         nb_ajoutes += 1
 
@@ -277,8 +326,8 @@ if "recruteur_recherche_compteur" not in st.session_state:
 # talents" (comparaison globale) — un seul champ, affiché avant les onglets.
 departement_recruteur = st.text_input("Département", value="13", key="recruteur_departement")
 
-tab_besoin_entreprises, tab_poste_cible, tab_comptes_actifs, tab_candidatures, tab_profils = st.tabs(
-    ["🏢 Besoin des entreprises", "📊 Vivier de talents", "🤝 Comptes actifs", "📤 Candidature envoyée", "📥 Import & Profils"]
+tab_besoin_entreprises, tab_poste_cible, tab_comptes_actifs, tab_candidatures, tab_profils, tab_kpi = st.tabs(
+    ["🏢 Besoin des entreprises", "📊 Vivier de talents", "🤝 Comptes actifs", "📤 Candidature envoyée", "📥 Import & Profils", "📈 KPI"]
 )
 
 # ===========================================================================
@@ -309,12 +358,21 @@ with tab_besoin_entreprises:
         placeholder="ex: Airbus Helicopters, BNP Paribas...",
     )
 
+    options_anciennete = {
+        "Peu importe": None, "7 derniers jours": 7, "15 derniers jours": 15, "30 derniers jours": 30,
+    }
+    anciennete_choisie = st.selectbox(
+        "Ancienneté des offres (optionnel)", list(options_anciennete.keys()), key="recruteur_anciennete_offres",
+    )
+    jours_max_recherche = options_anciennete[anciennete_choisie]
+
     if st.button("🔍 Rechercher", key="btn_charger_entreprises", type="primary"):
         with st.spinner("Recherche des offres..."):
             if nom_societe_recherche.strip():
                 offres_brutes = rechercher_offres_completes(
                     "TOUS", departement_recruteur, max_pages=3,
                     mots_cles=nom_societe_recherche, secteur_activite=secteur_code_recherche,
+                    jours_max=jours_max_recherche,
                 )
                 # Filtre de précision côté client : motsCles peut remonter des offres
                 # dont le texte mentionne la société sans qu'elle soit l'employeur —
@@ -326,7 +384,8 @@ with tab_besoin_entreprises:
                 ]
             else:
                 st.session_state["recruteur_offres_entreprises"] = rechercher_offres_completes(
-                    "TOUS", departement_recruteur, max_pages=5, secteur_activite=secteur_code_recherche
+                    "TOUS", departement_recruteur, max_pages=5, secteur_activite=secteur_code_recherche,
+                    jours_max=jours_max_recherche,
                 )
             # Nouvelle recherche : les tables de sélection ci-dessous sont recréées
             # (clé incluant ce compteur), pour ne pas garder une sélection obsolète.
@@ -711,8 +770,31 @@ with tab_candidatures:
             "l'onglet « 🏢 Besoin des entreprises » après un matching sur une offre."
         )
     else:
+        # --- Filtre par date d'envoi de la candidature ---
+        col_date1, col_date2 = st.columns(2)
+        date_envoi_min = col_date1.date_input("Envoyées depuis le", value=None, key="filtre_date_envoi_min")
+        date_envoi_max = col_date2.date_input("Envoyées jusqu'au", value=None, key="filtre_date_envoi_max")
+
+        candidatures_affichees = st.session_state["recruteur_candidatures"]
+        if date_envoi_min or date_envoi_max:
+            candidatures_affichees = []
+            for c in st.session_state["recruteur_candidatures"]:
+                dc = c.get("date_creation")
+                if dc is None:
+                    continue
+                dc_date = dc.date() if hasattr(dc, "date") else dc
+                if date_envoi_min and dc_date < date_envoi_min:
+                    continue
+                if date_envoi_max and dc_date > date_envoi_max:
+                    continue
+                candidatures_affichees.append(c)
+            st.caption(
+                f"{len(candidatures_affichees)} candidature(s) sur "
+                f"{len(st.session_state['recruteur_candidatures'])} correspondent à ce filtre."
+            )
+
         a_supprimer_candidature = None
-        for i, candidature in enumerate(st.session_state["recruteur_candidatures"]):
+        for i, candidature in enumerate(candidatures_affichees):
             with st.container(border=True):
                 c1, c2, c3 = st.columns([2, 3, 2])
                 c1.markdown(
@@ -721,7 +803,7 @@ with tab_candidatures:
                 )
                 c2.markdown(
                     f"{candidature.get('offre_intitule') or '(offre sans titre)'}  \n"
-                    f"🏢 {candidature.get('entreprise_nom') or '—'}"
+                    f"🏢 {candidature.get('entreprise_nom') or '—'} · 📍 {candidature.get('offre_ville') or '—'}"
                 )
 
                 statuts = db.STATUTS_CANDIDATURE
@@ -730,6 +812,14 @@ with tab_candidatures:
                 nouveau_statut = c3.selectbox(
                     "Statut", statuts, index=index_statut, key=f"cand_statut_{i}"
                 )
+
+                date_envoi_affichee = candidature.get("date_creation")
+                if date_envoi_affichee is not None:
+                    date_str = (
+                        date_envoi_affichee.strftime("%d/%m/%Y")
+                        if hasattr(date_envoi_affichee, "strftime") else str(date_envoi_affichee)
+                    )
+                    st.caption(f"Envoyée le {date_str}")
 
                 c4, c5, c6 = st.columns(3)
                 if c4.button("💾 Mettre à jour", key=f"cand_save_{i}"):
@@ -740,13 +830,16 @@ with tab_candidatures:
                 if candidature.get("candidat_cv_lien", "").strip():
                     c5.link_button("📄 Voir le CV", candidature["candidat_cv_lien"].strip())
                 if c6.button("🗑️ Retirer", key=f"cand_suppr_{i}"):
-                    a_supprimer_candidature = i
+                    a_supprimer_candidature = candidature  # référence directe, fiable même filtré
 
         if a_supprimer_candidature is not None:
-            candidature_visee = st.session_state["recruteur_candidatures"][a_supprimer_candidature]
+            candidature_visee = a_supprimer_candidature
             if db.base_disponible() and candidature_visee.get("id") is not None:
                 db.supprimer_candidature(candidature_visee["id"])
-            st.session_state["recruteur_candidatures"].pop(a_supprimer_candidature)
+            for idx, c in enumerate(st.session_state["recruteur_candidatures"]):
+                if c is candidature_visee:
+                    st.session_state["recruteur_candidatures"].pop(idx)
+                    break
             st.rerun()
 
 # ===========================================================================
@@ -763,7 +856,6 @@ with tab_comptes_actifs:
         "essayer d'en présenter d'autres."
     )
 
-    STATUTS_COMPTE_ACTIF = ("En cours", "Clôturée - retenue")
     candidatures_actives = [
         c for c in st.session_state["recruteur_candidatures"]
         if c.get("statut") in STATUTS_COMPTE_ACTIF
@@ -808,6 +900,7 @@ with tab_comptes_actifs:
                     "Candidat": c.get("candidat_nom") or "(sans nom)",
                     "Poste recherché": c.get("candidat_poste_souhaite") or "—",
                     "Offre": c.get("offre_intitule") or "—",
+                    "Ville": c.get("offre_ville") or "—",
                     "Statut": c.get("statut") or "—",
                 }
                 for c in candidatures_par_entreprise[entreprise_compte_choisie]
@@ -994,6 +1087,8 @@ with tab_profils:
                 else:
                     for profil_existant, nouvelles_donnees in profils_a_mettre_a_jour:
                         profil_existant.update(nouvelles_donnees)
+                    for p in profils_nouveaux:
+                        p["date_creation"] = datetime.now()
                     st.session_state["recruteur_profils"].extend(profils_nouveaux)
 
                 st.success(
@@ -1009,8 +1104,28 @@ with tab_profils:
             except Exception as e:
                 st.error(f"Impossible de lire ce fichier : {e}")
 
+    # --- Filtre par date d'ajout du profil ---
+    col_date1, col_date2 = st.columns(2)
+    date_ajout_min = col_date1.date_input("Ajoutés depuis le", value=None, key="filtre_date_ajout_min")
+    date_ajout_max = col_date2.date_input("Ajoutés jusqu'au", value=None, key="filtre_date_ajout_max")
+
+    profils_affiches = st.session_state["recruteur_profils"]
+    if date_ajout_min or date_ajout_max:
+        profils_affiches = []
+        for p in st.session_state["recruteur_profils"]:
+            dc = p.get("date_creation")
+            if dc is None:
+                continue  # date inconnue (profil créé avant ce filtre) — exclu quand un filtre est actif
+            dc_date = dc.date() if hasattr(dc, "date") else dc
+            if date_ajout_min and dc_date < date_ajout_min:
+                continue
+            if date_ajout_max and dc_date > date_ajout_max:
+                continue
+            profils_affiches.append(p)
+        st.caption(f"{len(profils_affiches)} profil(s) sur {len(st.session_state['recruteur_profils'])} correspondent à ce filtre.")
+
     a_supprimer = None
-    for i, profil in enumerate(st.session_state["recruteur_profils"]):
+    for i, profil in enumerate(profils_affiches):
         with st.container(border=True):
             c1, c2 = st.columns(2)
             profil["nom"] = c1.text_input("Nom / repère candidat", value=profil.get("nom", ""), key=f"rec_nom_{i}")
@@ -1055,6 +1170,10 @@ with tab_profils:
             )
             if profil.get("cv_lien", "").strip():
                 st.link_button("📄 Voir le CV", profil["cv_lien"].strip())
+            date_creation_affichee = profil.get("date_creation")
+            if date_creation_affichee is not None:
+                date_str = date_creation_affichee.strftime("%d/%m/%Y") if hasattr(date_creation_affichee, "strftime") else str(date_creation_affichee)
+                st.caption(f"Ajouté le {date_str}")
             c7, c8 = st.columns(2)
             if db.base_disponible() and c7.button("💾 Enregistrer", key=f"rec_save_{i}"):
                 if profil.get("id") is None:
@@ -1075,18 +1194,113 @@ with tab_profils:
                     )
                 st.toast(f"Profil « {profil.get('nom') or 'sans nom'} » enregistré.")
             if c8.button("🗑️ Retirer ce profil", key=f"rec_suppr_{i}"):
-                a_supprimer = i
+                a_supprimer = profil  # référence directe, pour retrouver le bon élément même filtré
 
     if a_supprimer is not None:
-        profil_vise = st.session_state["recruteur_profils"][a_supprimer]
+        profil_vise = a_supprimer
         if db.base_disponible() and profil_vise.get("id") is not None:
             db.supprimer_profil(profil_vise["id"])
-        st.session_state["recruteur_profils"].pop(a_supprimer)
+        for idx, p in enumerate(st.session_state["recruteur_profils"]):
+            if p is profil_vise:
+                st.session_state["recruteur_profils"].pop(idx)
+                break
         st.rerun()
 
     if st.button("➕ Ajouter un profil candidat", key="btn_ajouter_profil"):
-        nouveau_profil = {}
+        nouveau_profil = {"date_creation": datetime.now()}
         if db.base_disponible():
             nouveau_profil["id"] = db.ajouter_profil()
         st.session_state["recruteur_profils"].append(nouveau_profil)
         st.rerun()
+
+# ===========================================================================
+# ONGLET 6 — KPI : vue d'ensemble chiffrée du vivier et des candidatures.
+# Calculée dynamiquement sur les données déjà en session (aucun stockage
+# propre) — se met à jour automatiquement au fil des présentations et des
+# changements de statut.
+# ===========================================================================
+with tab_kpi:
+    st.markdown("#### 📈 KPI")
+    st.caption("Vue d'ensemble du vivier et du suivi des candidatures, mise à jour en continu.")
+
+    profils_tous = st.session_state["recruteur_profils"]
+    candidatures_toutes = st.session_state["recruteur_candidatures"]
+
+    nb_retenues = sum(1 for c in candidatures_toutes if c.get("statut") == "Clôturée - retenue")
+    nb_en_cours = sum(1 for c in candidatures_toutes if c.get("statut") == "En cours")
+    nb_envoyees = sum(1 for c in candidatures_toutes if c.get("statut") == "Candidature envoyée")
+    nb_non_retenues = sum(1 for c in candidatures_toutes if c.get("statut") == "Clôturée - non retenue")
+
+    # --- Métriques principales ---
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("👥 Vivier", len(profils_tous))
+    col2.metric("📤 Envoyées", nb_envoyees)
+    col3.metric("🔄 En cours", nb_en_cours)
+    col4.metric("✅ Retenues", nb_retenues)
+    col5.metric("❌ Non retenues", nb_non_retenues)
+
+    st.divider()
+
+    col_secteur, col_region = st.columns(2)
+
+    # --- Répartition du vivier par secteur ---
+    with col_secteur:
+        st.markdown("##### 🏭 Vivier par secteur")
+        code_vers_libelle_secteur = {
+            code: libelle_avec_code.rsplit(" (", 1)[0].strip()
+            for libelle_avec_code, code in options_secteurs_recruteur.items()
+            if code
+        }
+        compteur_secteur_vivier = Counter()
+        for p in profils_tous:
+            code_secteur = p.get("secteur_souhaite") or ""
+            libelle = code_vers_libelle_secteur.get(code_secteur, "Non renseigné")
+            compteur_secteur_vivier[libelle] += 1
+
+        if not profils_tous:
+            st.info("Aucun profil dans le vivier pour l'instant.")
+        else:
+            df_secteur_vivier = pd.DataFrame(
+                compteur_secteur_vivier.most_common(), columns=["Secteur", "Nombre de candidats"]
+            )
+            st.dataframe(df_secteur_vivier, use_container_width=True, hide_index=True)
+
+    # --- Répartition du vivier par région (dérivée de la mobilité) ---
+    with col_region:
+        st.markdown("##### 🗺️ Vivier par région")
+        compteur_region_vivier = Counter()
+        for p in profils_tous:
+            region = _resoudre_region(p.get("mobilite", ""))
+            compteur_region_vivier[region] += 1
+
+        if not profils_tous:
+            st.info("Aucun profil dans le vivier pour l'instant.")
+        else:
+            df_region_vivier = pd.DataFrame(
+                compteur_region_vivier.most_common(), columns=["Région", "Nombre de candidats"]
+            )
+            st.dataframe(df_region_vivier, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # --- Comptes actifs par ville (ville de l'offre, capturée à la présentation) ---
+    st.markdown("##### 📍 Comptes actifs par ville")
+    candidatures_actives_kpi = [c for c in candidatures_toutes if c.get("statut") in STATUTS_COMPTE_ACTIF]
+    if not candidatures_actives_kpi:
+        st.info(
+            "Aucun compte actif pour l'instant — apparaîtra dès qu'une candidature passe "
+            "« En cours » ou « Clôturée - retenue »."
+        )
+    else:
+        compteur_ville_comptes = Counter()
+        for c in candidatures_actives_kpi:
+            ville = c.get("offre_ville") or "Non renseignée"
+            compteur_ville_comptes[ville] += 1
+        df_ville_comptes = pd.DataFrame(
+            compteur_ville_comptes.most_common(), columns=["Ville", "Candidature(s) active(s)"]
+        )
+        st.dataframe(df_ville_comptes, use_container_width=True, hide_index=True)
+        st.caption(
+            "Basé sur la ville de l'offre au moment de la présentation du candidat — "
+            "regroupe toutes les candidatures actives, pas seulement une par société."
+        )
