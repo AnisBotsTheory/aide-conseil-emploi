@@ -74,7 +74,7 @@ def charger_profils():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT id, nom, competences, outils, langages, poste_souhaite, secteur_souhaite, "
-                "cv_lien, langues_parlees, mobilite FROM profils_candidats ORDER BY id"
+                "cv_lien, langues_parlees, mobilite, date_creation FROM profils_candidats ORDER BY id"
             )
             return [dict(ligne) for ligne in cur.fetchall()]
 
@@ -169,6 +169,7 @@ def initialiser_table_candidatures():
                     candidat_cv_lien TEXT DEFAULT '',
                     offre_id TEXT DEFAULT '',
                     offre_intitule TEXT DEFAULT '',
+                    offre_ville TEXT DEFAULT '',
                     entreprise_nom TEXT DEFAULT '',
                     statut TEXT DEFAULT 'Candidature envoyée',
                     date_creation TIMESTAMP DEFAULT NOW()
@@ -176,6 +177,7 @@ def initialiser_table_candidatures():
             """)
             cur.execute("ALTER TABLE candidatures ADD COLUMN IF NOT EXISTS candidat_poste_souhaite TEXT DEFAULT ''")
             cur.execute("ALTER TABLE candidatures ADD COLUMN IF NOT EXISTS candidat_cv_lien TEXT DEFAULT ''")
+            cur.execute("ALTER TABLE candidatures ADD COLUMN IF NOT EXISTS offre_ville TEXT DEFAULT ''")
         conn.commit()
 
 
@@ -187,7 +189,7 @@ def charger_candidatures():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT id, candidat_id, candidat_nom, candidat_poste_souhaite, candidat_cv_lien, "
-                "offre_id, offre_intitule, entreprise_nom, statut, date_creation "
+                "offre_id, offre_intitule, offre_ville, entreprise_nom, statut, date_creation "
                 "FROM candidatures ORDER BY date_creation DESC"
             )
             return [dict(ligne) for ligne in cur.fetchall()]
@@ -195,7 +197,7 @@ def charger_candidatures():
 
 def ajouter_candidature(
     candidat_id, candidat_nom, candidat_poste_souhaite, offre_id, offre_intitule,
-    entreprise_nom, statut="Candidature envoyée", candidat_cv_lien="",
+    entreprise_nom, statut="Candidature envoyée", candidat_cv_lien="", offre_ville="",
 ):
     """Enregistre la présentation d'un candidat à une offre. Retourne l'id créé."""
     if not base_disponible():
@@ -205,10 +207,11 @@ def ajouter_candidature(
             cur.execute(
                 "INSERT INTO candidatures "
                 "(candidat_id, candidat_nom, candidat_poste_souhaite, candidat_cv_lien, offre_id, "
-                "offre_intitule, entreprise_nom, statut) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                "offre_intitule, offre_ville, entreprise_nom, statut) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
                 (
                     candidat_id, candidat_nom, candidat_poste_souhaite, candidat_cv_lien,
-                    offre_id, offre_intitule, entreprise_nom, statut,
+                    offre_id, offre_intitule, offre_ville, entreprise_nom, statut,
                 ),
             )
             id_nouveau = cur.fetchone()[0]
