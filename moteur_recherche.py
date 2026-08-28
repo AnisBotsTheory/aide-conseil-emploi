@@ -519,15 +519,15 @@ def secteurs_pour_poste(code_rome, departement=None, max_pages=2):
 
 
 @st.cache_data(ttl=1800)
-def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=None, secteur_activite=None):
+def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=None, secteur_activite=None, jours_max=None):
     """
     Récupère les offres complètes (tous les champs bruts : intitulé, entreprise,
     compétences, secteur d'activité...) pour un département — filtrées soit par
     code ROME (poste précis), soit par mots-clés libres (ex: nom de société) en
-    passant code_rome="TOUS", avec un filtre secteur d'activité optionnel dans
-    les deux cas — jusqu'à 150 x max_pages offres. Utilisée pour le matching
-    détaillé côté Espace Recruteur (contrairement à offres_par_ville, qui
-    n'agrège que par ville).
+    passant code_rome="TOUS", avec un filtre secteur d'activité et un filtre
+    d'ancienneté (jours_max) optionnels dans les deux cas — jusqu'à 150 x
+    max_pages offres. Utilisée pour le matching détaillé côté Espace Recruteur
+    (contrairement à offres_par_ville, qui n'agrège que par ville).
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -541,6 +541,10 @@ def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=N
         params.update(_params_filtre_poste(code_rome, mots_cles))
         if secteur_activite:
             params["secteurActivite"] = secteur_activite
+        if jours_max:
+            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
+            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         r = requests.get(url, headers=headers, params=params)
         if r.status_code not in (200, 206):
             break
