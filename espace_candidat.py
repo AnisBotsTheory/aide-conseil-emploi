@@ -196,15 +196,44 @@ with tab_profil:
         if df_rome.empty:
             st.error("Aucune offre trouvée pour ce secteur/département. Essaie d'élargir les critères.")
         else:
+            st.markdown(f"#### ⚖️ Tension du marché — département {departement_actif}")
             if code_rome_choisi == "TOUS":
-                st.markdown("#### Offres par poste de travail")
-                st.dataframe(
-                    df_rome[["libelle", "nb_offres_echantillon"]].rename(
-                        columns={"libelle": "Poste de travail", "nb_offres_echantillon": "Nombre d'offres"}
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
+                st.info(
+                    "⚖️ La tension du marché nécessite un poste précis (l'indicateur officiel "
+                    "raisonne par métier). Sélectionne un poste spécifique dans la liste "
+                    "ci-dessus pour voir ce calcul."
                 )
+            else:
+                with st.spinner("Récupération des demandeurs d'emploi..."):
+                    total_dep_offres = volumes_departement_offres(code_rome_choisi, departement_actif)
+                    total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
+                        code_rome_choisi, departement_actif
+                    )
+
+                if erreur_demandeurs:
+                    st.warning(
+                        f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
+                        "Saisis une valeur manuelle en attendant."
+                    )
+                    total_dep_demandeurs = st.number_input(
+                        "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
+                    )
+                else:
+                    c1, c2 = st.columns(2)
+                    c1.metric(f"Offres — département {departement_actif}", total_dep_offres)
+                    c2.metric(
+                        f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
+                        total_dep_demandeurs,
+                    )
+
+                tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
+                if tension is not None:
+                    st.metric("Indice de tension (offres / demandeurs)", tension)
+                    st.info(interpreter_tension(tension))
+                else:
+                    st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
+
+            st.divider()
 
             st.markdown(f"#### 📍 Offres par ville — département {departement_actif}")
             fraicheur_choisie = st.selectbox(
@@ -303,7 +332,8 @@ with tab_profil:
                         "les offres sont diffusées de façon anonyme."
                     )
                 else:
-                    st.dataframe(
+                    st.caption("👇 Clique sur une entreprise pour consulter ses offres.")
+                    selection_top_recruteur = st.dataframe(
                         df_entreprises.rename(
                             columns={
                                 "entreprise": "Entreprise",
@@ -313,6 +343,9 @@ with tab_profil:
                         ),
                         use_container_width=True,
                         hide_index=True,
+                        on_select="rerun",
+                        selection_mode="single-row",
+                        key="table_top_recruteurs",
                     )
                     if nb_offres_anonymes:
                         st.caption(
@@ -320,42 +353,52 @@ with tab_profil:
                             "nom d'entreprise visible (recrutement anonyme), non comptabilisée(s) ci-dessus."
                         )
 
-            st.markdown(f"#### ⚖️ Tension du marché — département {departement_actif}")
-            if code_rome_choisi == "TOUS":
-                st.info(
-                    "⚖️ La tension du marché nécessite un poste précis (l'indicateur officiel "
-                    "raisonne par métier). Sélectionne un poste spécifique dans la liste "
-                    "ci-dessus pour voir ce calcul."
-                )
-            else:
-                with st.spinner("Récupération des demandeurs d'emploi..."):
-                    total_dep_offres = volumes_departement_offres(code_rome_choisi, departement_actif)
-                    total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
-                        code_rome_choisi, departement_actif
-                    )
+                    lignes_top_recruteur_sel = selection_top_recruteur["selection"]["rows"]
+                    if lignes_top_recruteur_sel:
+                        entreprise_choisie_top = df_entreprises.iloc[lignes_top_recruteur_sel[0]]["entreprise"]
+                        with st.spinner(f"Récupération des offres de {entreprise_choisie_top}..."):
+                            offres_top_recruteur = rechercher_offres_completes(
+                                code_rome_choisi, departement_actif, max_pages=5,
+                                mots_cles=mots_cles_actifs, secteur_activite=secteur_actif,
+                            )
+                        offres_de_cette_entreprise = [
+                            o for o in offres_top_recruteur
+                            if (o.get("entreprise", {}) or {}).get("nom") == entreprise_choisie_top
+                        ]
 
-                if erreur_demandeurs:
-                    st.warning(
-                        f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
-                        "Saisis une valeur manuelle en attendant."
-                    )
-                    total_dep_demandeurs = st.number_input(
-                        "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
-                    )
-                else:
-                    c1, c2 = st.columns(2)
-                    c1.metric(f"Offres — département {departement_actif}", total_dep_offres)
-                    c2.metric(
-                        f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
-                        total_dep_demandeurs,
-                    )
-
-                tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
-                if tension is not None:
-                    st.metric("Indice de tension (offres / demandeurs)", tension)
-                    st.info(interpreter_tension(tension))
-                else:
-                    st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
+                        st.markdown(f"##### 📋 Offres chez {entreprise_choisie_top}")
+                        if not offres_de_cette_entreprise:
+                            st.info(
+                                "Aucune offre retrouvée pour cette entreprise pour l'instant — les "
+                                "résultats peuvent varier légèrement entre deux recherches successives."
+                            )
+                        else:
+                            for o in offres_de_cette_entreprise:
+                                lieu_o = o.get("lieuTravail", {}).get("libelle", "N/C")
+                                date_pub_o = o.get("dateCreation", "")[:10]
+                                with st.expander(f"**{o.get('intitule', '')}** — {lieu_o} — publiée le {date_pub_o}"):
+                                    type_contrat_o = o.get("typeContratLibelle") or o.get("typeContrat")
+                                    if type_contrat_o:
+                                        st.markdown(f"**Type de contrat :** {type_contrat_o}")
+                                    salaire_o = o.get("salaire", {}).get("libelle")
+                                    if salaire_o:
+                                        st.markdown(f"**Salaire :** {salaire_o}")
+                                    description_o = o.get("description")
+                                    if description_o:
+                                        st.markdown("**Description :**")
+                                        st.write(description_o)
+                                    competences_offre_o = o.get("competences", [])
+                                    if competences_offre_o:
+                                        libelles_o = ", ".join(
+                                            c.get("libelle", "") for c in competences_offre_o if c.get("libelle")
+                                        )
+                                        if libelles_o:
+                                            st.markdown(f"**Compétences demandées :** {libelles_o}")
+                                    url_offre_o = o.get("origineOffre", {}).get("urlOrigine")
+                                    if url_offre_o:
+                                        st.markdown(
+                                            f"🔗 [Voir l'offre complète et postuler sur France Travail]({url_offre_o})"
+                                        )
 
             st.divider()
             st.info(
