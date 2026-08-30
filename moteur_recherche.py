@@ -112,6 +112,20 @@ def _normaliser(texte):
     return texte.strip().lower()
 
 
+def _normaliser_nom_entreprise(nom):
+    """
+    Clé de regroupement pour un nom d'entreprise : casse uniforme et TOUS les
+    espaces retirés (pas seulement les bordures), pour regrouper des variantes
+    de saisie du même recruteur comme 'Signe+' et 'SIGNE +' sous une seule
+    ligne du tableau "Top recruteurs" plutôt que deux entités distinctes.
+    Utilisée à la fois pour l'agrégation (offres_par_ville, offres_par_ville_multi)
+    et pour le filtre au clic (retrouver les offres d'une entreprise) — les deux
+    étapes doivent regrouper de la même façon, sinon le total affiché dans le
+    tableau et le nombre d'offres retrouvées au clic divergent.
+    """
+    return "".join((nom or "").lower().split())
+
+
 def calculer_correspondance_offre(offre, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur):
     """
     Calcule un score de correspondance entre une offre et le profil déclaré par
@@ -842,12 +856,18 @@ def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_acti
 
     if dfs_entreprises:
         df_entreprises = pd.concat(dfs_entreprises, ignore_index=True)
+        # Regroupement par clé normalisée (même logique que offres_par_ville) : les
+        # différents appels mono-ROME peuvent avoir chacun retenu une variante de
+        # casse/espacement différente comme libellé affiché pour la même entreprise.
+        df_entreprises["_cle"] = df_entreprises["entreprise"].map(_normaliser_nom_entreprise)
         df_entreprises = (
-            df_entreprises.groupby("entreprise", as_index=False)
+            df_entreprises.groupby("_cle", as_index=False)
             .agg(
+                entreprise=("entreprise", "first"),
                 nombre_offres=("nombre_offres", "sum"),
                 villes=("villes", lambda s: ", ".join(sorted({v.strip() for grp in s for v in grp.split(",")}))),
             )
+            .drop(columns="_cle")
             .sort_values("nombre_offres", ascending=False)
             .reset_index(drop=True)
         )
@@ -962,10 +982,13 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
         nom_entreprise = offre.get("entreprise", {}).get("nom")
         if nom_entreprise:
             nom_ville = ville.split(" - ", 1)[-1].strip() if " - " in ville else ville
-            if nom_entreprise not in entreprises:
-                entreprises[nom_entreprise] = {"nombre_offres": 0, "villes": set()}
-            entreprises[nom_entreprise]["nombre_offres"] += 1
-            entreprises[nom_entreprise]["villes"].add(nom_ville)
+            cle_entreprise = _normaliser_nom_entreprise(nom_entreprise)
+            if cle_entreprise not in entreprises:
+                # Première variante d'écriture rencontrée pour cette entreprise :
+                # sert de libellé affiché (les suivantes ne font qu'incrémenter le compte).
+                entreprises[cle_entreprise] = {"nom_affiche": nom_entreprise.strip(), "nombre_offres": 0, "villes": set()}
+            entreprises[cle_entreprise]["nombre_offres"] += 1
+            entreprises[cle_entreprise]["villes"].add(nom_ville)
 
         date_creation = offre.get("dateCreation")
         if date_creation:
@@ -978,11 +1001,11 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     df_entreprises = pd.DataFrame(
         [
             {
-                "entreprise": nom,
+                "entreprise": infos["nom_affiche"],
                 "nombre_offres": infos["nombre_offres"],
                 "villes": ", ".join(sorted(infos["villes"])),
             }
-            for nom, infos in entreprises.items()
+            for infos in entreprises.values()
         ]
     )
     if not df_entreprises.empty:
@@ -1281,6 +1304,7 @@ __all__ = [
     "_REF_OUTILS_INFORMATIQUES",
     "_classifier_competence",
     "_normaliser",
+    "_normaliser_nom_entreprise",
     "calculer_correspondance_offre",
     "calculer_correspondance_recruteur",
     "analyser_competences",
