@@ -1087,6 +1087,29 @@ def demandeurs_emploi_departement(code_rome, departement):
     return total, periode, None
 
 
+def demandeurs_emploi_departement_multi(codes_rome, departement):
+    """
+    Somme des demandeurs d'emploi (cat. A+B+C) pour une liste de codes ROME —
+    permet de calculer une tension du marché agrégée pour une sélection multi-
+    poste : somme des offres / somme des demandeurs sur l'ensemble des postes
+    sélectionnés. Une erreur sur un seul code n'empêche pas de sommer les
+    autres ; l'erreur n'est remontée que si TOUS les codes échouent.
+    """
+    codes_valides = [c for c in codes_rome if c]
+    total = 0
+    periode = None
+    erreurs = []
+    for code in codes_valides:
+        t, p, e = demandeurs_emploi_departement(code, departement)
+        if e:
+            erreurs.append(f"{code}: {e}")
+            continue
+        total += t or 0
+        periode = periode or p
+    erreur_globale = "; ".join(erreurs) if erreurs and len(erreurs) == len(codes_valides) else None
+    return total, periode, erreur_globale
+
+
 # ---------------------------------------------------------------------------
 # Fonctions "KPIs avancés" : évolution annuelle, type de contrat, salaire
 # ---------------------------------------------------------------------------
@@ -1280,6 +1303,7 @@ __all__ = [
     "_appeler_indicateur",
     "_appel_avec_decouverte_scope",
     "demandeurs_emploi_departement",
+    "demandeurs_emploi_departement_multi",
     "_MOIS_FR",
     "_formater_mois_fr",
     "evolution_offres_annuelle",
