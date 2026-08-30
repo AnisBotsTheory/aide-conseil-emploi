@@ -3,9 +3,9 @@ moteur_recherche.py
 --------------------
 Module central de calcul, partagé entre l'Espace Candidat et l'Espace
 Recruteur. Aucune interface ici — uniquement des fonctions réutilisables
-(appels API France Travail, résolution ROME, scoring de correspondance...).
-Objectif : éviter toute duplication du moteur de calcul entre les deux
-espaces (cf. synthèse technique, section "Architecture retenue").
+(appels API France Travail, appels API Adzuna, résolution ROME, scoring de
+correspondance...). Objectif : éviter toute duplication du moteur de calcul
+entre les deux espaces (cf. synthèse technique, section "Architecture retenue").
 """
 
 import streamlit as st
@@ -555,6 +555,200 @@ def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=N
     return toutes_offres
 
 
+# ---------------------------------------------------------------------------
+# API Adzuna — complément à France Travail sur la couverture des offres.
+#
+# Principe : chaque offre Adzuna est reformatée pour ADOPTER LA MÊME FORME que
+# les offres brutes France Travail ci-dessus (mêmes clés : intitule, entreprise,
+# lieuTravail, competences, salaire, typeContratLibelle...). calculer_correspondance_offre,
+# calculer_correspondance_recruteur et repartition_contrats_et_salaires lisent
+# toujours ces clés-là (jamais un schéma "interne" séparé) : une offre Adzuna
+# ainsi formatée traverse tout le reste du moteur sans aucune modification de
+# ces fonctions.
+# ---------------------------------------------------------------------------
+ADZUNA_APP_ID = os.environ.get("ADZUNA_APP_ID")
+ADZUNA_APP_KEY = os.environ.get("ADZUNA_APP_KEY")
+ADZUNA_BASE_URL = "https://api.adzuna.com/v1/api/jobs/fr/search"
+
+# Table de correspondance code département France Travail -> nom, pour
+# construire le paramètre "where" (texte libre) d'Adzuna : Adzuna ne connaît
+# pas les codes département, seulement des noms de lieu à géocoder.
+DEPARTEMENTS_VERS_NOM = {
+    "01": "Ain", "02": "Aisne", "03": "Allier", "04": "Alpes-de-Haute-Provence",
+    "05": "Hautes-Alpes", "06": "Alpes-Maritimes", "07": "Ardèche", "08": "Ardennes",
+    "09": "Ariège", "10": "Aube", "11": "Aude", "12": "Aveyron",
+    "13": "Bouches-du-Rhône", "14": "Calvados", "15": "Cantal", "16": "Charente",
+    "17": "Charente-Maritime", "18": "Cher", "19": "Corrèze",
+    "2A": "Corse-du-Sud", "2B": "Haute-Corse",
+    "21": "Côte-d'Or", "22": "Côtes-d'Armor", "23": "Creuse", "24": "Dordogne",
+    "25": "Doubs", "26": "Drôme", "27": "Eure", "28": "Eure-et-Loir",
+    "29": "Finistère", "30": "Gard", "31": "Haute-Garonne", "32": "Gers",
+    "33": "Gironde", "34": "Hérault", "35": "Ille-et-Vilaine", "36": "Indre",
+    "37": "Indre-et-Loire", "38": "Isère", "39": "Jura", "40": "Landes",
+    "41": "Loir-et-Cher", "42": "Loire", "43": "Haute-Loire", "44": "Loire-Atlantique",
+    "45": "Loiret", "46": "Lot", "47": "Lot-et-Garonne", "48": "Lozère",
+    "49": "Maine-et-Loire", "50": "Manche", "51": "Marne", "52": "Haute-Marne",
+    "53": "Mayenne", "54": "Meurthe-et-Moselle", "55": "Meuse", "56": "Morbihan",
+    "57": "Moselle", "58": "Nièvre", "59": "Nord", "60": "Oise",
+    "61": "Orne", "62": "Pas-de-Calais", "63": "Puy-de-Dôme",
+    "64": "Pyrénées-Atlantiques", "65": "Hautes-Pyrénées", "66": "Pyrénées-Orientales",
+    "67": "Bas-Rhin", "68": "Haut-Rhin", "69": "Rhône", "70": "Haute-Saône",
+    "71": "Saône-et-Loire", "72": "Sarthe", "73": "Savoie", "74": "Haute-Savoie",
+    "75": "Paris", "76": "Seine-Maritime", "77": "Seine-et-Marne", "78": "Yvelines",
+    "79": "Deux-Sèvres", "80": "Somme", "81": "Tarn", "82": "Tarn-et-Garonne",
+    "83": "Var", "84": "Vaucluse", "85": "Vendée", "86": "Vienne",
+    "87": "Haute-Vienne", "88": "Vosges", "89": "Yonne", "90": "Territoire de Belfort",
+    "91": "Essonne", "92": "Hauts-de-Seine", "93": "Seine-Saint-Denis",
+    "94": "Val-de-Marne", "95": "Val-d'Oise",
+    "971": "Guadeloupe", "972": "Martinique", "973": "Guyane",
+    "974": "La Réunion", "976": "Mayotte",
+}
+
+
+def adzuna_configure():
+    """True si les identifiants Adzuna sont présents. Même logique de repli que
+    DATABASE_URL : si absent, les fonctions Adzuna se désactivent silencieusement
+    plutôt que de faire planter l'app."""
+    return bool(ADZUNA_APP_ID and ADZUNA_APP_KEY)
+
+
+def departement_vers_lieu_adzuna(code_departement):
+    """
+    Convertit un code département France Travail (ex: '13', '2A', '971') en un
+    nom de lieu utilisable comme paramètre 'where' Adzuna. Renvoie None si le
+    code est inconnu — dans ce cas, appeler rechercher_offres_adzuna sans 'ou'
+    revient à chercher sur toute la France plutôt que d'échouer.
+    """
+    if not code_departement:
+        return None
+    return DEPARTEMENTS_VERS_NOM.get(str(code_departement).strip().upper())
+
+
+@st.cache_data(ttl=1800)
+def rechercher_offres_adzuna(mots_cles, ou=None, max_pages=2):
+    """
+    Interroge Adzuna (marché français) par mots-clés libres + lieu en texte libre
+    (ex: "Marseille", "Bouches-du-Rhône" — pas un code département : Adzuna ne
+    connaît pas cette notion, contrairement à l'API France Travail).
+
+    Renvoie une liste d'offres au même format brut que rechercher_offres_completes(),
+    directement concaténable avec ses résultats via fusionner_offres().
+    Ne lève jamais d'exception : identifiants absents, erreur réseau ou quota
+    dépassé renvoient simplement une liste vide.
+    """
+    if not adzuna_configure():
+        return []
+
+    toutes_offres = []
+    taille_page = 50  # max par page côté Adzuna
+    for page in range(1, max_pages + 1):
+        params = {
+            "app_id": ADZUNA_APP_ID,
+            "app_key": ADZUNA_APP_KEY,
+            "results_per_page": taille_page,
+            "what": mots_cles,
+            "content-type": "application/json",
+        }
+        if ou:
+            params["where"] = ou
+
+        try:
+            r = requests.get(f"{ADZUNA_BASE_URL}/{page}", params=params, timeout=10)
+            r.raise_for_status()
+        except requests.RequestException:
+            break  # panne ou quota dépassé : on garde ce qui a déjà été récupéré
+
+        resultats = r.json().get("results", [])
+        if not resultats:
+            break
+        toutes_offres.extend(_adapter_offre_adzuna(o) for o in resultats)
+        if len(resultats) < taille_page:
+            break
+
+    return toutes_offres
+
+
+def _adapter_offre_adzuna(offre_brute):
+    """
+    Reformate une offre Adzuna pour qu'elle porte les mêmes clés qu'une offre
+    France Travail brute. Champs absents côté Adzuna laissés vides/None plutôt
+    qu'inventés, pour que les fonctions de scoring existantes réajustent leurs
+    poids exactement comme elles le font déjà pour une offre France Travail
+    incomplète.
+    """
+    salaire_min = offre_brute.get("salary_min")
+    salaire_max = offre_brute.get("salary_max")
+    libelle_salaire = None
+    if salaire_min or salaire_max:
+        estime = " (estimé)" if offre_brute.get("salary_is_predicted") else ""
+        if salaire_min and salaire_max and salaire_min != salaire_max:
+            libelle_salaire = f"{int(salaire_min):,}\u2009€ - {int(salaire_max):,}\u2009€ par an{estime}".replace(",", " ")
+        else:
+            valeur = salaire_min or salaire_max
+            libelle_salaire = f"{int(valeur):,}\u2009€ par an{estime}".replace(",", " ")
+
+    categorie = offre_brute.get("category") or {}
+
+    return {
+        # --- clés identiques au format France Travail, lues telles quelles en aval ---
+        "intitule": (offre_brute.get("title") or "").strip(),
+        "description": offre_brute.get("description", ""),
+        "entreprise": {"nom": (offre_brute.get("company") or {}).get("display_name")},
+        "lieuTravail": {
+            "libelle": (offre_brute.get("location") or {}).get("display_name", ""),
+            "latitude": offre_brute.get("latitude"),
+            "longitude": offre_brute.get("longitude"),
+        },
+        "competences": [],  # Adzuna ne structure pas les compétences par offre
+        # secteurActivite volontairement vide : la "category" Adzuna n'est pas un code NAF.
+        # La renseigner ferait échouer systématiquement la comparaison de code exact dans
+        # calculer_correspondance_recruteur au lieu de faire ignorer la dimension.
+        "secteurActivite": None,
+        "secteurActiviteLibelle": categorie.get("label", ""),
+        "typeContratLibelle": _deduire_type_contrat(offre_brute),
+        "experienceLibelle": "Non précisé",  # Adzuna ne fournit pas ce champ
+        "salaire": {"libelle": libelle_salaire} if libelle_salaire else {},
+        "romeCode": None,  # pas de code ROME côté Adzuna
+        "dateCreation": offre_brute.get("created"),
+        # --- clés supplémentaires, ignorées par le moteur existant, utiles pour l'affichage ---
+        "source": "Adzuna",
+        "url": offre_brute.get("redirect_url", ""),
+    }
+
+
+def _deduire_type_contrat(offre_brute):
+    """Adzuna ne renvoie pas un libellé de contrat unique comme France Travail :
+    on le déduit des flags disponibles (approximation, notamment pas de distinction
+    Intérim/CDD, à affiner si besoin en pratique)."""
+    if offre_brute.get("contract_type") == "permanent":
+        return "CDI"
+    if offre_brute.get("contract_type") == "contract":
+        return "CDD"
+    return "Non précisé"
+
+
+def fusionner_offres(*listes_offres):
+    """
+    Concatène plusieurs listes d'offres (France Travail + Adzuna, dans n'importe
+    quel ordre) et déduplique sur intitulé + entreprise + ville — une même offre
+    publiée sur les deux plateformes partage généralement ces trois champs.
+    """
+    vues = set()
+    resultat = []
+    for offres in listes_offres:
+        for o in offres:
+            cle = (
+                (o.get("intitule") or "").strip().lower(),
+                ((o.get("entreprise") or {}).get("nom") or "").strip().lower(),
+                ((o.get("lieuTravail") or {}).get("libelle") or "").strip().lower(),
+            )
+            if cle in vues:
+                continue
+            vues.add(cle)
+            resultat.append(o)
+    return resultat
+
+
 @st.cache_data(ttl=1800)
 def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
     token = get_token(SCOPE_OFFRES)
@@ -905,8 +1099,18 @@ __all__ = [
     "chercher_offres",
     "resoudre_codes_rome",
     "secteurs_pour_poste",
-    "offres_par_ville",
     "rechercher_offres_completes",
+    "ADZUNA_APP_ID",
+    "ADZUNA_APP_KEY",
+    "ADZUNA_BASE_URL",
+    "DEPARTEMENTS_VERS_NOM",
+    "adzuna_configure",
+    "departement_vers_lieu_adzuna",
+    "rechercher_offres_adzuna",
+    "_adapter_offre_adzuna",
+    "_deduire_type_contrat",
+    "fusionner_offres",
+    "offres_par_ville",
     "volumes_departement_offres",
     "_CANDIDATS_SCOPE_STATS_MARCHE",
     "BASE_STATS_MARCHE",
