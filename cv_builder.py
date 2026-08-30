@@ -797,7 +797,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     _init_cv_state()
 
     st.header("🧾 Créez votre CV")
-    st.write("Créez votre CV professionnel, prêt à l'emploi, au format Word — en une seule page.")
+    st.write("Créez votre CV professionnel, prêt à l'emploi, au format Word.")
     st.markdown(
         "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
         "expériences, formations, compétences...), choisissez un thème de couleur, puis générez "
@@ -807,17 +807,12 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "**Le parcours complet de l'application :**\n"
         "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
         "que vous visez.\n"
-        "2. 🎯 **Tendance par profil** — analysez le marché pour ce poste : offres disponibles, "
-        "secteurs qui recrutent, tension du marché.\n"
+        "2. 🎯 **Tendance par profil** — analysez le marché pour ce poste : tension du marché, "
+        "offres par ville, top recruteurs.\n"
         "3. 📋 **Offres d'emploi** — consultez les annonces réelles, avec un score de "
         "correspondance calculé à partir de votre profil.\n"
         "4. 🧩 **KPIs avancés** — pour aller plus loin : évolution du marché, salaires, types "
         "de contrat."
-    )
-    st.caption(
-        "ℹ️ Renseignez vos compétences, outils et mots-clés sectoriels ci-dessous : ils "
-        "permettent de calculer le score de correspondance affiché pour chaque offre dans "
-        "l'onglet **📋 Offres d'emploi**."
     )
 
     theme_choisi = st.radio(
@@ -860,24 +855,10 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peut être personnalisé librement.",
     )
     st.caption(
-        "💡 Pour analyser les tendances du marché sur ce métier, direction l'onglet "
-        "**🎯 Tendance par profil** — son sélecteur de poste s'appuie directement sur la "
-        "nomenclature officielle France Travail."
-    )
-
-    mots_cles_secteur = st.text_input(
-        "🎯 Mots-clés sectoriels / métier (pour le % de correspondance des offres)",
-        key="cv_mots_cles_secteur",
-        placeholder="ex: finance, reporting, contrôle de gestion",
-        help=(
-            "N'apparaît jamais sur ton CV — utilisé uniquement pour calculer le % de "
-            "correspondance affiché sous chaque offre dans l'onglet 'Offres d'emploi'. "
-            "Sépare plusieurs mots-clés par une virgule."
-        ),
-    )
-    st.caption(
-        "💡 Facultatif pour générer le CV, mais nécessaire (avec les compétences ci-dessous) "
-        "pour activer le score de correspondance sur les offres."
+        "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
+        "Finance senior confirmé ») pour de meilleurs résultats de recherche. Pour analyser les "
+        "tendances du marché sur ce métier, direction l'onglet **🎯 Tendance par profil** — son "
+        "sélecteur de poste s'appuie directement sur la nomenclature officielle France Travail."
     )
 
     c3, c4 = st.columns(2)
@@ -899,6 +880,21 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     st.divider()
     _section_experiences()
 
+    mots_cles_secteur = st.text_input(
+        "🎯 Mots-clés sectoriels / métier (pour le % de correspondance des offres)",
+        key="cv_mots_cles_secteur",
+        placeholder="ex: finance, reporting, contrôle de gestion",
+        help=(
+            "N'apparaît jamais sur ton CV — utilisé uniquement pour calculer le % de "
+            "correspondance affiché sous chaque offre dans l'onglet 'Offres d'emploi'. "
+            "Sépare plusieurs mots-clés par une virgule."
+        ),
+    )
+    st.caption(
+        "💡 Facultatif pour générer le CV, mais nécessaire (avec les compétences ci-dessous) "
+        "pour activer le score de correspondance sur les offres."
+    )
+
     st.divider()
     _section_formations()
 
@@ -912,6 +908,11 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
     st.divider()
     st.markdown("#### 💡 Compétences, outils & langages")
+    st.caption(
+        "ℹ️ Renseignez vos compétences, outils et mots-clés sectoriels ci-dessus : ils "
+        "permettent de calculer le score de correspondance affiché pour chaque offre dans "
+        "l'onglet **📋 Offres d'emploi**."
+    )
     _section_suggestions_competences(fonction_analyse_competences)
 
     st.markdown("###### 🧠 Compétences")
