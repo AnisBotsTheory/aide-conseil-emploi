@@ -40,17 +40,35 @@ def _params_filtre_poste(code_rome, mots_cles=None, secteur_activite=None):
     """
     Retourne le(s) paramètre(s) de filtre à utiliser pour l'API Offres d'emploi :
     - codeROME pour un poste précis
-    - motsCles + secteurActivite (si renseignés) pour "Tous les postes" (recherche large,
-      indexée sur le même métier et le même secteur que la recherche de profil).
+    - motsCles (si renseigné) pour "Tous les postes" (recherche large, indexée
+      sur le même métier que la recherche de profil)
+    - secteurActivite (si renseigné) dans TOUS les cas, poste précis ou "Tous
+      les postes" — le secteur filtre l'entreprise qui recrute, pas le poste,
+      il est donc indépendant du mode de sélection du poste.
+
+    CORRECTIF (voir échange du 30/08/2026) : avant ce correctif, la branche
+    "poste précis" ('code_rome != TOUS') retournait directement
+    {"codeROME": code_rome} sans jamais regarder secteur_activite, qui était
+    donc silencieusement ignoré par toutes les fonctions qui délèguent
+    entièrement leur filtre secteur à cette fonction (offres_par_ville,
+    resoudre_codes_rome, evolution_offres_annuelle,
+    repartition_contrats_et_salaires, analyser_competences,
+    volumes_departement_offres, secteurs_pour_poste...). Résultat concret :
+    le tableau "Top recruteurs" (via offres_par_ville) comptait les offres
+    TOUS secteurs confondus, alors que le détail au clic (via
+    rechercher_offres_completes, qui ré-ajoute secteurActivite en dehors de
+    cette fonction) appliquait bien le filtre — d'où l'écart (ex: 8 offres
+    affichées dans le tableau contre 3 dans le détail).
     """
+    params = {}
     if code_rome == "TOUS":
-        params = {}
         if mots_cles:
             params["motsCles"] = mots_cles
-        if secteur_activite:
-            params["secteurActivite"] = secteur_activite
-        return params
-    return {"codeROME": code_rome}
+    else:
+        params["codeROME"] = code_rome
+    if secteur_activite:
+        params["secteurActivite"] = secteur_activite
+    return params
 
 
 # ---------------------------------------------------------------------------
@@ -404,9 +422,7 @@ def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mo
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     params = {"departement": departement, "range": range_str}
-    params.update(_params_filtre_poste(code_rome, mots_cles))
-    if secteur_naf:
-        params["secteurActivite"] = secteur_naf
+    params.update(_params_filtre_poste(code_rome, mots_cles, secteur_naf))
     if jours_max:
         date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
         params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -538,9 +554,7 @@ def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=N
         debut = page * taille_page
         fin = debut + taille_page - 1
         params = {"departement": departement, "range": f"{debut}-{fin}"}
-        params.update(_params_filtre_poste(code_rome, mots_cles))
-        if secteur_activite:
-            params["secteurActivite"] = secteur_activite
+        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
             params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
