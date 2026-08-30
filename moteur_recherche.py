@@ -749,6 +749,163 @@ def fusionner_offres(*listes_offres):
     return resultat
 
 
+# ---------------------------------------------------------------------------
+# Variantes "_multi" — sélection MULTIPLE de postes (plusieurs codes ROME dans
+# une même recherche, ex: "Consultant" + "Consultant ERP" + "Consultant IT").
+# Chacune réutilise la fonction mono-poste existante (inchangée) une fois par
+# code, puis regroupe les résultats (sommes / concaténations) — pas de logique
+# d'appel API dupliquée. La tension du marché reste volontairement un
+# indicateur mono-poste (comme pour "Tous les postes") : pas de variante "_multi".
+# ---------------------------------------------------------------------------
+def volumes_departement_offres_multi(codes_rome, departement, secteur_activite=None):
+    """Somme des volumes d'offres pour une liste de codes ROME."""
+    return sum(
+        volumes_departement_offres(code, departement, secteur_activite=secteur_activite)
+        for code in codes_rome if code
+    )
+
+
+def rechercher_offres_completes_multi(codes_rome, departement, max_pages=1, secteur_activite=None, jours_max=None):
+    """Fusionne (et déduplique) les offres complètes de plusieurs codes ROME."""
+    listes = [
+        rechercher_offres_completes(
+            code, departement, max_pages=max_pages, secteur_activite=secteur_activite, jours_max=jours_max
+        )
+        for code in codes_rome if code
+    ]
+    return fusionner_offres(*listes)
+
+
+def chercher_offres_multi(codes_rome, departement, secteur_naf=None, jours_max=None, range_str="0-149"):
+    """Fusionne (et déduplique) les résultats de chercher_offres() pour plusieurs codes ROME."""
+    tous_resultats = []
+    total_cumule = 0
+    for code in codes_rome:
+        if not code:
+            continue
+        resultats, total = chercher_offres(code, departement, secteur_naf, jours_max, range_str=range_str)
+        tous_resultats.extend(resultats)
+        total_cumule += total
+    return fusionner_offres(tous_resultats), total_cumule
+
+
+def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_activite=None):
+    """
+    Fusionne les résultats de offres_par_ville() pour plusieurs codes ROME :
+    sommes des volumes par ville et par entreprise, bornes de date étendues.
+    """
+    dfs_villes, dfs_entreprises = [], []
+    total_cumule, nb_anonymes_cumule = 0, 0
+    dates_min, dates_max = [], []
+
+    for code in codes_rome:
+        if not code:
+            continue
+        dfv, total, dmin, dmax, dfe, nb_anon = offres_par_ville(
+            code, departement, jours_max=jours_max, secteur_activite=secteur_activite
+        )
+        if not dfv.empty:
+            dfs_villes.append(dfv)
+        if not dfe.empty:
+            dfs_entreprises.append(dfe)
+        total_cumule += total
+        nb_anonymes_cumule += nb_anon
+        if dmin:
+            dates_min.append(dmin)
+        if dmax:
+            dates_max.append(dmax)
+
+    if dfs_villes:
+        df_villes = (
+            pd.concat(dfs_villes, ignore_index=True)
+            .groupby("ville", as_index=False)
+            .agg({"nombre_offres": "sum", "latitude": "first", "longitude": "first"})
+            .sort_values("nombre_offres", ascending=False)
+            .reset_index(drop=True)
+        )
+    else:
+        df_villes = pd.DataFrame(columns=["ville", "nombre_offres", "latitude", "longitude"])
+
+    if dfs_entreprises:
+        df_entreprises = pd.concat(dfs_entreprises, ignore_index=True)
+        df_entreprises = (
+            df_entreprises.groupby("entreprise", as_index=False)
+            .agg(
+                nombre_offres=("nombre_offres", "sum"),
+                villes=("villes", lambda s: ", ".join(sorted({v.strip() for grp in s for v in grp.split(",")}))),
+            )
+            .sort_values("nombre_offres", ascending=False)
+            .reset_index(drop=True)
+        )
+    else:
+        df_entreprises = pd.DataFrame(columns=["entreprise", "nombre_offres", "villes"])
+
+    date_min_global = min(dates_min) if dates_min else None
+    date_max_global = max(dates_max) if dates_max else None
+    return df_villes, total_cumule, date_min_global, date_max_global, df_entreprises, nb_anonymes_cumule
+
+
+def evolution_offres_annuelle_multi(codes_rome, departement, secteur_activite=None):
+    """Somme, mois par mois, l'évolution d'offres de plusieurs codes ROME."""
+    dfs = [
+        evolution_offres_annuelle(code, departement, secteur_activite=secteur_activite)
+        for code in codes_rome if code
+    ]
+    dfs = [d for d in dfs if not d.empty]
+    if not dfs:
+        return pd.DataFrame(columns=["mois", "nombre_offres"])
+    return (
+        pd.concat(dfs, ignore_index=True)
+        .groupby("mois", as_index=False)["nombre_offres"]
+        .sum()
+        .sort_values("mois")
+        .reset_index(drop=True)
+    )
+
+
+def repartition_contrats_et_salaires_multi(codes_rome, departement, jours_max=None, secteur_activite=None):
+    """Fusionne la répartition contrats/salaires/expérience de plusieurs codes ROME."""
+    resultats = [
+        repartition_contrats_et_salaires(code, departement, jours_max=jours_max, secteur_activite=secteur_activite)
+        for code in codes_rome if code
+    ]
+    if not resultats:
+        return (
+            pd.DataFrame(columns=["type_contrat", "nombre_offres"]),
+            pd.DataFrame(),
+            0,
+            0,
+            pd.DataFrame(columns=["experience", "nombre_offres"]),
+        )
+
+    dfs_contrats = [r[0] for r in resultats if not r[0].empty]
+    dfs_salaires = [r[1] for r in resultats if not r[1].empty]
+    nb_avec_salaire = sum(r[2] for r in resultats)
+    nb_total = sum(r[3] for r in resultats)
+    dfs_experience = [r[4] for r in resultats if not r[4].empty]
+
+    df_contrats = (
+        pd.concat(dfs_contrats, ignore_index=True)
+        .groupby("type_contrat", as_index=False)["nombre_offres"]
+        .sum()
+        .sort_values("nombre_offres", ascending=False)
+        .reset_index(drop=True)
+        if dfs_contrats
+        else pd.DataFrame(columns=["type_contrat", "nombre_offres"])
+    )
+    df_salaires = pd.concat(dfs_salaires, ignore_index=True) if dfs_salaires else pd.DataFrame()
+    df_experience = (
+        pd.concat(dfs_experience, ignore_index=True)
+        .groupby("experience", as_index=False)["nombre_offres"]
+        .sum()
+        .sort_values("nombre_offres", ascending=False)
+        .reset_index(drop=True)
+        if dfs_experience
+        else pd.DataFrame(columns=["experience", "nombre_offres"])
+    )
+    return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_experience
+
+
 @st.cache_data(ttl=1800)
 def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
     token = get_token(SCOPE_OFFRES)
@@ -1110,6 +1267,12 @@ __all__ = [
     "_adapter_offre_adzuna",
     "_deduire_type_contrat",
     "fusionner_offres",
+    "volumes_departement_offres_multi",
+    "rechercher_offres_completes_multi",
+    "chercher_offres_multi",
+    "offres_par_ville_multi",
+    "evolution_offres_annuelle_multi",
+    "repartition_contrats_et_salaires_multi",
     "offres_par_ville",
     "volumes_departement_offres",
     "_CANDIDATS_SCOPE_STATS_MARCHE",
