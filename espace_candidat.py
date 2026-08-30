@@ -432,19 +432,29 @@ with tab_profil:
                     lignes_top_recruteur_sel = selection_top_recruteur["selection"]["rows"]
                     if lignes_top_recruteur_sel:
                         entreprise_choisie_top = df_entreprises.iloc[lignes_top_recruteur_sel[0]]["entreprise"]
+                        # Clé normalisée (même logique que l'agrégation du tableau, voir
+                        # moteur_recherche._normaliser_nom_entreprise) : le nom brut d'une offre
+                        # individuelle peut différer en casse/espacement du libellé affiché
+                        # ("Signe+" affiché alors que cette offre-ci porte "SIGNE +" côté API) —
+                        # comparer les clés normalisées plutôt que les chaînes brutes garantit que
+                        # le nombre d'offres retrouvées ici correspond au total du tableau.
+                        cle_entreprise_choisie = _normaliser_nom_entreprise(entreprise_choisie_top)
                         with st.spinner(f"Récupération des offres de {entreprise_choisie_top}..."):
                             if recherche_multi:
                                 offres_top_recruteur = rechercher_offres_completes_multi(
-                                    codes_rome_choisis, departement_actif, max_pages=5, secteur_activite=secteur_actif,
+                                    codes_rome_choisis, departement_actif, max_pages=5,
+                                    secteur_activite=secteur_actif, jours_max=jours_max,
                                 )
                             else:
                                 offres_top_recruteur = rechercher_offres_completes(
                                     code_rome_choisi, departement_actif, max_pages=5,
                                     mots_cles=mots_cles_actifs, secteur_activite=secteur_actif,
+                                    jours_max=jours_max,
                                 )
                         offres_de_cette_entreprise = [
                             o for o in offres_top_recruteur
-                            if (o.get("entreprise", {}) or {}).get("nom") == entreprise_choisie_top
+                            if _normaliser_nom_entreprise((o.get("entreprise", {}) or {}).get("nom", ""))
+                            == cle_entreprise_choisie
                         ]
 
                         st.markdown(f"##### 📋 Offres chez {entreprise_choisie_top}")
