@@ -9,6 +9,8 @@ logique de calcul vient de moteur_recherche.py (aucune duplication).
 import streamlit as st
 import pandas as pd
 import folium
+from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
+# moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import altair as alt
 import plotly.express as px
 from folium.plugins import MarkerCluster
@@ -47,7 +49,7 @@ labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations
 def _selecteur_poste(cle_prefixe, departement_pour_resolution):
     cle_checkbox = f"{cle_prefixe}_checkbox_tous_postes"
     cle_texte = f"{cle_prefixe}_poste_texte_libre"
-    cle_multiselect = f"{cle_prefixe}_postes_multiselect"
+    cle_selection = f"{cle_prefixe}_postes_selectionnes"  # liste de labels, bascule multi-sélection
 
     if not labels_appellations:
         st.caption("⚠️ Référentiel des postes indisponible pour le moment — recherche par mot-clé en secours.")
@@ -55,35 +57,49 @@ def _selecteur_poste(cle_prefixe, departement_pour_resolution):
         poste_choisi = poste_texte_secours.strip() if poste_texte_secours.strip() else "🌐 Tous les postes"
         return [poste_choisi], {}
 
-    recherche_tous_postes = st.checkbox(
-        "🌐 Rechercher sur tous les postes (recherche large, sans poste précis — facultatif)",
+    if cle_texte not in st.session_state:
+        st.session_state[cle_texte] = st.session_state.get("cv_titre", "")
+    if cle_selection not in st.session_state:
+        st.session_state[cle_selection] = []
+
+    col_texte, col_checkbox = st.columns([3, 1])
+    recherche_tous_postes = col_checkbox.checkbox(
+        "🌐 Tous les postes (analyse globale, sans poste précis)",
         key=cle_checkbox,
     )
+    poste_texte_libre = col_texte.text_input(
+        "Poste recherché (tape même un intitulé moderne ou en anglais : "
+        "'Data Analyst', 'Product Owner'...)",
+        key=cle_texte,
+        disabled=recherche_tous_postes,
+    )
+
     if recherche_tous_postes:
         st.success("Poste sélectionné : **🌐 Tous les postes**")
         return ["🌐 Tous les postes"], {}
 
-    if cle_texte not in st.session_state:
-        st.session_state[cle_texte] = st.session_state.get("cv_titre", "")
-
-    poste_texte_libre = st.text_input(
-        "Poste recherché (tape même un intitulé moderne ou en anglais : "
-        "'Data Analyst', 'Product Owner'...)",
-        key=cle_texte,
-    )
-
     suggestions = suggerer_postes(poste_texte_libre) if poste_texte_libre.strip() else []
-    deja_selectionnes = st.session_state.get(cle_multiselect, [])
-    options_multiselect = sorted(set(suggestions) | set(deja_selectionnes))
+    # Union avec la sélection déjà en cours, pour ne pas perdre visuellement un poste
+    # sélectionné si l'utilisateur retape un mot-clé différent entre deux sélections.
+    tous_les_tags = list(dict.fromkeys(suggestions + st.session_state[cle_selection]))
 
-    if poste_texte_libre.strip() and not suggestions and not deja_selectionnes:
+    if tous_les_tags:
+        st.caption("💡 Suggestions — clique pour ajouter/retirer de ta sélection :")
+        colonnes_tags = st.columns(2)
+        for i, label in enumerate(tous_les_tags):
+            est_selectionne = label in st.session_state[cle_selection]
+            texte_bouton = f"✅ {label}" if est_selectionne else label
+            col_tag = colonnes_tags[i % 2]
+            if col_tag.button(texte_bouton, key=f"{cle_prefixe}_tag_{i}_{label}"):
+                if est_selectionne:
+                    st.session_state[cle_selection].remove(label)
+                else:
+                    st.session_state[cle_selection].append(label)
+                st.rerun()
+    elif poste_texte_libre.strip():
         st.caption("Aucune suggestion trouvée pour ce terme — essaie une autre formulation.")
 
-    postes_choisis = st.multiselect(
-        "Poste(s) retenu(s) pour la recherche (sélectionne un ou plusieurs intitulés parmi les suggestions)",
-        options=options_multiselect,
-        key=cle_multiselect,
-    )
+    postes_choisis = st.session_state[cle_selection]
 
     if not postes_choisis:
         st.info("Sélectionne au moins un poste ci-dessus (ou coche « Tous les postes »).")
@@ -134,15 +150,17 @@ with tab_profil:
     st.caption(
         "Cette recherche s'appuie sur la nomenclature officielle des métiers de France Travail "
         "(ROME). Choisis un ou plusieurs postes précis dans la liste pour une analyse ciblée "
-        "(combinable) — ou coche **🌐 Tous les postes** avec un secteur pour une recherche plus "
-        "large sur tout un domaine d'activité. La tension du marché reste toutefois un indicateur "
-        "par métier unique : elle nécessite un seul poste sélectionné."
+        "(combinable) — ou coche **🌐 Tous les postes** pour une analyse globale sur tout un "
+        "secteur, sans poste précis. La tension du marché reste toutefois un indicateur par "
+        "métier unique : elle nécessite un seul poste sélectionné."
     )
 
-    col1, col2 = st.columns(2)
-    departement_profil = col2.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
-    with col1:
-        postes_choisis_profil, codes_par_poste_profil = _selecteur_poste("profil", departement_profil)
+    # Valeur du département utilisée pour la résolution de poste : celle du run précédent
+    # (le widget lui-même est rendu plus bas, sur la même ligne que le secteur). Cette
+    # résolution ne s'en sert qu'en dernier recours (la plupart des suggestions sont déjà
+    # dans le référentiel), un décalage d'un run est donc sans incidence pratique.
+    departement_pour_resolution_profil = st.session_state.get("dep_profil", "13")
+    postes_choisis_profil, codes_par_poste_profil = _selecteur_poste("profil", departement_pour_resolution_profil)
 
     codes_resolus_profil = [c for c in codes_par_poste_profil.values() if c]
     # secteurs_pour_poste() attend un code ROME unique : résolution précise seulement
@@ -155,6 +173,9 @@ with tab_profil:
         "très variés (médical, IT, RH...)."
     )
 
+    col_dep, col_sect = st.columns(2)
+    departement_profil = col_dep.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
+
     if code_rome_pour_secteurs:
         with st.spinner("Recherche des secteurs qui recrutent pour ce poste..."):
             df_secteurs_poste = secteurs_pour_poste(code_rome_pour_secteurs, departement_profil)
@@ -164,13 +185,10 @@ with tab_profil:
             libelle_option = f"{ligne['libelle']} ({ligne['code']}) — {ligne['nombre_offres']} offre(s)"
             options_secteurs_poste[libelle_option] = ligne["code"]
 
-        if len(options_secteurs_poste) > 1:
-            st.caption("💡 Secteurs qui recrutent le plus pour ce poste, dans ce département.")
-        else:
-            st.caption("Aucune offre trouvée pour ce poste ici — liste de secteurs générique en attendant.")
+        if len(options_secteurs_poste) <= 1:
             options_secteurs_poste = dict(options_secteurs)
 
-        secteur_choisi_profil = st.selectbox(
+        secteur_choisi_profil = col_sect.selectbox(
             "Secteur d'activité de l'entreprise",
             list(options_secteurs_poste.keys()),
             key="secteur_profil",
@@ -180,7 +198,7 @@ with tab_profil:
     else:
         # "Tous les postes", plusieurs postes, ou poste pas encore résolvable :
         # liste NAF générique complète
-        secteur_choisi_profil = st.selectbox(
+        secteur_choisi_profil = col_sect.selectbox(
             "Secteur d'activité de l'entreprise",
             list(options_secteurs.keys()),
             key="secteur_profil",
@@ -467,18 +485,18 @@ with tab_offres:
         "(combinables), ou coche « Tous les postes » pour une recherche large."
     )
 
-    col1_off, col2_off = st.columns(2)
-    departement = col2_off.text_input(
+    departement_pour_resolution_offres = st.session_state.get("dep_offres", "13")
+    postes_choisis_offres, codes_par_poste_offres = _selecteur_poste("offres", departement_pour_resolution_offres)
+
+    codes_resolus_offres = [c for c in codes_par_poste_offres.values() if c]
+
+    col_dep_off, col_sect_off = st.columns(2)
+    departement = col_dep_off.text_input(
         "Département (ex: 13 = Bouches-du-Rhône)",
         value=st.session_state.get("departement_profil_actif", "13"),
         key="dep_offres",
     )
-    with col1_off:
-        postes_choisis_offres, codes_par_poste_offres = _selecteur_poste("offres", departement)
-
-    codes_resolus_offres = [c for c in codes_par_poste_offres.values() if c]
-
-    secteur_choisi_offres = st.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_offres")
+    secteur_choisi_offres = col_sect_off.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_offres")
     secteur_naf = options_secteurs[secteur_choisi_offres]
     fraicheur_choisie_offres = st.selectbox(
         "Publiées depuis",
