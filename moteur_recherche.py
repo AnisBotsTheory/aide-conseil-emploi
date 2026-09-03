@@ -1,1668 +1,584 @@
 """
-moteur_recherche.py
+espace_candidat.py
 --------------------
-Module central de calcul, partagé entre l'Espace Candidat et l'Espace
-Recruteur. Aucune interface ici — uniquement des fonctions réutilisables
-(appels API France Travail, appels API Adzuna, résolution ROME, scoring de
-correspondance...). Objectif : éviter toute duplication du moteur de calcul
-entre les deux espaces (cf. synthèse technique, section "Architecture retenue").
+Page "Espace Candidat" — 3 onglets (Créer mon CV, Tendance par profil, KPIs
+avancés), accès gratuit et public. Toute la logique de calcul vient de
+moteur_recherche.py (aucune duplication).
+
+L'onglet "Offres d'emploi" a été retiré : lister des offres n'a pas d'avantage
+face aux plateformes dédiées (France Travail, LinkedIn, Indeed...) — pas
+d'alertes, pas de candidature en un clic, pas de sauvegarde de recherche. Ce
+qui reste différenciant, c'est la lecture de marché (tension, évolution,
+répartition contrats/salaires, villes/recruteurs actifs) — pas le listing
+d'offres lui-même. "Villes qui recrutent"/"Top recruteurs" deviennent des
+pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
+
+V4 : le sélecteur de poste par tags (auparavant _selecteur_poste, privé à ce
+fichier) est désormais FACTORISÉ dans moteur_recherche.py sous le nom
+selecteur_poste_tags() — réutilisé aussi bien dans "Créer mon CV" que dans
+cette page. La sélection de poste se fait maintenant UNE SEULE FOIS, dès
+l'onglet "Créer mon CV" (st.session_state["cv_postes_choisis"] /
+["cv_codes_rome_choisis"]) : "Tendance par profil" lit directement cette
+sélection au lieu de la re-résoudre silencieusement depuis le texte libre
+cv_titre (ancien comportement, qui laissait d'ailleurs une variable
+postes_choisis_profil non définie plus bas dans ce fichier — corrigé ici).
 """
 
 import streamlit as st
-import requests
-import re
-import os
 import pandas as pd
-from datetime import datetime, timedelta, timezone
-from collections import Counter
-from rapidfuzz import process, fuzz
+import folium
+from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
+# moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
+import altair as alt
+import plotly.express as px
+import plotly.graph_objects as go
+from folium.plugins import MarkerCluster
+from streamlit_folium import st_folium
 
-CLIENT_ID = os.environ["CLIENT_ID"]
-CLIENT_SECRET = os.environ["CLIENT_SECRET"]
+from cv_builder import afficher_generateur_cv
+from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées (dont
+# selecteur_poste_tags et analyser_competences_multi, cf. V4)
 
-SCOPE_OFFRES = "api_offresdemploiv2 o2dsoffre"
+st.title("🎯 Aide Conseil Emploi")
+st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
-
-def get_token(scope):
-    url = "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire"
-    payload = {
-        "grant_type": "client_credentials",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "scope": scope
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    r = requests.post(url, data=payload, headers=headers)
-    r.raise_for_status()
-    return r.json()["access_token"]
+appellations = get_referentiel_appellations()
+labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
 
 
-def _params_filtre_poste(code_rome, mots_cles=None, secteur_activite=None):
+def _selecteur_departement(cle_prefixe):
     """
-    Retourne le(s) paramètre(s) de filtre à utiliser pour l'API Offres d'emploi :
-    - codeROME pour un poste précis
-    - motsCles (si renseigné) pour "Tous les postes" (recherche large, indexée sur le
-      même métier que la recherche de profil)
-    secteur_activite : un code NAF unique (str) est transmis directement en paramètre
-    d'API, quel que soit code_rome. Une LISTE de codes (multi-secteur) n'est en
-    revanche jamais transmise à l'API (qui n'accepte qu'une seule valeur) — le
-    filtrage se fait après coup côté Python via filtrer_offres_par_secteurs().
+    Sélecteur de département en MULTI-sélection, avec option "Toute la France"
+    (recherche nationale — l'API le permet nativement en omettant le paramètre
+    département). Plusieurs départements sont envoyés à l'API sous forme de
+    codes séparés par une virgule (accepté nativement par l'API Offres d'emploi
+    France Travail).
+
+    Retourne une valeur de paramètre département :
+    - None -> "Toute la France" (aucun filtre)
+    - ""   -> rien sélectionné (état invalide, à gérer par l'appelant)
+    - "13" ou "13,75" -> un ou plusieurs codes
     """
-    params = {} if code_rome == "TOUS" else {"codeROME": code_rome}
-    if code_rome == "TOUS" and mots_cles:
-        params["motsCles"] = mots_cles
-    if secteur_activite and isinstance(secteur_activite, str):
-        params["secteurActivite"] = secteur_activite
-    return params
+    cle_checkbox = f"{cle_prefixe}_checkbox_toute_france"
+    cle_multiselect = f"{cle_prefixe}_departements_multiselect"
 
+    # Valeur du run précédent pour désactiver le multiselect si "Toute la France" est
+    # cochée — la case est rendue APRÈS le multiselect (demande UX), donc on ne connaît
+    # sa valeur pour CE run qu'après l'avoir affichée ; celle du run précédent suffit
+    # pour l'état "disabled" (même trick que pour d'autres sélecteurs de l'app).
+    toute_la_france_precedente = st.session_state.get(cle_checkbox, False)
 
-def filtrer_offres_par_secteurs(offres, codes_secteurs):
-    """
-    Filtre une liste d'offres brutes sur une liste de codes NAF (multi-secteur,
-    filtrage post-fusion — l'API France Travail n'accepte qu'un seul code
-    secteurActivite par requête). Si codes_secteurs est None, vide, ou un simple
-    code unique (str, déjà appliqué côté API), renvoie les offres inchangées.
-    """
-    if not codes_secteurs or isinstance(codes_secteurs, str):
-        return offres
-    codes_secteurs = set(codes_secteurs)
-    return [o for o in offres if o.get("secteurActivite") in codes_secteurs]
-
-
-# ---------------------------------------------------------------------------
-# Suggestions de compétences / outils / langages (basées sur les offres réelles)
-# ---------------------------------------------------------------------------
-# Listes de référence pour classer chaque libellé de compétence renvoyé par
-# l'API. Non exhaustives par nature — à enrichir si des cas manquants
-# remontent en usage réel.
-_REF_LANGAGES_INFORMATIQUES = {
-    "python", "java", "javascript", "typescript", "sql", "php", "c++", "c#",
-    "ruby", "golang", "go", "rust", "swift", "kotlin", "scala", "html", "css",
-    "bash", "shell", "matlab", "vba", "perl", "dart", "r ", "plsql", "pl/sql",
-}
-
-_REF_OUTILS_INFORMATIQUES = {
-    "excel", "sap", "salesforce", "jira", "power bi", "jedox", "dynamics 365",
-    "dynamics", "tableau", "google sheets", "word", "powerpoint", "sharepoint",
-    "teams", "slack", "git", "docker", "aws", "azure", "gcp", "kubernetes",
-    "linux", "windows", "photoshop", "illustrator", "autocad", "sketch", "figma",
-    "wordpress", "hubspot", "workday", "successfactors", "oracle", "peoplesoft",
-    "netsuite", "quickbooks", "sage", "cegid", "confluence", "notion", "trello",
-    "asana", "servicenow", "zendesk", "power automate", "power apps", "qlik",
-    "looker", "google analytics", "efront", "sap fico", "sap mm", "sap sd",
-    "outlook", "access", "visio", "adobe", "canva", "wix", "shopify",
-}
-
-
-def _classifier_competence(libelle):
-    """Classe un libellé de compétence en 'langage', 'outil' ou 'competence' (générique)."""
-    l = f" {libelle.lower().strip()} "
-    for lang in _REF_LANGAGES_INFORMATIQUES:
-        if f" {lang.strip()} " in l:
-            return "langage"
-    for outil in _REF_OUTILS_INFORMATIQUES:
-        if outil in l:
-            return "outil"
-    return "competence"
-
-
-def _normaliser(texte):
-    return texte.strip().lower()
-
-
-def calculer_correspondance_offre(offre, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur):
-    """
-    Calcule un score de correspondance entre une offre et le profil déclaré par
-    l'utilisateur (Créer mon CV), dimension par dimension. Une dimension est
-    ignorée (pas de pénalité) si l'offre ou l'utilisateur n'a rien à comparer
-    sur cette dimension. Retourne (score_global_pct ou None, détail par dimension).
-    """
-    comp_user = {_normaliser(c) for c in competences_utilisateur}
-    outils_user = {_normaliser(o) for o in outils_utilisateur}
-    langages_user = {_normaliser(l) for l in langages_utilisateur}
-
-    # Rien à comparer côté utilisateur : pas de score plutôt qu'un faux 0%.
-    if not comp_user and not outils_user and not langages_user and not (mots_cles_secteur and mots_cles_secteur.strip()):
-        return None, {}
-
-    competences_offre = offre.get("competences", []) or []
-    comp_offre_generique, outils_offre, langages_offre = set(), set(), set()
-    for c in competences_offre:
-        libelle = (c.get("libelle") or "").strip()
-        if not libelle:
-            continue
-        categorie = _classifier_competence(libelle)
-        if categorie == "competence":
-            comp_offre_generique.add(_normaliser(libelle))
-        elif categorie == "outil":
-            outils_offre.add(_normaliser(libelle))
+    if cle_multiselect not in st.session_state:
+        # Préremplit depuis le département renseigné dans "Créer mon CV" (cv_departement),
+        # sinon retombe sur le département par défaut de l'app.
+        code_departement_cv = st.session_state.get("cv_departement")
+        nom_departement_cv = DEPARTEMENTS_VERS_NOM.get(code_departement_cv) if code_departement_cv else None
+        if code_departement_cv and nom_departement_cv:
+            st.session_state[cle_multiselect] = [f"{code_departement_cv} - {nom_departement_cv}"]
         else:
-            langages_offre.add(_normaliser(libelle))
+            st.session_state[cle_multiselect] = ["13 - Bouches-du-Rhône"]
 
-    detail = {}
-
-    if comp_offre_generique:
-        detail["Compétences"] = (len(comp_offre_generique & comp_user), len(comp_offre_generique))
-    if outils_offre:
-        detail["Outils"] = (len(outils_offre & outils_user), len(outils_offre))
-    if langages_offre:
-        detail["Langages"] = (len(langages_offre & langages_user), len(langages_offre))
-
-    if mots_cles_secteur and mots_cles_secteur.strip():
-        mots = [m.strip().lower() for m in mots_cles_secteur.split(",") if m.strip()]
-        texte_offre = f"{offre.get('intitule', '')} {offre.get('description', '')}".lower()
-        trouves = sum(1 for m in mots if m in texte_offre)
-        if mots:
-            detail["Mots-clés"] = (trouves, len(mots))
-
-    if not detail:
-        return None, detail
-
-    score_global = round(100 * sum(n / d for n, d in detail.values()) / len(detail))
-    return score_global, detail
-
-
-def calculer_correspondance_recruteur(
-    offre, poste_souhaite, competences_utilisateur, outils_utilisateur, langages_utilisateur, secteur_souhaite_code
-):
-    """
-    Score de correspondance pondéré, spécifique à l'Espace Recruteur, sur 3 critères :
-    - Intitulé du poste souhaité par le candidat vs intitulé réel de l'offre (recherche
-      floue rapidfuzz) — poids 50%
-    - Compétences/outils/langages déclarés vs compétences demandées par l'offre (réutilise
-      calculer_correspondance_offre) — poids 30%
-    - Secteur d'activité souhaité vs secteur de l'entreprise qui recrute (comparaison de
-      code NAF, exacte) — poids 20%
-    Une dimension sans donnée à comparer (ni côté candidat, ni côté offre) est retirée du
-    calcul et le poids des dimensions restantes est réajusté proportionnellement — pas de
-    pénalité pour une donnée manquante.
-    """
-    POIDS = {"poste": 0.5, "competences": 0.3, "secteur": 0.2}
-    contributions = {}
-
-    if poste_souhaite and poste_souhaite.strip() and offre.get("intitule"):
-        contributions["poste"] = fuzz.WRatio(poste_souhaite, offre["intitule"]) / 100
-
-    score_competences, _ = calculer_correspondance_offre(
-        offre, competences_utilisateur, outils_utilisateur, langages_utilisateur, ""
-    )
-    if score_competences is not None:
-        contributions["competences"] = score_competences / 100
-
-    secteur_offre_code = offre.get("secteurActivite")
-    if secteur_souhaite_code and secteur_offre_code:
-        contributions["secteur"] = 1.0 if secteur_souhaite_code == secteur_offre_code else 0.0
-
-    if not contributions:
-        return None, {}
-
-    poids_total = sum(POIDS[cle] for cle in contributions)
-    score_global = round(100 * sum(contributions[cle] * POIDS[cle] for cle in contributions) / poids_total)
-
-    detail = {}
-    if "poste" in contributions:
-        detail["Poste"] = f"{round(contributions['poste'] * 100)}%"
-    if "competences" in contributions:
-        detail["Compétences"] = f"{round(contributions['competences'] * 100)}%"
-    if "secteur" in contributions:
-        detail["Secteur"] = "✓ identique" if contributions["secteur"] == 1.0 else "✗ différent"
-
-    return score_global, detail
-
-
-@st.cache_data(ttl=1800)
-def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
-    """
-    Récupère les offres (même logique de filtrage que le reste de l'app) et
-    extrait leur champ 'competences' pour bâtir 3 listes de suggestions
-    (compétences génériques / outils informatiques / langages informatiques),
-    chacune avec un % d'offres qui la mentionnent.
-    """
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-    toutes_offres = []
-    taille_page = 150
-    for page in range(max_pages):
-        debut = page * taille_page
-        fin = debut + taille_page - 1
-        params = {"range": f"{debut}-{fin}"}
-        if departement:
-            params["departement"] = departement
-        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
-        if jours_max:
-            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
-            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        r = requests.get(url, headers=headers, params=params)
-        if r.status_code not in (200, 206):
-            break
-        resultats = r.json().get("resultats", [])
-        toutes_offres.extend(resultats)
-        if len(resultats) < taille_page:
-            break
-
-    nb_total_offres = len(toutes_offres)
-    compteurs = {"competence": Counter(), "outil": Counter(), "langage": Counter()}
-
-    for offre in toutes_offres:
-        competences_offre = offre.get("competences", [])
-        if not competences_offre:
-            continue
-        libelles_vus = set()  # évite un double comptage si dupliqué dans la même offre
-        for comp in competences_offre:
-            libelle = (comp.get("libelle") or "").strip()
-            if not libelle or libelle in libelles_vus:
-                continue
-            libelles_vus.add(libelle)
-            categorie = _classifier_competence(libelle)
-            compteurs[categorie][libelle] += 1
-
-    def _construire_df(compteur):
-        if nb_total_offres == 0:
-            return pd.DataFrame(columns=["libelle", "nombre_offres", "pourcentage"])
-        lignes = [
-            {"libelle": lib, "nombre_offres": n, "pourcentage": round(100 * n / nb_total_offres)}
-            for lib, n in compteur.most_common(15)
-        ]
-        return pd.DataFrame(lignes)
-
-    return (
-        _construire_df(compteurs["competence"]),
-        _construire_df(compteurs["outil"]),
-        _construire_df(compteurs["langage"]),
-        nb_total_offres,
+    options_departements = sorted(f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items())
+    labels_choisis = st.multiselect(
+        "Département(s) (région d'intérêt)",
+        options=options_departements,
+        key=cle_multiselect,
+        disabled=toute_la_france_precedente,
     )
 
-
-@st.cache_data(ttl=3600)
-def get_secteurs_activite():
-    """Référentiel des secteurs d'activité NAF (mêmes codes que le paramètre secteurActivite)."""
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/referentiel/secteursActivites"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    r = requests.get(url, headers=headers)
-    if r.status_code != 200:
-        return []
-    return r.json()
-
-
-@st.cache_data(ttl=86400)
-def get_referentiel_appellations():
-    """
-    Référentiel officiel complet des appellations de métiers (~14 300 entrées),
-    pour proposer un vrai sélecteur de poste dès le départ plutôt que de dépendre
-    d'une recherche préalable dans les offres. Nom de ressource pas garanti à 100%
-    (jamais testé en conditions réelles) — on essaie plusieurs candidats.
-    """
-    token = get_token(SCOPE_OFFRES)
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    for ressource in ("appellations", "romes"):
-        url = f"https://api.francetravail.io/partenaire/offresdemploi/v2/referentiel/{ressource}"
-        r = requests.get(url, headers=headers)
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list) and data:
-                return data
-    return []
-
-
-def _extraire_code_rome(item_appellation):
-    """
-    Essaie de trouver un code ROME directement dans une entrée du référentiel
-    appellations (plusieurs noms de champ possibles selon la structure réelle,
-    jamais vérifiée). Retourne None si non trouvé — un fallback par recherche
-    prend le relai dans ce cas.
-    """
-    for cle in ("codeRome", "romeCode", "code_rome"):
-        if item_appellation.get(cle):
-            return item_appellation[cle]
-    metier = item_appellation.get("metier")
-    if isinstance(metier, dict):
-        for cle in ("code", "codeRome"):
-            if metier.get(cle):
-                return metier[cle]
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Suggestion de postes à partir d'un intitulé libre / moderne (dictionnaire +
-# recherche floue), pour pallier les intitulés absents de la nomenclature ROME
-# telle quelle (ex: "Data Analyst", "Product Owner"...).
-# ---------------------------------------------------------------------------
-DICTIONNAIRE_INTITULES_MODERNES = {
-    "data analyst": ["analyste de données", "chargé d'études statistiques"],
-    "data scientist": ["data scientist", "statisticien"],
-    "data engineer": ["ingénieur data", "data engineer"],
-    "product owner": ["chef de produit", "responsable produit"],
-    "product manager": ["chef de produit", "responsable produit"],
-    "scrum master": ["chef de projet", "coordinateur de projet"],
-    "ux designer": ["ergonome", "designer d'interface"],
-    "ui designer": ["designer graphique", "webdesigner"],
-    "ux/ui designer": ["ergonome", "designer d'interface", "designer graphique"],
-    "devops": ["administrateur systèmes et réseaux", "ingénieur systèmes"],
-    "sre": ["administrateur systèmes et réseaux", "ingénieur systèmes"],
-    "business analyst": ["analyste fonctionnel", "consultant en organisation"],
-    "growth hacker": ["chargé de marketing digital"],
-    "growth manager": ["chargé de marketing digital"],
-    "customer success manager": ["chargé de relation clientèle", "gestionnaire de la relation client"],
-    "community manager": ["chargé de communication", "animateur de communauté web"],
-    "social media manager": ["chargé de communication digitale"],
-    "full stack developer": ["développeur informatique", "développeur web"],
-    "front end developer": ["développeur web"],
-    "back end developer": ["développeur informatique"],
-    "software engineer": ["développeur informatique", "ingénieur logiciel"],
-    "qa engineer": ["testeur logiciel", "chargé de tests"],
-    "project manager": ["chef de projet"],
-    "pmo": ["chargé de reporting", "assistant chef de projet", "coordinateur de projet"],
-    "hr business partner": ["chargé de ressources humaines", "responsable ressources humaines"],
-    "talent acquisition": ["chargé de recrutement"],
-    "recruiter": ["chargé de recrutement"],
-    "office manager": ["assistant de direction", "responsable administratif"],
-    "sales manager": ["responsable commercial", "chef des ventes"],
-    "account manager": ["chargé de clientèle", "responsable de comptes"],
-    "supply chain manager": ["responsable logistique", "responsable supply chain"],
-    "revenue manager": ["contrôleur de gestion", "analyste financier"],
-    "financial controller": ["contrôleur de gestion"],
-    "legal counsel": ["juriste"],
-    "brand manager": ["chef de produit marketing", "responsable marketing"],
-}
-
-
-def _normaliser_texte(texte):
-    """Minuscules et retrait des accents, pour des comparaisons robustes."""
-    texte = texte.lower().strip()
-    remplacements = str.maketrans("àâäéèêëîïôöùûüç", "aaaeeeeiioouuuc")
-    return texte.translate(remplacements)
-
-
-@st.cache_data(ttl=1800)
-def suggerer_postes(saisie, max_resultats=8):
-    """
-    Suggère des postes du référentiel ROME à partir d'un intitulé libre/moderne,
-    en combinant un petit dictionnaire de correspondances connues (ex: "Data
-    Analyst" -> "Analyste de données") et une recherche floue directe sur la
-    saisie brute (rattrape les variantes/fautes de frappe absentes du
-    dictionnaire). Retourne une liste de libellés d'appellations officielles.
-    """
-    saisie_normalisee = _normaliser_texte(saisie)
-    if len(saisie_normalisee) < 2:
-        return []
-
-    appellations = get_referentiel_appellations()
-    labels = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
-    if not labels:
-        return []
-
-    candidats = {}  # libelle -> meilleur score
-
-    # 1) Dictionnaire : si un terme connu est contenu dans la saisie, on cherche
-    # les appellations officielles correspondant aux mots-clés français associés.
-    for terme_moderne, mots_cles_fr in DICTIONNAIRE_INTITULES_MODERNES.items():
-        if terme_moderne in saisie_normalisee:
-            for mot_cle in mots_cles_fr:
-                mot_cle_normalise = _normaliser_texte(mot_cle)
-                for label in labels:
-                    if mot_cle_normalise in _normaliser_texte(label):
-                        candidats[label] = max(candidats.get(label, 0), 100)  # priorité maximale
-
-    # 2) Recherche floue directe sur la saisie brute, en complément.
-    resultats_flous = process.extract(saisie, labels, scorer=fuzz.WRatio, limit=max_resultats * 2)
-    for label, score, _ in resultats_flous:
-        if score >= 55:  # seuil pour écarter le bruit non pertinent
-            candidats[label] = max(candidats.get(label, 0), score)
-
-    resultats_tries = sorted(candidats.items(), key=lambda x: x[1], reverse=True)
-    return [label for label, _ in resultats_tries[:max_resultats]]
-
-
-def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mots_cles=None, range_str="0-149"):
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"range": range_str}
-    if departement:
-        params["departement"] = departement
-    params.update(_params_filtre_poste(code_rome, mots_cles))
-    if secteur_naf and isinstance(secteur_naf, str):
-        params["secteurActivite"] = secteur_naf
-    if jours_max:
-        date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
-        params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-        params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    r = requests.get(url, headers=headers, params=params)
-    if r.status_code == 204:
-        # 204 No Content = réponse valide de l'API pour "aucune offre trouvée" sur ce
-        # critère précis (fréquent en recherche multi-poste : tous les codes ROME
-        # sélectionnés n'ont pas forcément d'offre active en ce moment) — pas une erreur.
-        return [], 0
-    if r.status_code not in (200, 206):
-        st.error(f"Erreur API Offres {r.status_code} : {r.text}")
-        return [], 0
-    data = r.json()
-    total = 0
-    content_range = r.headers.get("Content-Range", "")
-    if "/" in content_range:
-        try:
-            total = int(content_range.split("/")[-1])
-        except ValueError:
-            total = 0
-    resultats = data.get("resultats", [])
-    if isinstance(secteur_naf, list) and secteur_naf:
-        resultats = filtrer_offres_par_secteurs(resultats, secteur_naf)
-        # Le total renvoyé par l'API ne reflète pas ce filtrage post-fetch multi-secteur :
-        # on retombe sur le nombre réellement filtré, plus honnête que le total brut.
-        total = len(resultats)
-    return resultats, total
-
-
-# ---------------------------------------------------------------------------
-# Fonctions "Tendance par profil" (analyse personnalisée par métier ROME)
-# ---------------------------------------------------------------------------
-@st.cache_data(ttl=1800)
-def resoudre_codes_rome(mots_cles=None, departement=None, secteur_activite=None, max_pages=8):
-    """
-    Parcourt toutes les offres correspondant au mot-clé (ou au secteur seul si
-    mots_cles est vide) pour identifier TOUS les postes (codes ROME) rencontrés.
-    """
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-    toutes_offres = []
-    taille_page = 150
-    for page in range(max_pages):
-        debut = page * taille_page
-        fin = debut + taille_page - 1
-        params = {"range": f"{debut}-{fin}"}
-        if mots_cles:
-            params["motsCles"] = mots_cles
-        if departement:
-            params["departement"] = departement
-        if secteur_activite and isinstance(secteur_activite, str):
-            params["secteurActivite"] = secteur_activite
-        r = requests.get(url, headers=headers, params=params)
-        if r.status_code not in (200, 206):
-            break
-        resultats = r.json().get("resultats", [])
-        toutes_offres.extend(resultats)
-        if len(resultats) < taille_page:
-            break
-
-    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
-
-    compteur = Counter()
-    libelles = {}
-    for offre in toutes_offres:
-        rome = offre.get("romeCode")
-        if rome:
-            compteur[rome] += 1
-            libelles[rome] = offre.get("romeLibelle", rome)
-
-    df = pd.DataFrame(
-        [{"code_rome": r_, "libelle": libelles[r_], "nb_offres_echantillon": c} for r_, c in compteur.items()]
-    )
-    if not df.empty:
-        df = df.sort_values("nb_offres_echantillon", ascending=False).reset_index(drop=True)
-    return df
-
-
-@st.cache_data(ttl=1800)
-def secteurs_pour_poste(code_rome, departement=None, max_pages=2):
-    """
-    Liste les secteurs d'activité (NAF) des entreprises qui recrutent réellement
-    pour ce poste (code ROME), avec le nombre d'offres par secteur. Sert à filtrer
-    le sélecteur "Secteur d'activité" sur des options pertinentes plutôt que la
-    liste NAF générique complète.
-    """
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-    toutes_offres = []
-    taille_page = 150
-    for page in range(max_pages):
-        debut = page * taille_page
-        fin = debut + taille_page - 1
-        params = {"codeROME": code_rome, "range": f"{debut}-{fin}"}
-        if departement:
-            params["departement"] = departement
-        r = requests.get(url, headers=headers, params=params)
-        if r.status_code not in (200, 206):
-            break
-        resultats = r.json().get("resultats", [])
-        toutes_offres.extend(resultats)
-        if len(resultats) < taille_page:
-            break
-
-    compteur = Counter()
-    libelles = {}
-    for offre in toutes_offres:
-        code = offre.get("secteurActivite")
-        libelle = offre.get("secteurActiviteLibelle")
-        if code and libelle:
-            compteur[code] += 1
-            libelles[code] = libelle
-
-    df = pd.DataFrame([{"code": c, "libelle": libelles[c], "nombre_offres": n} for c, n in compteur.items()])
-    if not df.empty:
-        df = df.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
-    return df
-
-
-@st.cache_data(ttl=1800)
-def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=None, secteur_activite=None, jours_max=None):
-    """
-    Récupère les offres complètes (tous les champs bruts : intitulé, entreprise,
-    compétences, secteur d'activité...) pour un département — filtrées soit par
-    code ROME (poste précis), soit par mots-clés libres (ex: nom de société) en
-    passant code_rome="TOUS", avec un filtre secteur d'activité et un filtre
-    d'ancienneté (jours_max) optionnels dans les deux cas — jusqu'à 150 x
-    max_pages offres. Utilisée pour le matching détaillé côté Espace Recruteur
-    (contrairement à offres_par_ville, qui n'agrège que par ville).
-    """
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    toutes_offres = []
-    taille_page = 150
-    for page in range(max_pages):
-        debut = page * taille_page
-        fin = debut + taille_page - 1
-        params = {"range": f"{debut}-{fin}"}
-        if departement:
-            params["departement"] = departement
-        params.update(_params_filtre_poste(code_rome, mots_cles))
-        if secteur_activite and isinstance(secteur_activite, str):
-            params["secteurActivite"] = secteur_activite
-        if jours_max:
-            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
-            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        r = requests.get(url, headers=headers, params=params)
-        if r.status_code not in (200, 206):
-            break
-        resultats = r.json().get("resultats", [])
-        toutes_offres.extend(resultats)
-        if len(resultats) < taille_page:
-            break
-    return filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
-
-
-# ---------------------------------------------------------------------------
-# API Adzuna — complément à France Travail sur la couverture des offres.
-#
-# Principe : chaque offre Adzuna est reformatée pour ADOPTER LA MÊME FORME que
-# les offres brutes France Travail ci-dessus (mêmes clés : intitule, entreprise,
-# lieuTravail, competences, salaire, typeContratLibelle...). calculer_correspondance_offre,
-# calculer_correspondance_recruteur et repartition_contrats_et_salaires lisent
-# toujours ces clés-là (jamais un schéma "interne" séparé) : une offre Adzuna
-# ainsi formatée traverse tout le reste du moteur sans aucune modification de
-# ces fonctions.
-# ---------------------------------------------------------------------------
-ADZUNA_APP_ID = os.environ.get("ADZUNA_APP_ID")
-ADZUNA_APP_KEY = os.environ.get("ADZUNA_APP_KEY")
-ADZUNA_BASE_URL = "https://api.adzuna.com/v1/api/jobs/fr/search"
-
-# Table de correspondance code département France Travail -> nom, pour
-# construire le paramètre "where" (texte libre) d'Adzuna : Adzuna ne connaît
-# pas les codes département, seulement des noms de lieu à géocoder.
-DEPARTEMENTS_VERS_NOM = {
-    "01": "Ain", "02": "Aisne", "03": "Allier", "04": "Alpes-de-Haute-Provence",
-    "05": "Hautes-Alpes", "06": "Alpes-Maritimes", "07": "Ardèche", "08": "Ardennes",
-    "09": "Ariège", "10": "Aube", "11": "Aude", "12": "Aveyron",
-    "13": "Bouches-du-Rhône", "14": "Calvados", "15": "Cantal", "16": "Charente",
-    "17": "Charente-Maritime", "18": "Cher", "19": "Corrèze",
-    "2A": "Corse-du-Sud", "2B": "Haute-Corse",
-    "21": "Côte-d'Or", "22": "Côtes-d'Armor", "23": "Creuse", "24": "Dordogne",
-    "25": "Doubs", "26": "Drôme", "27": "Eure", "28": "Eure-et-Loir",
-    "29": "Finistère", "30": "Gard", "31": "Haute-Garonne", "32": "Gers",
-    "33": "Gironde", "34": "Hérault", "35": "Ille-et-Vilaine", "36": "Indre",
-    "37": "Indre-et-Loire", "38": "Isère", "39": "Jura", "40": "Landes",
-    "41": "Loir-et-Cher", "42": "Loire", "43": "Haute-Loire", "44": "Loire-Atlantique",
-    "45": "Loiret", "46": "Lot", "47": "Lot-et-Garonne", "48": "Lozère",
-    "49": "Maine-et-Loire", "50": "Manche", "51": "Marne", "52": "Haute-Marne",
-    "53": "Mayenne", "54": "Meurthe-et-Moselle", "55": "Meuse", "56": "Morbihan",
-    "57": "Moselle", "58": "Nièvre", "59": "Nord", "60": "Oise",
-    "61": "Orne", "62": "Pas-de-Calais", "63": "Puy-de-Dôme",
-    "64": "Pyrénées-Atlantiques", "65": "Hautes-Pyrénées", "66": "Pyrénées-Orientales",
-    "67": "Bas-Rhin", "68": "Haut-Rhin", "69": "Rhône", "70": "Haute-Saône",
-    "71": "Saône-et-Loire", "72": "Sarthe", "73": "Savoie", "74": "Haute-Savoie",
-    "75": "Paris", "76": "Seine-Maritime", "77": "Seine-et-Marne", "78": "Yvelines",
-    "79": "Deux-Sèvres", "80": "Somme", "81": "Tarn", "82": "Tarn-et-Garonne",
-    "83": "Var", "84": "Vaucluse", "85": "Vendée", "86": "Vienne",
-    "87": "Haute-Vienne", "88": "Vosges", "89": "Yonne", "90": "Territoire de Belfort",
-    "91": "Essonne", "92": "Hauts-de-Seine", "93": "Seine-Saint-Denis",
-    "94": "Val-de-Marne", "95": "Val-d'Oise",
-    "971": "Guadeloupe", "972": "Martinique", "973": "Guyane",
-    "974": "La Réunion", "976": "Mayotte",
-}
-
-# ---------------------------------------------------------------------------
-# Ville de repli (la plus grande ville du département — généralement la
-# préfecture, sauf quelques exceptions notables comme 76 -> Le Havre plutôt que
-# Rouen) avec ses coordonnées GPS approximatives. Utilisée pour positionner sur
-# la carte les offres dont le lieu de travail n'est renseigné qu'au niveau
-# département (pas de latitude/longitude précise côté France Travail).
-# ---------------------------------------------------------------------------
-DEPARTEMENTS_CHEF_LIEU = {
-    "01": ("Bourg-en-Bresse", 46.2058, 5.2255), "02": ("Laon", 49.5642, 3.6247),
-    "03": ("Moulins", 46.5606, 3.3325), "04": ("Digne-les-Bains", 44.0925, 6.2361),
-    "05": ("Gap", 44.5594, 6.0790), "06": ("Nice", 43.7102, 7.2620),
-    "07": ("Privas", 44.7355, 4.5985), "08": ("Charleville-Mézières", 49.7714, 4.7199),
-    "09": ("Foix", 42.9646, 1.6050), "10": ("Troyes", 48.2973, 4.0744),
-    "11": ("Carcassonne", 43.2130, 2.3491), "12": ("Rodez", 44.3505, 2.5738),
-    "13": ("Marseille", 43.2965, 5.3698), "14": ("Caen", 49.1829, -0.3707),
-    "15": ("Aurillac", 44.9282, 2.4444), "16": ("Angoulême", 45.6484, 0.1562),
-    "17": ("La Rochelle", 46.1603, -1.1511), "18": ("Bourges", 47.0810, 2.3987),
-    "19": ("Brive-la-Gaillarde", 45.1590, 1.5335), "2A": ("Ajaccio", 41.9192, 8.7386),
-    "2B": ("Bastia", 42.7028, 9.4508), "21": ("Dijon", 47.3220, 5.0415),
-    "22": ("Saint-Brieuc", 48.5141, -2.7654), "23": ("Guéret", 46.1700, 1.8700),
-    "24": ("Périgueux", 45.1848, 0.7217), "25": ("Besançon", 47.2380, 6.0243),
-    "26": ("Valence", 44.9334, 4.8924), "27": ("Évreux", 49.0270, 1.1509),
-    "28": ("Chartres", 48.4439, 1.4894), "29": ("Brest", 48.3904, -4.4861),
-    "30": ("Nîmes", 43.8367, 4.3601), "31": ("Toulouse", 43.6047, 1.4442),
-    "32": ("Auch", 43.6465, 0.5854), "33": ("Bordeaux", 44.8378, -0.5792),
-    "34": ("Montpellier", 43.6108, 3.8767), "35": ("Rennes", 48.1173, -1.6778),
-    "36": ("Châteauroux", 46.8106, 1.6910), "37": ("Tours", 47.3941, 0.6848),
-    "38": ("Grenoble", 45.1885, 5.7245), "39": ("Lons-le-Saunier", 46.6742, 5.5527),
-    "40": ("Mont-de-Marsan", 43.8897, -0.4980), "41": ("Blois", 47.5861, 1.3359),
-    "42": ("Saint-Étienne", 45.4397, 4.3872), "43": ("Le Puy-en-Velay", 45.0432, 3.8859),
-    "44": ("Nantes", 47.2184, -1.5536), "45": ("Orléans", 47.9029, 1.9093),
-    "46": ("Cahors", 44.4478, 1.4409), "47": ("Agen", 44.2049, 0.6205),
-    "48": ("Mende", 44.5183, 3.5006), "49": ("Angers", 47.4784, -0.5632),
-    "50": ("Cherbourg-en-Cotentin", 49.6337, -1.6222), "51": ("Reims", 49.2583, 4.0317),
-    "52": ("Chaumont", 48.1113, 5.1391), "53": ("Laval", 48.0698, -0.7700),
-    "54": ("Nancy", 48.6921, 6.1844), "55": ("Bar-le-Duc", 48.7714, 5.1608),
-    "56": ("Lorient", 47.7482, -3.3660), "57": ("Metz", 49.1193, 6.1757),
-    "58": ("Nevers", 46.9896, 3.1590), "59": ("Lille", 50.6292, 3.0573),
-    "60": ("Beauvais", 49.4295, 2.0807), "61": ("Alençon", 48.4322, 0.0900),
-    "62": ("Calais", 50.9513, 1.8587), "63": ("Clermont-Ferrand", 45.7772, 3.0870),
-    "64": ("Pau", 43.2951, -0.3708), "65": ("Tarbes", 43.2328, 0.0784),
-    "66": ("Perpignan", 42.6886, 2.8948), "67": ("Strasbourg", 48.5734, 7.7521),
-    "68": ("Mulhouse", 47.7508, 7.3359), "69": ("Lyon", 45.7640, 4.8357),
-    "70": ("Vesoul", 47.6236, 6.1548), "71": ("Chalon-sur-Saône", 46.7800, 4.8524),
-    "72": ("Le Mans", 48.0061, 0.1996), "73": ("Chambéry", 45.5646, 5.9178),
-    "74": ("Annecy", 45.8992, 6.1294), "75": ("Paris", 48.8566, 2.3522),
-    "76": ("Le Havre", 49.4944, 0.1079), "77": ("Melun", 48.5388, 2.6600),
-    "78": ("Versailles", 48.8049, 2.1204), "79": ("Niort", 46.3239, -0.4587),
-    "80": ("Amiens", 49.8942, 2.2957), "81": ("Albi", 43.9298, 2.1480),
-    "82": ("Montauban", 44.0181, 1.3533), "83": ("Toulon", 43.1242, 5.9280),
-    "84": ("Avignon", 43.9493, 4.8055), "85": ("La Roche-sur-Yon", 46.6705, -1.4269),
-    "86": ("Poitiers", 46.5802, 0.3404), "87": ("Limoges", 45.8336, 1.2611),
-    "88": ("Épinal", 48.1735, 6.4519), "89": ("Auxerre", 47.7982, 3.5731),
-    "90": ("Belfort", 47.6379, 6.8629), "91": ("Évry-Courcouronnes", 48.6288, 2.4419),
-    "92": ("Boulogne-Billancourt", 48.8397, 2.2400), "93": ("Saint-Denis", 48.9362, 2.3574),
-    "94": ("Créteil", 48.7904, 2.4556), "95": ("Argenteuil", 48.9479, 2.2467),
-    "971": ("Les Abymes", 16.2699, -61.5058), "972": ("Fort-de-France", 14.6161, -61.0588),
-    "973": ("Cayenne", 4.9224, -52.3135), "974": ("Saint-Denis", -20.8789, 55.4481),
-    "976": ("Mamoudzou", -12.7806, 45.2278),
-}
-
-
-def departements_vers_param(departements):
-    """
-    Convertit une sélection de départements en valeur du paramètre 'departement'
-    pour l'API France Travail, qui accepte plusieurs codes séparés par une
-    virgule (cf. data.gouv.fr : "L'API Offres d'emploi offre la possibilité de
-    filtrer sur plusieurs métiers, communes, départements"). None ou une liste
-    vide -> pas de paramètre du tout (recherche "Toute la France").
-    """
-    if not departements:
+    toute_la_france = st.checkbox("🇫🇷 Toute la France (aucun filtre département)", key=cle_checkbox)
+    if toute_la_france:
         return None
-    if isinstance(departements, str):
-        return departements
-    return ",".join(departements)
+
+    if not labels_choisis:
+        st.info("Sélectionne au moins un département ci-dessus, ou coche « Toute la France ».")
+        return ""
+    return ",".join(label.split(" - ")[0] for label in labels_choisis)
 
 
-def departement_est_multiple(departement_param):
-    """True si departement_param couvre plus d'un département : soit une
-    recherche nationale (None, aucun filtre), soit plusieurs codes explicites
-    séparés par une virgule. Utilisé pour désactiver la tension du marché, qui
-    ne se calcule proprement que pour UN seul département (statistique Dares
-    trimestrielle, un appel par territoire)."""
-    return departement_param is None or "," in str(departement_param)
+def _libelle_departement_affiche(departement_param):
+    """Libellé lisible pour un titre de section ('département 13', 'départements
+    13, 75', 'toute la France')."""
+    if not departement_param:
+        return "toute la France"
+    codes = departement_param.split(",")
+    if len(codes) == 1:
+        return f"département {codes[0]}"
+    return "départements " + ", ".join(codes)
 
 
-_RE_CODE_DEPARTEMENT_PREFIXE = re.compile(r"^(2[AB]|\d{2,3})\s*-")
+# NB (V4) : l'ancien sélecteur de poste privé _selecteur_poste(...) a été
+# supprimé d'ici et déplacé dans moteur_recherche.py sous le nom public
+# selecteur_poste_tags(...) — importé plus haut via `from moteur_recherche
+# import *`. Utilisé désormais uniquement dans cv_builder.py (onglet "Créer
+# mon CV") : "Tendance par profil" lit directement la sélection qui en
+# résulte (st.session_state["cv_postes_choisis"] / ["cv_codes_rome_choisis"])
+# plutôt que de re-proposer un second sélecteur redondant.
 
 
-def _deviner_departement_offre(ville_libelle, departement_recherche):
-    """
-    Déduit un code département pour positionner sur la carte une offre sans
-    coordonnées précises : d'abord depuis le préfixe du libellé de lieu
-    lui-même (ex: "13 - Bouches-du-Rhône" -> "13", fiable quel que soit le
-    nombre de départements recherchés), sinon depuis le département de
-    recherche SI c'est un code unique (pas une liste multi-département ni une
-    recherche nationale, où on ne peut pas savoir lequel des départements
-    sélectionnés concerne cette offre précise — dans ce cas, retourne None :
-    l'offre restera non localisée plutôt que mal placée).
-    """
-    m = _RE_CODE_DEPARTEMENT_PREFIXE.match(ville_libelle or "")
-    if m:
-        return m.group(1)
-    if departement_recherche and isinstance(departement_recherche, str) and "," not in departement_recherche:
-        return departement_recherche
-    return None
+st.divider()
 
-
-
-def adzuna_configure():
-    """True si les identifiants Adzuna sont présents. Même logique de repli que
-    DATABASE_URL : si absent, les fonctions Adzuna se désactivent silencieusement
-    plutôt que de faire planter l'app."""
-    return bool(ADZUNA_APP_ID and ADZUNA_APP_KEY)
-
-
-def departement_vers_lieu_adzuna(code_departement):
-    """
-    Convertit un code département France Travail (ex: '13', '2A', '971') en un
-    nom de lieu utilisable comme paramètre 'where' Adzuna. Renvoie None si le
-    code est inconnu — dans ce cas, appeler rechercher_offres_adzuna sans 'ou'
-    revient à chercher sur toute la France plutôt que d'échouer.
-    """
-    if not code_departement:
-        return None
-    return DEPARTEMENTS_VERS_NOM.get(str(code_departement).strip().upper())
-
-
-@st.cache_data(ttl=1800)
-def rechercher_offres_adzuna(mots_cles, ou=None, max_pages=2):
-    """
-    Interroge Adzuna (marché français) par mots-clés libres + lieu en texte libre
-    (ex: "Marseille", "Bouches-du-Rhône" — pas un code département : Adzuna ne
-    connaît pas cette notion, contrairement à l'API France Travail).
-
-    Renvoie une liste d'offres au même format brut que rechercher_offres_completes(),
-    directement concaténable avec ses résultats via fusionner_offres().
-    Ne lève jamais d'exception : identifiants absents, erreur réseau ou quota
-    dépassé renvoient simplement une liste vide.
-    """
-    if not adzuna_configure():
-        return []
-
-    toutes_offres = []
-    taille_page = 50  # max par page côté Adzuna
-    for page in range(1, max_pages + 1):
-        params = {
-            "app_id": ADZUNA_APP_ID,
-            "app_key": ADZUNA_APP_KEY,
-            "results_per_page": taille_page,
-            "what": mots_cles,
-            "content-type": "application/json",
-        }
-        if ou:
-            params["where"] = ou
-
-        try:
-            r = requests.get(f"{ADZUNA_BASE_URL}/{page}", params=params, timeout=10)
-            r.raise_for_status()
-        except requests.RequestException:
-            break  # panne ou quota dépassé : on garde ce qui a déjà été récupéré
-
-        resultats = r.json().get("results", [])
-        if not resultats:
-            break
-        toutes_offres.extend(_adapter_offre_adzuna(o) for o in resultats)
-        if len(resultats) < taille_page:
-            break
-
-    return toutes_offres
-
-
-def _adapter_offre_adzuna(offre_brute):
-    """
-    Reformate une offre Adzuna pour qu'elle porte les mêmes clés qu'une offre
-    France Travail brute. Champs absents côté Adzuna laissés vides/None plutôt
-    qu'inventés, pour que les fonctions de scoring existantes réajustent leurs
-    poids exactement comme elles le font déjà pour une offre France Travail
-    incomplète.
-    """
-    salaire_min = offre_brute.get("salary_min")
-    salaire_max = offre_brute.get("salary_max")
-    libelle_salaire = None
-    if salaire_min or salaire_max:
-        estime = " (estimé)" if offre_brute.get("salary_is_predicted") else ""
-        if salaire_min and salaire_max and salaire_min != salaire_max:
-            libelle_salaire = f"{int(salaire_min):,}\u2009€ - {int(salaire_max):,}\u2009€ par an{estime}".replace(",", " ")
-        else:
-            valeur = salaire_min or salaire_max
-            libelle_salaire = f"{int(valeur):,}\u2009€ par an{estime}".replace(",", " ")
-
-    categorie = offre_brute.get("category") or {}
-
-    return {
-        # --- clés identiques au format France Travail, lues telles quelles en aval ---
-        "intitule": (offre_brute.get("title") or "").strip(),
-        "description": offre_brute.get("description", ""),
-        "entreprise": {"nom": (offre_brute.get("company") or {}).get("display_name")},
-        "lieuTravail": {
-            "libelle": (offre_brute.get("location") or {}).get("display_name", ""),
-            "latitude": offre_brute.get("latitude"),
-            "longitude": offre_brute.get("longitude"),
-        },
-        "competences": [],  # Adzuna ne structure pas les compétences par offre
-        # secteurActivite volontairement vide : la "category" Adzuna n'est pas un code NAF.
-        # La renseigner ferait échouer systématiquement la comparaison de code exact dans
-        # calculer_correspondance_recruteur au lieu de faire ignorer la dimension.
-        "secteurActivite": None,
-        "secteurActiviteLibelle": categorie.get("label", ""),
-        "typeContratLibelle": _deduire_type_contrat(offre_brute),
-        "experienceLibelle": "Non précisé",  # Adzuna ne fournit pas ce champ
-        "salaire": {"libelle": libelle_salaire} if libelle_salaire else {},
-        "romeCode": None,  # pas de code ROME côté Adzuna
-        "dateCreation": offre_brute.get("created"),
-        # --- clés supplémentaires, ignorées par le moteur existant, utiles pour l'affichage ---
-        "source": "Adzuna",
-        "url": offre_brute.get("redirect_url", ""),
-    }
-
-
-def _deduire_type_contrat(offre_brute):
-    """Adzuna ne renvoie pas un libellé de contrat unique comme France Travail :
-    on le déduit des flags disponibles (approximation, notamment pas de distinction
-    Intérim/CDD, à affiner si besoin en pratique)."""
-    if offre_brute.get("contract_type") == "permanent":
-        return "CDI"
-    if offre_brute.get("contract_type") == "contract":
-        return "CDD"
-    return "Non précisé"
-
-
-def fusionner_offres(*listes_offres):
-    """
-    Concatène plusieurs listes d'offres (France Travail + Adzuna, dans n'importe
-    quel ordre) et déduplique sur intitulé + entreprise + ville — une même offre
-    publiée sur les deux plateformes partage généralement ces trois champs.
-    """
-    vues = set()
-    resultat = []
-    for offres in listes_offres:
-        for o in offres:
-            cle = (
-                (o.get("intitule") or "").strip().lower(),
-                ((o.get("entreprise") or {}).get("nom") or "").strip().lower(),
-                ((o.get("lieuTravail") or {}).get("libelle") or "").strip().lower(),
-            )
-            if cle in vues:
-                continue
-            vues.add(cle)
-            resultat.append(o)
-    return resultat
-
+tab_cv, tab_profil, tab_avance = st.tabs(
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés"]
+)
 
 # ---------------------------------------------------------------------------
-# Variantes "_multi" — sélection MULTIPLE de postes (plusieurs codes ROME dans
-# une même recherche, ex: "Consultant" + "Consultant ERP" + "Consultant IT").
-# Chacune réutilise la fonction mono-poste existante (inchangée) une fois par
-# code, puis regroupe les résultats (sommes / concaténations) — pas de logique
-# d'appel API dupliquée. La tension du marché reste volontairement un
-# indicateur mono-poste (comme pour "Tous les postes") : pas de variante "_multi".
+# Onglet 0 : Créer mon CV (exécuté en premier : sa synchronisation vers
+# "Métier recherché" doit être en place avant que ce champ ne soit affiché)
 # ---------------------------------------------------------------------------
-def volumes_departement_offres_multi(codes_rome, departement, secteur_activite=None, jours_max=None):
-    """Somme des volumes d'offres pour une liste de codes ROME."""
-    return sum(
-        volumes_departement_offres(code, departement, secteur_activite=secteur_activite, jours_max=jours_max)
-        for code in codes_rome if code
+with tab_cv:
+    afficher_generateur_cv(fonction_analyse_competences_multi=analyser_competences_multi)
+
+# ---------------------------------------------------------------------------
+# Onglet 1 : Tendance par profil
+# ---------------------------------------------------------------------------
+with tab_profil:
+    st.write(
+        "Analyse du marché pour le/les poste(s) sélectionné(s) dans votre CV : où sont les "
+        "offres près de chez vous, le volume national, et le niveau de tension du marché."
     )
 
+    titre_poste_cv = st.session_state.get("cv_titre", "").strip()
+    postes_cv = st.session_state.get("cv_postes_choisis", [])
+    codes_rome_cv = [c for c in st.session_state.get("cv_codes_rome_choisis", []) if c]
+    departement_cv = st.session_state.get("cv_departement") or "13"
 
-def rechercher_offres_completes_multi(codes_rome, departement, max_pages=1, secteur_activite=None, jours_max=None):
-    """Fusionne (et déduplique) les offres complètes de plusieurs codes ROME."""
-    listes = [
-        rechercher_offres_completes(
-            code, departement, max_pages=max_pages, secteur_activite=secteur_activite, jours_max=jours_max
-        )
-        for code in codes_rome if code
-    ]
-    return fusionner_offres(*listes)
-
-
-def chercher_offres_multi(codes_rome, departement, secteur_naf=None, jours_max=None, range_str="0-149"):
-    """
-    Fusionne (et déduplique) les résultats de chercher_offres() pour plusieurs codes
-    ROME. Le total renvoyé est le nombre d'offres réellement affichées après fusion —
-    pas la somme des totaux bruts par code, qui compterait plusieurs fois une même
-    offre présente sous plusieurs intitulés (ex: une offre "Consultant ERP" remontant
-    à la fois pour le code ROME "Consultant" et "Consultant ERP").
-    """
-    tous_resultats = []
-    for code in codes_rome:
-        if not code:
-            continue
-        resultats, _ = chercher_offres(code, departement, secteur_naf, jours_max, range_str=range_str)
-        tous_resultats.extend(resultats)
-    offres_dedupliquees = fusionner_offres(tous_resultats)
-    return offres_dedupliquees, len(offres_dedupliquees)
-
-
-def rechercher_offres_toutes_sources(mots_cles, departement, jours_max):
-    """
-    Recherche d'offres en mode large — codeROME="TOUS" + recherche libre sur
-    motsCles côté France Travail, complétée par Adzuna, fusionnée et dédupliquée.
-    mots_cles vide (ou None) = toutes les offres actives, sans filtre mot-clé.
-    Pas de filtre secteur (retiré de l'app) ni de résolution en code ROME précis :
-    la recherche est volontairement large, la précision se fait via les mots-clés
-    tapés par l'utilisateur plutôt que via un code métier étroit.
-    """
-    resultats, total = chercher_offres("TOUS", departement, None, jours_max, mots_cles=mots_cles or "")
-
-    for o in resultats:
-        o.setdefault("source", "France Travail")
-
-    if mots_cles and adzuna_configure():
-        lieu = departement_vers_lieu_adzuna(departement) if departement and "," not in departement else None
-        offres_adzuna = rechercher_offres_adzuna(mots_cles, ou=lieu)
-        if offres_adzuna:
-            resultats = fusionner_offres(resultats, offres_adzuna)
-            # Le total France Travail seul ne reflète pas les offres Adzuna ajoutées.
-            total = max(total, len(resultats))
-
-    return resultats, total
-
-
-def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_activite=None):
-    """
-    Fusionne les résultats de offres_par_ville() pour plusieurs codes ROME :
-    sommes des volumes par ville et par entreprise, bornes de date étendues.
-    """
-    dfs_villes, dfs_entreprises = [], []
-    total_cumule, nb_anonymes_cumule = 0, 0
-    dates_min, dates_max = [], []
-
-    for code in codes_rome:
-        if not code:
-            continue
-        dfv, total, dmin, dmax, dfe, nb_anon = offres_par_ville(
-            code, departement, jours_max=jours_max, secteur_activite=secteur_activite
-        )
-        if not dfv.empty:
-            dfs_villes.append(dfv)
-        if not dfe.empty:
-            dfs_entreprises.append(dfe)
-        total_cumule += total
-        nb_anonymes_cumule += nb_anon
-        if dmin:
-            dates_min.append(dmin)
-        if dmax:
-            dates_max.append(dmax)
-
-    if dfs_villes:
-        df_villes = (
-            pd.concat(dfs_villes, ignore_index=True)
-            .groupby("ville", as_index=False)
-            .agg(
-                nombre_offres=("nombre_offres", "sum"),
-                # "first" seul peut retomber sur une ligne à latitude/longitude manquantes
-                # si le même nom de ville apparaît d'abord dans les résultats d'un poste
-                # dont l'offre n'avait pas de coordonnées — on prend la première valeur
-                # RÉELLEMENT disponible parmi tous les postes fusionnés.
-                latitude=("latitude", lambda s: next((v for v in s if pd.notna(v)), None)),
-                longitude=("longitude", lambda s: next((v for v in s if pd.notna(v)), None)),
-                # False (précis) l'emporte sur True (repli chef-lieu) si l'un des postes
-                # fusionnés avait bien des coordonnées précises pour ce même libellé de lieu.
-                approximatif=("approximatif", "min"),
-            )
-            .sort_values("nombre_offres", ascending=False)
-            .reset_index(drop=True)
+    if not titre_poste_cv or not codes_rome_cv:
+        st.info(
+            "👉 Sélectionne un poste dans l'onglet **🧾 Créer mon CV** (tags de suggestions "
+            "sous le champ « Poste recherché ») — l'analyse se lance automatiquement dès qu'un "
+            "poste est choisi, pas besoin de le ressaisir ici."
         )
     else:
-        df_villes = pd.DataFrame(columns=["ville", "nombre_offres", "latitude", "longitude", "approximatif"])
+        # V4 : la résolution ROME se fait désormais UNE SEULE FOIS, côté "Créer mon CV"
+        # (sélecteur à tags). On reprend ici directement cv_postes_choisis /
+        # cv_codes_rome_choisis plutôt que de re-résoudre silencieusement le texte libre.
+        cle_auto_signature = "profil_auto_analyse_signature"
+        signature_actuelle = (tuple(sorted(codes_rome_cv)), departement_cv)
 
-    if dfs_entreprises:
-        df_ent_concat = pd.concat(dfs_entreprises, ignore_index=True)
-        # Regroupement insensible à la casse/espaces : "Signe+" et "SIGNE +" doivent
-        # fusionner en une seule ligne plutôt que d'apparaître comme deux entreprises.
-        df_ent_concat["_cle"] = df_ent_concat["entreprise"].str.strip().str.lower()
-        df_entreprises = (
-            df_ent_concat.groupby("_cle", as_index=False)
-            .agg(
-                entreprise=("entreprise", "first"),
-                nombre_offres=("nombre_offres", "sum"),
-                villes=("villes", lambda s: ", ".join(sorted({v.strip() for grp in s for v in grp.split(",")}))),
-            )
-            .drop(columns="_cle")
-            .sort_values("nombre_offres", ascending=False)
-            .reset_index(drop=True)
-        )
-    else:
-        df_entreprises = pd.DataFrame(columns=["entreprise", "nombre_offres", "villes"])
-
-    date_min_global = min(dates_min) if dates_min else None
-    date_max_global = max(dates_max) if dates_max else None
-    return df_villes, total_cumule, date_min_global, date_max_global, df_entreprises, nb_anonymes_cumule
-
-
-def evolution_offres_annuelle_multi(codes_rome, departement, secteur_activite=None):
-    """Somme, mois par mois, l'évolution d'offres de plusieurs codes ROME."""
-    dfs = [
-        evolution_offres_annuelle(code, departement, secteur_activite=secteur_activite)
-        for code in codes_rome if code
-    ]
-    dfs = [d for d in dfs if not d.empty]
-    if not dfs:
-        return pd.DataFrame(columns=["mois", "nombre_offres"])
-    return (
-        pd.concat(dfs, ignore_index=True)
-        .groupby("mois", as_index=False)["nombre_offres"]
-        .sum()
-        .sort_values("mois")
-        .reset_index(drop=True)
-    )
-
-
-def repartition_contrats_et_salaires_multi(codes_rome, departement, jours_max=None, secteur_activite=None):
-    """Fusionne la répartition contrats/salaires/expérience de plusieurs codes ROME."""
-    resultats = [
-        repartition_contrats_et_salaires(code, departement, jours_max=jours_max, secteur_activite=secteur_activite)
-        for code in codes_rome if code
-    ]
-    if not resultats:
-        return (
-            pd.DataFrame(columns=["type_contrat", "nombre_offres"]),
-            pd.DataFrame(),
-            0,
-            0,
-            pd.DataFrame(columns=["experience", "nombre_offres"]),
-        )
-
-    dfs_contrats = [r[0] for r in resultats if not r[0].empty]
-    dfs_salaires = [r[1] for r in resultats if not r[1].empty]
-    nb_avec_salaire = sum(r[2] for r in resultats)
-    nb_total = sum(r[3] for r in resultats)
-    dfs_experience = [r[4] for r in resultats if not r[4].empty]
-
-    df_contrats = (
-        pd.concat(dfs_contrats, ignore_index=True)
-        .groupby("type_contrat", as_index=False)["nombre_offres"]
-        .sum()
-        .sort_values("nombre_offres", ascending=False)
-        .reset_index(drop=True)
-        if dfs_contrats
-        else pd.DataFrame(columns=["type_contrat", "nombre_offres"])
-    )
-    df_salaires = pd.concat(dfs_salaires, ignore_index=True) if dfs_salaires else pd.DataFrame()
-    df_experience = (
-        pd.concat(dfs_experience, ignore_index=True)
-        .groupby("experience", as_index=False)["nombre_offres"]
-        .sum()
-        .sort_values("nombre_offres", ascending=False)
-        .reset_index(drop=True)
-        if dfs_experience
-        else pd.DataFrame(columns=["experience", "nombre_offres"])
-    )
-    return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_experience
-
-
-LABEL_ENTREPRISE_ANONYME = "Entreprise non communiquée"
-
-
-def _nom_entreprise_normalise(offre):
-    """Nom d'entreprise d'une offre, ou LABEL_ENTREPRISE_ANONYME si l'offre est diffusée
-    sans nom d'entreprise visible (recrutement anonyme) — regroupe ces offres sous une
-    même étiquette au lieu de les exclure du tableau des recruteurs."""
-    return offre.get("entreprise", {}).get("nom") or LABEL_ENTREPRISE_ANONYME
-
-
-@st.cache_data(ttl=1800)
-def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-    toutes_offres = []
-    taille_page = 150
-    for page in range(max_pages):
-        debut = page * taille_page
-        fin = debut + taille_page - 1
-        params = {"range": f"{debut}-{fin}"}
-        if departement:
-            params["departement"] = departement
-        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
-        if jours_max:
-            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
-            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        r = requests.get(url, headers=headers, params=params)
-        if r.status_code not in (200, 206):
-            break
-        resultats = r.json().get("resultats", [])
-        toutes_offres.extend(resultats)
-        if len(resultats) < taille_page:
-            break
-
-    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
-
-    lieux = {}
-    entreprises = {}  # cle_normalisee -> {"nom_affiche":..., "nombre_offres":..., "villes": set()}
-    dates_creation = []
-    for offre in toutes_offres:
-        lieu_travail = offre.get("lieuTravail", {})
-        ville = lieu_travail.get("libelle", "Non renseigné")
-        lat_brute = lieu_travail.get("latitude")
-        lon_brute = lieu_travail.get("longitude")
-        if ville not in lieux:
-            if lat_brute is not None and lon_brute is not None:
-                lieux[ville] = {
-                    "nombre_offres": 0, "latitude": lat_brute, "longitude": lon_brute, "approximatif": False,
-                }
-            elif (chef_lieu := DEPARTEMENTS_CHEF_LIEU.get(
-                str(_deviner_departement_offre(ville, departement) or "").strip().upper()
-            )):
-                # Pas de coordonnées précises pour cette offre (lieu renseigné seulement au
-                # niveau département, ou télétravail) : on positionne sur la plus grande
-                # ville DU DÉPARTEMENT DE L'OFFRE (déduit du libellé, fiable même en
-                # recherche multi-département ou nationale) plutôt que d'exclure l'offre.
-                _, lat_repli, lon_repli = chef_lieu
-                lieux[ville] = {
-                    "nombre_offres": 0, "latitude": lat_repli, "longitude": lon_repli, "approximatif": True,
-                }
+        if st.session_state.get(cle_auto_signature) != signature_actuelle:
+            if len(codes_rome_cv) == 1:
+                st.session_state["df_rome_profil"] = pd.DataFrame(
+                    [{"code_rome": codes_rome_cv[0], "libelle": postes_cv[0], "nb_offres_echantillon": None}]
+                )
+                st.session_state["code_rome_choisi"] = codes_rome_cv[0]
+                st.session_state["codes_rome_choisis"] = codes_rome_cv
+                st.session_state["mots_cles_profil_actif"] = postes_cv[0]
             else:
-                lieux[ville] = {"nombre_offres": 0, "latitude": None, "longitude": None, "approximatif": True}
-        elif lieux[ville]["approximatif"] and lat_brute is not None:
-            # Une offre précédente pour ce même libellé de lieu était retombée sur le
-            # repli chef-lieu : si une offre ultérieure a bien des coordonnées précises,
-            # on les adopte.
-            lieux[ville]["latitude"] = lat_brute
-            lieux[ville]["longitude"] = lon_brute
-            lieux[ville]["approximatif"] = False
-        lieux[ville]["nombre_offres"] += 1
+                st.session_state["df_rome_profil"] = pd.DataFrame(
+                    [{"code_rome": "MULTI", "libelle": " / ".join(postes_cv), "nb_offres_echantillon": None}]
+                )
+                st.session_state["code_rome_choisi"] = "MULTI"
+                st.session_state["codes_rome_choisis"] = codes_rome_cv
+                st.session_state["mots_cles_profil_actif"] = " ".join(postes_cv)
 
-        nom_entreprise = _nom_entreprise_normalise(offre)
-        cle_entreprise = nom_entreprise.strip().lower()
-        nom_ville = ville.split(" - ", 1)[-1].strip() if " - " in ville else ville
-        if cle_entreprise not in entreprises:
-            entreprises[cle_entreprise] = {"nom_affiche": nom_entreprise.strip(), "nombre_offres": 0, "villes": set()}
-        entreprises[cle_entreprise]["nombre_offres"] += 1
-        entreprises[cle_entreprise]["villes"].add(nom_ville)
+            st.session_state["departement_profil_actif"] = departement_cv
+            st.session_state[cle_auto_signature] = signature_actuelle
 
-        date_creation = offre.get("dateCreation")
-        if date_creation:
-            dates_creation.append(date_creation)
+    if "df_rome_profil" in st.session_state:
+        df_rome = st.session_state["df_rome_profil"]
+        departement_actif = st.session_state["departement_profil_actif"]
+        mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
+        code_rome_choisi = st.session_state.get("code_rome_choisi")
+        codes_rome_choisis = st.session_state.get("codes_rome_choisis", [])
+        postes_choisis_profil = st.session_state.get("cv_postes_choisis", [])
+        recherche_multi = code_rome_choisi == "MULTI"
 
-    df = pd.DataFrame([{"ville": v, **infos} for v, infos in lieux.items()])
-    if not df.empty:
-        df = df.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
-
-    df_entreprises = pd.DataFrame(
-        [
-            {
-                "entreprise": infos["nom_affiche"],
-                "nombre_offres": infos["nombre_offres"],
-                "villes": ", ".join(sorted(infos["villes"])),
-            }
-            for nom, infos in entreprises.items()
-        ]
-    )
-    if not df_entreprises.empty:
-        df_entreprises = df_entreprises.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
-
-    # Nombre d'offres positionnées par repli sur le chef-lieu du département plutôt
-    # qu'avec des coordonnées précises (renommé nb_offres_anonymes -> nb_offres_approximatives
-    # côté sémantique, la position dans le tuple de retour reste inchangée pour compatibilité).
-    nb_offres_approximatives = int(df.loc[df["approximatif"], "nombre_offres"].sum()) if not df.empty else 0
-
-    date_min_pub = min(dates_creation) if dates_creation else None
-    date_max_pub = max(dates_creation) if dates_creation else None
-    return df, len(toutes_offres), date_min_pub, date_max_pub, df_entreprises, nb_offres_approximatives
-
-
-
-
-@st.cache_data(ttl=1800)
-def volumes_departement_offres(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None):
-    """
-    Total offres pour un code ROME (ou tous, via mots-clés) sur un département.
-
-    Si secteur_activite est une LISTE (multi-secteur), l'API ne permet pas de filtrer
-    côté serveur (un seul secteurActivite par requête) : impossible d'utiliser le
-    simple total Content-Range dans ce cas, il refléterait TOUS les secteurs. On
-    récupère alors les offres (paginé) et on compte après filtrage post-fetch, comme
-    le fait déjà offres_par_ville() — plus coûteux mais seul moyen d'avoir un total
-    cohérent avec le reste de l'app en multi-secteur.
-    """
-    if isinstance(secteur_activite, list) and secteur_activite:
-        offres = rechercher_offres_completes(
-            code_rome, departement, max_pages=5, mots_cles=mots_cles,
-            secteur_activite=secteur_activite, jours_max=jours_max,
-        )
-        return len(offres)
-
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"range": "0-0"}
-    if departement:
-        params["departement"] = departement
-    params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
-    if jours_max:
-        date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
-        params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-        params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    r = requests.get(url, headers=headers, params=params)
-    if r.status_code not in (200, 206):
-        return 0
-    content_range = r.headers.get("Content-Range", "")
-    total = 0
-    if "/" in content_range:
-        try:
-            total = int(content_range.split("/")[-1])
-        except ValueError:
-            total = 0
-    return total
-
-
-# ---------------------------------------------------------------------------
-# API "Marché du travail" (stats-offres-demandes-emploi)
-# Documentation confirmée : requêtes POST avec corps JSON.
-# ---------------------------------------------------------------------------
-# Le nom exact du scope de cette API n'est pas dans la doc publique (propre à
-# la config de l'application). Plutôt que de deviner une seule fois et planter
-# en 403, on teste plusieurs candidats au premier appel et on retient celui
-# qui fonctionne réellement, en le mettant en cache pour le reste de la session.
-_CANDIDATS_SCOPE_STATS_MARCHE = [
-    "api_stats-offres-demandes-emploiv1 offresetdemandesemploi",  # confirmé via Swagger (section Scopes)
-    "api_stats-offres-demandes-emploiv1",
-    "stats-offres-demandes-emploi",
-    "api_stats-offres-demandes-emploi",
-]
-
-BASE_STATS_MARCHE = "https://api.francetravail.io/partenaire/stats-offres-demandes-emploi"
-
-
-def _appeler_indicateur(base_url, ressource, token, payload):
-    url = f"{base_url}{ressource}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    if r.status_code not in (200, 206):
-        return None, f"Erreur API {r.status_code} : {r.text}"
-    return r.json(), None
-
-
-def _appel_avec_decouverte_scope(candidats, cle_session, base_url, ressource, payload):
-    """
-    Essaie le scope déjà validé pour cette famille d'API (mémorisé en session),
-    sinon teste chaque candidat jusqu'à trouver celui qui fonctionne réellement.
-    """
-    scope_connu = st.session_state.get(cle_session)
-    ordre_essai = [scope_connu] + [c for c in candidats if c != scope_connu] if scope_connu else candidats
-
-    derniere_erreur = "Aucun scope testé."
-    for scope in ordre_essai:
-        try:
-            token = get_token(scope)
-        except Exception as e:
-            derniere_erreur = f"Échec d'obtention du token pour le scope '{scope}' : {e}"
-            continue
-        data, erreur = _appeler_indicateur(base_url, ressource, token, payload)
-        if erreur is None:
-            st.session_state[cle_session] = scope
-            return data, None
-        derniere_erreur = f"[scope '{scope}'] {erreur}"
-
-    return None, (
-        f"Aucun scope testé n'a fonctionné pour cette API. Dernière erreur : {derniere_erreur} "
-        "— vérifie le nom exact du scope via le bouton 'Authorize' du Swagger France Travail."
-    )
-
-
-@st.cache_data(ttl=1800)
-def demandeurs_emploi_departement(code_rome, departement):
-    """Indicateur DE_1 : nombre de demandeurs d'emploi (cat. A+B+C) pour un ROME et un département."""
-    payload = {
-        "codeTypeTerritoire": "DEP",
-        "codeTerritoire": departement,
-        "codeTypeActivite": "ROME",
-        "codeActivite": code_rome,
-        "codeTypePeriode": "TRIMESTRE",
-        "codeTypeNomenclature": "CATCAND",
-        "listeCodeNomenclature": ["A", "B", "C"],
-        "dernierePeriode": True,
-        "sansCaracteristiques": True,
-    }
-    data, erreur = _appel_avec_decouverte_scope(
-        _CANDIDATS_SCOPE_STATS_MARCHE, "scope_stats_marche", BASE_STATS_MARCHE,
-        "/v1/indicateur/stat-demandeurs", payload,
-    )
-    if erreur:
-        return None, None, erreur
-    valeurs = data.get("listeValeursParPeriode", [])
-    total = sum(v.get("valeurPrincipaleNombre") or 0 for v in valeurs)
-    periode = valeurs[0].get("libPeriode") if valeurs else None
-    return total, periode, None
-
-
-def demandeurs_emploi_departement_multi(codes_rome, departement):
-    """
-    Somme des demandeurs d'emploi (cat. A+B+C) pour une liste de codes ROME —
-    permet de calculer une tension du marché agrégée pour une sélection multi-
-    poste : somme des offres / somme des demandeurs sur l'ensemble des postes
-    sélectionnés. Une erreur sur un seul code n'empêche pas de sommer les
-    autres ; l'erreur n'est remontée que si TOUS les codes échouent.
-    """
-    codes_valides = [c for c in codes_rome if c]
-    total = 0
-    periode = None
-    erreurs = []
-    for code in codes_valides:
-        t, p, e = demandeurs_emploi_departement(code, departement)
-        if e:
-            erreurs.append(f"{code}: {e}")
-            continue
-        total += t or 0
-        periode = periode or p
-    erreur_globale = "; ".join(erreurs) if erreurs and len(erreurs) == len(codes_valides) else None
-    return total, periode, erreur_globale
-
-
-# ---------------------------------------------------------------------------
-# Fonctions "KPIs avancés" : évolution annuelle, type de contrat, salaire
-# ---------------------------------------------------------------------------
-_MOIS_FR = {
-    1: "jan", 2: "fév", 3: "mars", 4: "avr", 5: "mai", 6: "juin",
-    7: "juil", 8: "août", 9: "sept", 10: "oct", 11: "nov", 12: "déc",
-}
-
-
-def _formater_mois_fr(mois_str):
-    """'2026-03' -> 'mars 2026'"""
-    annee, mois = mois_str.split("-")
-    return f"{_MOIS_FR[int(mois)]} {annee}"
-
-
-@st.cache_data(ttl=1800)
-def evolution_offres_annuelle(code_rome, departement, mots_cles=None, secteur_activite=None):
-    """
-    Volume d'offres par mois sur les 12 derniers mois, pour un ROME (ou tous, via
-    mots-clés) et un département. Une requête par mois (compte via Content-Range).
-
-    NB multi-secteur : ce compteur s'appuie uniquement sur Content-Range (pas de
-    liste d'offres brutes à filtrer après coup), donc contrairement aux autres
-    fonctions de ce module, une LISTE de codes secteur n'est pas filtrable ici —
-    _params_filtre_poste l'ignore silencieusement (retombe sur "tous secteurs"
-    pour ce graphique précis) plutôt que de fausser le compte.
-    """
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-    maintenant = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    lignes = []
-    for i in range(11, -1, -1):
-        annee = maintenant.year
-        mois = maintenant.month - i
-        while mois <= 0:
-            mois += 12
-            annee -= 1
-        debut_mois = datetime(annee, mois, 1, tzinfo=timezone.utc)
-        if mois == 12:
-            fin_mois = datetime(annee + 1, 1, 1, tzinfo=timezone.utc)
+        if df_rome.empty:
+            st.error("Aucune offre trouvée pour ce département. Essaie d'élargir les critères.")
         else:
-            fin_mois = datetime(annee, mois + 1, 1, tzinfo=timezone.utc)
+            # Tous les indicateurs de cet onglet (tension, top recruteurs, top villes)
+            # partagent désormais la même base de temps : depuis le 1er janvier de l'année
+            # en cours. Poste et secteur restent les mêmes filtres que partout ailleurs.
+            aujourdhui = datetime.now()
+            debut_annee = datetime(aujourdhui.year, 1, 1)
+            libelle_periode_offres = f"depuis janvier {aujourdhui.year}"
+            jours_max_periode_offres = (aujourdhui - debut_annee).days
 
-        params = {
-            "range": "0-0",
-            "minCreationDate": debut_mois.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "maxCreationDate": fin_mois.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        if departement:
-            params["departement"] = departement
-        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
-        r = requests.get(url, headers=headers, params=params)
-        total = 0
-        if r.status_code in (200, 206):
-            content_range = r.headers.get("Content-Range", "")
-            if "/" in content_range:
-                try:
-                    total = int(content_range.split("/")[-1])
-                except ValueError:
-                    total = 0
-        lignes.append({"mois": debut_mois.strftime("%Y-%m"), "nombre_offres": total})
+            st.markdown("#### ⚖️ Tension du marché")
+            if code_rome_choisi == "TOUS":
+                st.info(
+                    "⚖️ La tension du marché nécessite un ou plusieurs postes précis (l'indicateur "
+                    "officiel raisonne par métier). Sélectionne au moins un poste ci-dessus pour "
+                    "voir ce calcul."
+                )
+            elif departement_est_multiple(departement_actif):
+                st.info(
+                    "⚖️ La tension du marché nécessite un seul département sélectionné (statistique "
+                    "officielle trimestrielle, un appel par territoire) — indisponible pour « Toute "
+                    "la France » ou une sélection de plusieurs départements. Choisis un seul "
+                    "département ci-dessus pour voir ce calcul."
+                )
+            else:
+                st.caption(
+                    f"ℹ️ Le nombre d'offres porte sur le {libelle_periode_offres} (même base que "
+                    "le top recruteurs et le top villes plus bas) ; les demandeurs d'emploi "
+                    "restent une statistique officielle trimestrielle (non filtrable par date)."
+                    + (
+                        " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
+                        "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
+                        "indicateur officiel par métier unique."
+                        if recherche_multi else ""
+                    )
+                )
+                if recherche_multi:
+                    with st.spinner("Récupération des demandeurs d'emploi..."):
+                        total_dep_offres = volumes_departement_offres_multi(
+                            codes_rome_choisis, departement_actif, jours_max=jours_max_periode_offres,
+                        )
+                        total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = (
+                            demandeurs_emploi_departement_multi(codes_rome_choisis, departement_actif)
+                        )
+                else:
+                    with st.spinner("Récupération des demandeurs d'emploi..."):
+                        total_dep_offres = volumes_departement_offres(
+                            code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
+                        )
+                        total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
+                            code_rome_choisi, departement_actif
+                        )
 
-    return pd.DataFrame(lignes)
+                if erreur_demandeurs:
+                    st.warning(
+                        f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
+                        "Saisis une valeur manuelle en attendant."
+                    )
+                    total_dep_demandeurs = st.number_input(
+                        "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
+                    )
+                else:
+                    c1, c2 = st.columns(2)
+                    c1.metric(f"Offres — {libelle_periode_offres}", total_dep_offres)
+                    c2.metric(
+                        f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
+                        total_dep_demandeurs,
+                    )
 
+                tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
+                if tension is not None:
+                    st.metric("Indice de tension (offres / demandeurs)", tension)
+                    st.info(interpreter_tension(tension))
+                    conseils = conseils_tension(tension)
+                    if conseils:
+                        with st.expander("💡 Conseils pour ce niveau de tension"):
+                            for conseil in conseils:
+                                st.markdown(f"- {conseil}")
+                else:
+                    st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
 
-@st.cache_data(ttl=1800)
-def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
-    """
-    Récupère les offres (ROME ou tous via mots-clés, + département, filtre de
-    fraîcheur optionnel) et calcule la répartition par type de contrat + salaires.
-    """
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            st.divider()
 
-    toutes_offres = []
-    taille_page = 150
-    for page in range(max_pages):
-        debut = page * taille_page
-        fin = debut + taille_page - 1
-        params = {"range": f"{debut}-{fin}"}
-        if departement:
-            params["departement"] = departement
-        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
-        if jours_max:
-            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
-            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        r = requests.get(url, headers=headers, params=params)
-        if r.status_code not in (200, 206):
-            break
-        resultats = r.json().get("resultats", [])
-        toutes_offres.extend(resultats)
-        if len(resultats) < taille_page:
-            break
-
-    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
-
-    compteur_contrats = Counter()
-    compteur_experience = Counter()
-    lignes_salaires = []
-    for offre in toutes_offres:
-        type_contrat_brut = offre.get("typeContratLibelle") or offre.get("typeContrat") or "Non précisé"
-        # On ignore la nuance de durée après le tiret (ex: "Intérim - 6 Mois" -> "Intérim")
-        type_contrat = type_contrat_brut.split(" - ")[0].strip()
-        compteur_contrats[type_contrat] += 1
-
-        experience_libelle = offre.get("experienceLibelle") or "Non précisé"
-        compteur_experience[experience_libelle] += 1
-
-        salaire = offre.get("salaire", {})
-        libelle_salaire = salaire.get("libelle") if salaire else None
-        if libelle_salaire:
-            lignes_salaires.append(
-                {
-                    "Poste": offre.get("intitule", "N/C"),
-                    "Entreprise": _nom_entreprise_normalise(offre),
-                    "Type de contrat": type_contrat,
-                    "Salaire indiqué": libelle_salaire,
-                }
+            mots_cles_recherche_large = (
+                "" if postes_choisis_profil == ["🌐 Tous les postes"] else " ".join(postes_choisis_profil)
             )
 
-    df_contrats = pd.DataFrame(compteur_contrats.items(), columns=["type_contrat", "nombre_offres"])
-    if not df_contrats.empty:
-        df_contrats = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+            with st.spinner("Récupération des recruteurs actifs..."):
+                _, _, _, _, df_entreprises, _ = offres_par_ville(
+                    "TOUS", departement_actif,
+                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
+                )
 
-    df_experience = pd.DataFrame(compteur_experience.items(), columns=["experience", "nombre_offres"])
-    if not df_experience.empty:
-        df_experience = df_experience.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+            st.markdown("#### 🏢 Top recruteurs")
+            st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
+            if df_entreprises.empty:
+                st.info(
+                    "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
+                    "les offres sont diffusées de façon anonyme."
+                )
+            else:
+                st.caption(
+                    "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
+                    "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
+                    "peuvent valoir une candidature directe."
+                )
+                st.dataframe(
+                    df_entreprises.rename(
+                        columns={
+                            "entreprise": "Entreprise",
+                            "nombre_offres": "Nombre d'offres",
+                        }
+                    ).drop(columns=["villes"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
-    df_salaires = pd.DataFrame(lignes_salaires)
-    nb_total = len(toutes_offres)
-    nb_avec_salaire = len(lignes_salaires)
+            st.divider()
 
-    return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_experience
+            st.markdown("#### 📍 Villes qui recrutent")
+            st.caption(f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top recruteurs).")
+            with st.spinner("Récupération des offres par ville..."):
+                df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
+                    "TOUS", departement_actif,
+                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
+                )
+            st.metric("Total offres dans la région", total_region)
+            # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
+            # donnent la plage de publication réelle des offres renvoyées par l'API —
+            # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
+            # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
+            # offres sont simplement celles encore actives aujourd'hui.
+            if not df_villes.empty:
+                df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
+                nb_offres_approx = int(df_carte.loc[df_carte["approximatif"], "nombre_offres"].sum()) if not df_carte.empty else 0
+                if nb_offres_approx > 0:
+                    st.caption(
+                        f"📍 {nb_offres_approx} offre(s) sur {total_region} n'ont pas de coordonnées GPS "
+                        "précises côté France Travail (lieu renseigné au niveau département seulement, ou "
+                        "télétravail) — elles sont positionnées sur la plus grande ville du département "
+                        "(marqueurs oranges ci-dessous), à titre indicatif."
+                    )
+                ville_cliquee = None
+                if not df_carte.empty:
+                    df_carte["latitude"] = df_carte["latitude"].astype(float)
+                    df_carte["longitude"] = df_carte["longitude"].astype(float)
+
+                    etendue_lat = df_carte["latitude"].max() - df_carte["latitude"].min()
+                    etendue_lon = df_carte["longitude"].max() - df_carte["longitude"].min()
+                    etendue = max(etendue_lat, etendue_lon)
+                    if etendue < 0.03:
+                        zoom_auto = 12
+                    elif etendue < 0.1:
+                        zoom_auto = 11
+                    elif etendue < 0.3:
+                        zoom_auto = 10
+                    elif etendue < 0.8:
+                        zoom_auto = 9
+                    else:
+                        zoom_auto = 8
+
+                    carte = folium.Map(
+                        location=[df_carte["latitude"].mean(), df_carte["longitude"].mean()],
+                        zoom_start=zoom_auto,
+                        # CartoDB dark_matter exige désormais une clé API (changement récent
+                        # de Carto) — OpenStreetMap reste gratuit et sans clé, en thème clair.
+                        tiles="OpenStreetMap",
+                    )
+                    cluster = MarkerCluster(
+                        options={"maxClusterRadius": 60, "disableClusteringAtZoom": 15}
+                    ).add_to(carte)
+
+                    for _, row in df_carte.iterrows():
+                        couleur = "#e67e22" if row["approximatif"] else "#0066cc"
+                        tooltip_texte = f"{row['ville']} : {int(row['nombre_offres'])} offre(s)"
+                        if row["approximatif"]:
+                            tooltip_texte += " (position approximative)"
+                        for _ in range(int(row["nombre_offres"])):
+                            folium.CircleMarker(
+                                location=[row["latitude"], row["longitude"]],
+                                radius=8,
+                                tooltip=tooltip_texte,
+                                color=couleur,
+                                fill=True,
+                                fill_color=couleur,
+                                fill_opacity=0.8,
+                                weight=1,
+                            ).add_to(cluster)
+
+                    # Carte purement visuelle (tendance) : pas de listing d'offres cliquables —
+                    # l'app ne cherche plus à concurrencer les plateformes de recrutement dédiées,
+                    # seule la lecture de marché (villes qui recrutent) est montrée ici.
+                    # returned_objects=[] évite les allers-retours serveur au zoom/déplacement
+                    # (meilleure stabilité, notamment sur mobile).
+                    st_folium(
+                        carte,
+                        use_container_width=True,
+                        height=500,
+                        key="carte_offres_ville",
+                        returned_objects=[],
+                    )
+                else:
+                    st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
+
+            st.divider()
+            st.info(
+                "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
+                "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
+                "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
+                "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
+                "avec prudence si tu cherches un point de comparaison sur ce type de poste."
+            )
+
+# ---------------------------------------------------------------------------
+# Onglet "KPIs avancés"
+# ---------------------------------------------------------------------------
+with tab_avance:
+    if "code_rome_choisi" not in st.session_state:
+        st.info(
+            "👉 Sélectionne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
+            "s'appuient sur l'analyse automatique de l'onglet Tendance par profil."
+        )
+    else:
+        code_rome_actif = st.session_state["code_rome_choisi"]
+        codes_rome_choisis_avance = st.session_state.get("codes_rome_choisis", [])
+        departement_actif = st.session_state["departement_profil_actif"]
+        mots_cles_actifs_avance = st.session_state.get("mots_cles_profil_actif", "")
+        recherche_multi_avance = code_rome_actif == "MULTI"
+
+        # Auto-déclenchement : se relance seul dès que le poste/département actif change
+        # (mis à jour automatiquement par "Tendance par profil"), résultats conservés en
+        # session pour rester affichés en revenant sur cet onglet.
+        cle_signature_avance = "avance_auto_signature"
+        signature_avance_actuelle = (code_rome_actif, tuple(codes_rome_choisis_avance), departement_actif)
+
+        if st.session_state.get(cle_signature_avance) != signature_avance_actuelle:
+            with st.spinner("Analyse en cours (évolution, contrats, salaires, expérience)..."):
+                if recherche_multi_avance:
+                    df_evolution = evolution_offres_annuelle_multi(codes_rome_choisis_avance, departement_actif)
+                    df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
+                        repartition_contrats_et_salaires_multi(codes_rome_choisis_avance, departement_actif)
+                    )
+                else:
+                    df_evolution = evolution_offres_annuelle(
+                        code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
+                    )
+                    df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
+                        repartition_contrats_et_salaires(
+                            code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
+                        )
+                    )
+            st.session_state["avance_resultats"] = (
+                df_evolution, df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience,
+            )
+            st.session_state[cle_signature_avance] = signature_avance_actuelle
+
+        if "avance_resultats" in st.session_state:
+            df_evolution, df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
+                st.session_state["avance_resultats"]
+            )
+
+            st.divider()
+            annee_courante = datetime.now().year
+            st.markdown(f"#### 📈 Nombre d'offres d'emploi - {annee_courante}")
+            if df_evolution.empty or df_evolution["nombre_offres"].sum() == 0:
+                st.info("Aucune donnée d'évolution disponible pour ces critères.")
+            else:
+                df_evolution_affiche = df_evolution.copy()
+                df_evolution_affiche["mois_label"] = df_evolution_affiche["mois"].apply(_formater_mois_fr)
+                ordre_mois = list(df_evolution_affiche["mois_label"])
 
 
-def calculer_tension(nb_offres, nb_demandeurs):
-    if not nb_demandeurs or nb_demandeurs == 0:
-        return None
-    return round(nb_offres / nb_demandeurs, 2)
+                base_evolution = alt.Chart(df_evolution_affiche).encode(
+                    x=alt.X(
+                        "mois_label:N",
+                        sort=ordre_mois,
+                        title=None,
+                        axis=alt.Axis(labelAngle=-45),
+                    ),
+                    y=alt.Y("nombre_offres:Q", title="Nombre d'offres"),
+                )
+                courbe = base_evolution.mark_line(point=True, color="#0066cc")
+                etiquettes = base_evolution.mark_text(dy=-12, fontSize=12).encode(text="nombre_offres:Q")
+                st.altair_chart((courbe + etiquettes).properties(height=350), use_container_width=True)
 
+            st.divider()
+            st.markdown("#### 📋 Répartition par type de contrat")
+            if df_contrats.empty:
+                st.info("Aucune donnée de type de contrat disponible pour ces critères.")
+            else:
+                df_contrats_tri = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+                fig_contrats = go.Figure(
+                    go.Scatter(
+                        x=list(range(len(df_contrats_tri))),
+                        y=[0] * len(df_contrats_tri),
+                        mode="markers+text",
+                        marker=dict(
+                            # sizemode="area" + cette formule standard Plotly rend l'AIRE du
+                            # cercle proportionnelle à nombre_offres (pas le diamètre, qui
+                            # exagérerait visuellement les écarts entre types de contrat).
+                            size=df_contrats_tri["nombre_offres"],
+                            sizemode="area",
+                            sizeref=2.0 * df_contrats_tri["nombre_offres"].max() / (110.0 ** 2),
+                            sizemin=18,
+                            color=df_contrats_tri["nombre_offres"],
+                            colorscale="Blues",
+                            line=dict(width=2, color="white"),
+                        ),
+                        text=[
+                            f"{row.type_contrat}<br>{row.nombre_offres}"
+                            for row in df_contrats_tri.itertuples()
+                        ],
+                        textposition="middle center",
+                        textfont=dict(size=13, color="white"),
+                        hoverinfo="skip",
+                    )
+                )
+                fig_contrats.update_xaxes(visible=False, range=[-1, len(df_contrats_tri)])
+                fig_contrats.update_yaxes(visible=False, range=[-1.2, 1.2])
+                fig_contrats.update_layout(
+                    height=280, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_contrats, use_container_width=True)
 
-def interpreter_tension(tension):
-    if tension is None:
-        return "Donnée insuffisante pour calculer la tension."
-    if tension >= 1.5:
-        return "Marché très favorable au candidat (peu de concurrence, beaucoup d'offres)."
-    if tension >= 1.0:
-        return "Marché favorable au candidat."
-    if tension >= 0.5:
-        return "Marché équilibré à concurrentiel."
-    return "Marché très concurrentiel (peu d'offres pour beaucoup de candidats)."
+                st.dataframe(
+                    df_contrats.rename(columns={"type_contrat": "Type de contrat", "nombre_offres": "Nombre d'offres"}),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
+            st.divider()
+            st.markdown("#### 💰 Fourchette de salaire proposée")
+            if nb_total_offres == 0:
+                st.info("Aucune offre trouvée pour ces critères.")
+            elif nb_avec_salaire == 0:
+                st.info("Aucune des offres trouvées n'indique de salaire.")
+            else:
+                pct = round(100 * nb_avec_salaire / nb_total_offres)
+                st.metric("Offres indiquant un salaire (tous contrats)", f"{nb_avec_salaire} / {nb_total_offres} ({pct}%)")
 
-def conseils_tension(tension):
-    """
-    Conseils actionnables selon le palier de tension (même paliers que
-    interpreter_tension). Chaque conseil pointe vers quelque chose de concret
-    dans l'app plutôt qu'un principe général. Retourne une liste vide si
-    tension est None.
-    """
-    if tension is None:
-        return []
-    if tension >= 1.5:
-        return [
-            "Le marché est en tension pour les recruteurs : les process sont souvent plus "
-            "rapides. Mène 2 à 3 candidatures en parallèle plutôt qu'une seule à la fois.",
-            "Position de force pour négocier salaire, télétravail, date de démarrage — ne te "
-            "sous-vends pas sur la première offre.",
-            "Regarde en priorité les offres sans salaire affiché : sur un marché tendu pour "
-            "l'employeur, c'est souvent négociable à la hausse.",
-        ]
-    if tension >= 1.0:
-        return [
-            "Cible reste précise, pas besoin d'élargir — mais vérifie la fraîcheur des offres "
-            "(« Publiées depuis ») pour prioriser les plus récentes, les plus anciennes ont "
-            "souvent déjà un candidat en cours de process.",
-            "Repère les entreprises qui publient plusieurs offres dans le tableau « Top "
-            "recruteurs » : signe d'un recrutement actif, bon candidat pour une candidature "
-            "spontanée sur un poste proche non publié.",
-        ]
-    if tension >= 0.5:
-        return [
-            "Vérifie que ton % de correspondance (onglet Offres d'emploi) dépasse 60-70% avant "
-            "de candidater, sinon ajuste tes mots-clés sectoriels dans « Créer mon CV ».",
-            "Élargis d'un cran plutôt que de dix : ajoute 1 à 2 intitulés proches via les "
-            "suggestions du sélecteur de poste plutôt que de basculer directement sur « Tous "
-            "les postes ».",
-        ]
-    return [
-        "Priorité candidature spontanée : cible directement les entreprises du tableau « Top "
-        "recruteurs », même sans offre publiée en ce moment.",
-        "Élargis la zone géographique : essaie un département limitrophe et compare sa "
-        "tension.",
-        "Élargis l'intitulé de poste : ajoute 2 à 3 intitulés proches via les suggestions du "
-        "sélecteur de poste.",
-    ]
+                df_salaires_cdi = (
+                    df_salaires[df_salaires["Type de contrat"] == "CDI"]
+                    if "Type de contrat" in df_salaires.columns
+                    else df_salaires.iloc[0:0]
+                )
+                if df_salaires_cdi.empty:
+                    st.info("Aucune offre en CDI avec salaire indiqué pour ces critères.")
+                else:
+                    groupement_choisi = st.radio(
+                        "Regrouper les salaires (CDI uniquement) par",
+                        ["Poste", "Entreprise"],
+                        horizontal=True,
+                        key="salaire_groupement",
+                    )
+                    df_salaires_groupes = (
+                        df_salaires_cdi.groupby(groupement_choisi, as_index=False)
+                        .agg(
+                            nombre_offres=(groupement_choisi, "count"),
+                            salaires=("Salaire indiqué", lambda s: " · ".join(sorted(set(s)))),
+                        )
+                        .sort_values("nombre_offres", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    st.dataframe(
+                        df_salaires_groupes.rename(
+                            columns={"nombre_offres": "Nombre d'offres CDI", "salaires": "Salaires indiqués"}
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
+            st.divider()
+            st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
+            if df_experience.empty:
+                st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
+            else:
+                base_experience = alt.Chart(df_experience).encode(
+                    x=alt.X("nombre_offres:Q", title="Nombre d'offres"),
+                    y=alt.Y("experience:N", title=None, sort="-x"),
+                )
+                barres_experience = base_experience.mark_bar(color="#0066cc")
+                etiquettes_experience = base_experience.mark_text(
+                    align="left", dx=4, fontSize=11
+                ).encode(text="nombre_offres:Q")
+                st.altair_chart(
+                    (barres_experience + etiquettes_experience).properties(height=140),
+                    use_container_width=True,
+                )
 
-def estimer_duree_recherche(tension):
-    """
-    Estimation INDICATIVE (maison, non officielle) d'une durée de recherche
-    d'emploi côté candidat, à partir de l'indice de tension local. Il n'existe
-    pas d'étude publiée (Dares, Apec, cabinets de conseil) reliant précisément
-    un indice de tension à une durée de recherche candidat — ce n'est donc pas
-    une statistique officielle, juste une mise à l'échelle des 4 mêmes paliers
-    que interpreter_tension(), calée sur le seul repère chiffré et sourcé
-    trouvé : la durée moyenne de RECRUTEMENT (côté entreprise, pas candidat)
-    observée par l'Apec pour les cadres, environ 9 à 11 semaines
-    (source : Apec, "Pratiques de recrutement des cadres",
-    https://corporate.apec.fr/home/espace-medias/pratiques-de-recrutements-des-cadres-en-2022.html).
-    Cette durée d'entreprise sert d'ancrage pour le palier "équilibré", les
-    autres paliers sont des fourchettes plus rapides/plus longues par
-    extrapolation, pas des données mesurées.
-
-    Retourne (fourchette_texte, note_source) ou (None, None) si tension est None.
-    """
-    if tension is None:
-        return None, None
-
-    note_source = (
-        "Estimation indicative, non officielle — aucune étude publiée ne relie précisément "
-        "un indice de tension à une durée de recherche candidat. Calée sur le seul repère "
-        "chiffré et sourcé disponible : la durée moyenne de RECRUTEMENT (côté entreprise) "
-        "observée par l'Apec pour les cadres, environ 9 à 11 semaines (Apec, « Pratiques de "
-        "recrutement des cadres »)."
-    )
-
-    if tension >= 1.5:
-        return "environ 4 à 6 semaines", note_source
-    if tension >= 1.0:
-        return "environ 6 à 9 semaines", note_source
-    if tension >= 0.5:
-        return "environ 9 à 14 semaines", note_source
-    return "environ 14 à 26 semaines (3 à 6 mois)", note_source
-
-
-
-
-__all__ = [
-    "CLIENT_ID",
-    "CLIENT_SECRET",
-    "SCOPE_OFFRES",
-    "get_token",
-    "_params_filtre_poste",
-    "filtrer_offres_par_secteurs",
-    "_REF_LANGAGES_INFORMATIQUES",
-    "_REF_OUTILS_INFORMATIQUES",
-    "_classifier_competence",
-    "_normaliser",
-    "calculer_correspondance_offre",
-    "calculer_correspondance_recruteur",
-    "analyser_competences",
-    "get_secteurs_activite",
-    "get_referentiel_appellations",
-    "_extraire_code_rome",
-    "DICTIONNAIRE_INTITULES_MODERNES",
-    "_normaliser_texte",
-    "suggerer_postes",
-    "chercher_offres",
-    "resoudre_codes_rome",
-    "secteurs_pour_poste",
-    "rechercher_offres_completes",
-    "ADZUNA_APP_ID",
-    "ADZUNA_APP_KEY",
-    "ADZUNA_BASE_URL",
-    "DEPARTEMENTS_VERS_NOM",
-    "DEPARTEMENTS_CHEF_LIEU",
-    "departements_vers_param",
-    "departement_est_multiple",
-    "_deviner_departement_offre",
-    "adzuna_configure",
-    "departement_vers_lieu_adzuna",
-    "rechercher_offres_adzuna",
-    "_adapter_offre_adzuna",
-    "_deduire_type_contrat",
-    "fusionner_offres",
-    "volumes_departement_offres_multi",
-    "rechercher_offres_completes_multi",
-    "chercher_offres_multi",
-    "rechercher_offres_toutes_sources",
-    "offres_par_ville_multi",
-    "evolution_offres_annuelle_multi",
-    "repartition_contrats_et_salaires_multi",
-    "LABEL_ENTREPRISE_ANONYME",
-    "_nom_entreprise_normalise",
-    "offres_par_ville",
-    "volumes_departement_offres",
-    "_CANDIDATS_SCOPE_STATS_MARCHE",
-    "BASE_STATS_MARCHE",
-    "_appeler_indicateur",
-    "_appel_avec_decouverte_scope",
-    "demandeurs_emploi_departement",
-    "demandeurs_emploi_departement_multi",
-    "_MOIS_FR",
-    "_formater_mois_fr",
-    "evolution_offres_annuelle",
-    "repartition_contrats_et_salaires",
-    "calculer_tension",
-    "interpreter_tension",
-    "conseils_tension",
-    "estimer_duree_recherche",
-]
+            st.divider()
+            st.markdown("#### 🎯 Difficulté de recrutement (BMO)")
+            st.info(
+                "⚠️ Pas encore branché — c'est un indicateur annuel et déclaratif (enquête "
+                "employeurs), différent des données d'offres réelles utilisées ailleurs dans "
+                "l'app. Dis-moi si tu veux qu'on l'ajoute."
+            )
