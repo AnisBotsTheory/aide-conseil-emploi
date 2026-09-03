@@ -40,35 +40,17 @@ def _params_filtre_poste(code_rome, mots_cles=None, secteur_activite=None):
     """
     Retourne le(s) paramètre(s) de filtre à utiliser pour l'API Offres d'emploi :
     - codeROME pour un poste précis
-    - motsCles (si renseigné) pour "Tous les postes" (recherche large, indexée
-      sur le même métier que la recherche de profil)
-    - secteurActivite (si renseigné) dans TOUS les cas, poste précis ou "Tous
-      les postes" — le secteur filtre l'entreprise qui recrute, pas le poste,
-      il est donc indépendant du mode de sélection du poste.
-
-    CORRECTIF (voir échange du 30/08/2026) : avant ce correctif, la branche
-    "poste précis" ('code_rome != TOUS') retournait directement
-    {"codeROME": code_rome} sans jamais regarder secteur_activite, qui était
-    donc silencieusement ignoré par toutes les fonctions qui délèguent
-    entièrement leur filtre secteur à cette fonction (offres_par_ville,
-    resoudre_codes_rome, evolution_offres_annuelle,
-    repartition_contrats_et_salaires, analyser_competences,
-    volumes_departement_offres, secteurs_pour_poste...). Résultat concret :
-    le tableau "Top recruteurs" (via offres_par_ville) comptait les offres
-    TOUS secteurs confondus, alors que le détail au clic (via
-    rechercher_offres_completes, qui ré-ajoute secteurActivite en dehors de
-    cette fonction) appliquait bien le filtre — d'où l'écart (ex: 8 offres
-    affichées dans le tableau contre 3 dans le détail).
+    - motsCles + secteurActivite (si renseignés) pour "Tous les postes" (recherche large,
+      indexée sur le même métier et le même secteur que la recherche de profil).
     """
-    params = {}
     if code_rome == "TOUS":
+        params = {}
         if mots_cles:
             params["motsCles"] = mots_cles
-    else:
-        params["codeROME"] = code_rome
-    if secteur_activite:
-        params["secteurActivite"] = secteur_activite
-    return params
+        if secteur_activite:
+            params["secteurActivite"] = secteur_activite
+        return params
+    return {"codeROME": code_rome}
 
 
 # ---------------------------------------------------------------------------
@@ -110,20 +92,6 @@ def _classifier_competence(libelle):
 
 def _normaliser(texte):
     return texte.strip().lower()
-
-
-def _normaliser_nom_entreprise(nom):
-    """
-    Clé de regroupement pour un nom d'entreprise : casse uniforme et TOUS les
-    espaces retirés (pas seulement les bordures), pour regrouper des variantes
-    de saisie du même recruteur comme 'Signe+' et 'SIGNE +' sous une seule
-    ligne du tableau "Top recruteurs" plutôt que deux entités distinctes.
-    Utilisée à la fois pour l'agrégation (offres_par_ville, offres_par_ville_multi)
-    et pour le filtre au clic (retrouver les offres d'une entreprise) — les deux
-    étapes doivent regrouper de la même façon, sinon le total affiché dans le
-    tableau et le nombre d'offres retrouvées au clic divergent.
-    """
-    return "".join((nom or "").lower().split())
 
 
 def calculer_correspondance_offre(offre, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur):
@@ -436,12 +404,19 @@ def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mo
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     params = {"departement": departement, "range": range_str}
-    params.update(_params_filtre_poste(code_rome, mots_cles, secteur_naf))
+    params.update(_params_filtre_poste(code_rome, mots_cles))
+    if secteur_naf:
+        params["secteurActivite"] = secteur_naf
     if jours_max:
         date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
         params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
         params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     r = requests.get(url, headers=headers, params=params)
+    if r.status_code == 204:
+        # 204 No Content = réponse valide de l'API pour "aucune offre trouvée" sur ce
+        # critère précis (fréquent en recherche multi-poste : tous les codes ROME
+        # sélectionnés n'ont pas forcément d'offre active en ce moment) — pas une erreur.
+        return [], 0
     if r.status_code not in (200, 206):
         st.error(f"Erreur API Offres {r.status_code} : {r.text}")
         return [], 0
@@ -568,7 +543,9 @@ def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=N
         debut = page * taille_page
         fin = debut + taille_page - 1
         params = {"departement": departement, "range": f"{debut}-{fin}"}
-        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
+        params.update(_params_filtre_poste(code_rome, mots_cles))
+        if secteur_activite:
+            params["secteurActivite"] = secteur_activite
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
             params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -805,16 +782,21 @@ def rechercher_offres_completes_multi(codes_rome, departement, max_pages=1, sect
 
 
 def chercher_offres_multi(codes_rome, departement, secteur_naf=None, jours_max=None, range_str="0-149"):
-    """Fusionne (et déduplique) les résultats de chercher_offres() pour plusieurs codes ROME."""
+    """
+    Fusionne (et déduplique) les résultats de chercher_offres() pour plusieurs codes
+    ROME. Le total renvoyé est le nombre d'offres réellement affichées après fusion —
+    pas la somme des totaux bruts par code, qui compterait plusieurs fois une même
+    offre présente sous plusieurs intitulés (ex: une offre "Consultant ERP" remontant
+    à la fois pour le code ROME "Consultant" et "Consultant ERP").
+    """
     tous_resultats = []
-    total_cumule = 0
     for code in codes_rome:
         if not code:
             continue
-        resultats, total = chercher_offres(code, departement, secteur_naf, jours_max, range_str=range_str)
+        resultats, _ = chercher_offres(code, departement, secteur_naf, jours_max, range_str=range_str)
         tous_resultats.extend(resultats)
-        total_cumule += total
-    return fusionner_offres(tous_resultats), total_cumule
+    offres_dedupliquees = fusionner_offres(tous_resultats)
+    return offres_dedupliquees, len(offres_dedupliquees)
 
 
 def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_activite=None):
@@ -856,18 +838,12 @@ def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_acti
 
     if dfs_entreprises:
         df_entreprises = pd.concat(dfs_entreprises, ignore_index=True)
-        # Regroupement par clé normalisée (même logique que offres_par_ville) : les
-        # différents appels mono-ROME peuvent avoir chacun retenu une variante de
-        # casse/espacement différente comme libellé affiché pour la même entreprise.
-        df_entreprises["_cle"] = df_entreprises["entreprise"].map(_normaliser_nom_entreprise)
         df_entreprises = (
-            df_entreprises.groupby("_cle", as_index=False)
+            df_entreprises.groupby("entreprise", as_index=False)
             .agg(
-                entreprise=("entreprise", "first"),
                 nombre_offres=("nombre_offres", "sum"),
                 villes=("villes", lambda s: ", ".join(sorted({v.strip() for grp in s for v in grp.split(",")}))),
             )
-            .drop(columns="_cle")
             .sort_values("nombre_offres", ascending=False)
             .reset_index(drop=True)
         )
@@ -982,13 +958,10 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
         nom_entreprise = offre.get("entreprise", {}).get("nom")
         if nom_entreprise:
             nom_ville = ville.split(" - ", 1)[-1].strip() if " - " in ville else ville
-            cle_entreprise = _normaliser_nom_entreprise(nom_entreprise)
-            if cle_entreprise not in entreprises:
-                # Première variante d'écriture rencontrée pour cette entreprise :
-                # sert de libellé affiché (les suivantes ne font qu'incrémenter le compte).
-                entreprises[cle_entreprise] = {"nom_affiche": nom_entreprise.strip(), "nombre_offres": 0, "villes": set()}
-            entreprises[cle_entreprise]["nombre_offres"] += 1
-            entreprises[cle_entreprise]["villes"].add(nom_ville)
+            if nom_entreprise not in entreprises:
+                entreprises[nom_entreprise] = {"nombre_offres": 0, "villes": set()}
+            entreprises[nom_entreprise]["nombre_offres"] += 1
+            entreprises[nom_entreprise]["villes"].add(nom_ville)
 
         date_creation = offre.get("dateCreation")
         if date_creation:
@@ -1001,11 +974,11 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     df_entreprises = pd.DataFrame(
         [
             {
-                "entreprise": infos["nom_affiche"],
+                "entreprise": nom,
                 "nombre_offres": infos["nombre_offres"],
                 "villes": ", ".join(sorted(infos["villes"])),
             }
-            for infos in entreprises.values()
+            for nom, infos in entreprises.items()
         ]
     )
     if not df_entreprises.empty:
@@ -1304,7 +1277,6 @@ __all__ = [
     "_REF_OUTILS_INFORMATIQUES",
     "_classifier_competence",
     "_normaliser",
-    "_normaliser_nom_entreprise",
     "calculer_correspondance_offre",
     "calculer_correspondance_recruteur",
     "analyser_competences",
