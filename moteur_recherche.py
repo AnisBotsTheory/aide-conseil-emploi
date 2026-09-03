@@ -1437,7 +1437,8 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
             lignes_salaires.append(
                 {
                     "Poste": offre.get("intitule", "N/C"),
-                    "Entreprise": offre.get("entreprise", {}).get("nom", "N/C"),
+                    "Entreprise": _nom_entreprise_normalise(offre),
+                    "Type de contrat": type_contrat,
                     "Salaire indiqué": libelle_salaire,
                 }
             )
