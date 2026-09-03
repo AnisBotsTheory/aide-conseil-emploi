@@ -62,9 +62,11 @@ def _selecteur_departement(cle_prefixe):
     cle_checkbox = f"{cle_prefixe}_checkbox_toute_france"
     cle_multiselect = f"{cle_prefixe}_departements_multiselect"
 
-    toute_la_france = st.checkbox("🇫🇷 Toute la France (aucun filtre département)", key=cle_checkbox)
-    if toute_la_france:
-        return None
+    # Valeur du run précédent pour désactiver le multiselect si "Toute la France" est
+    # cochée — la case est rendue APRÈS le multiselect (demande UX), donc on ne connaît
+    # sa valeur pour CE run qu'après l'avoir affichée ; celle du run précédent suffit
+    # pour l'état "disabled" (même trick que pour d'autres sélecteurs de l'app).
+    toute_la_france_precedente = st.session_state.get(cle_checkbox, False)
 
     if cle_multiselect not in st.session_state:
         st.session_state[cle_multiselect] = ["13 - Bouches-du-Rhône"]
@@ -74,7 +76,13 @@ def _selecteur_departement(cle_prefixe):
         "Département(s) (région d'intérêt)",
         options=options_departements,
         key=cle_multiselect,
+        disabled=toute_la_france_precedente,
     )
+
+    toute_la_france = st.checkbox("🇫🇷 Toute la France (aucun filtre département)", key=cle_checkbox)
+    if toute_la_france:
+        return None
+
     if not labels_choisis:
         st.info("Sélectionne au moins un département ci-dessus, ou coche « Toute la France ».")
         return ""
@@ -110,13 +118,13 @@ def _selecteur_secteur(cle_prefixe):
         "Secteur(s) d'activité de l'entreprise",
         options=labels_disponibles,
         key=cle_multiselect,
+        placeholder="Tous secteurs (rien sélectionné = aucun filtre)",
         help=(
             "Filtre sur le secteur d'activité de l'ENTREPRISE qui recrute, pas sur le type de "
             "poste — une entreprise du secteur assurance peut par exemple recruter des postes "
             "très variés (médical, IT, RH...). Sélectionne plusieurs secteurs pour élargir."
         ),
     )
-    st.caption("Laisser vide = tous secteurs.")
     if not labels_choisis:
         return [], None
     return labels_choisis, [options_secteurs[l] for l in labels_choisis]
@@ -410,6 +418,11 @@ with tab_profil:
                 if tension is not None:
                     st.metric("Indice de tension (offres / demandeurs)", tension)
                     st.info(interpreter_tension(tension))
+                    conseils = conseils_tension(tension)
+                    if conseils:
+                        with st.expander("💡 Conseils pour ce niveau de tension"):
+                            for conseil in conseils:
+                                st.markdown(f"- {conseil}")
                 else:
                     st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
 
@@ -593,13 +606,6 @@ with tab_profil:
 
             st.divider()
             st.info(
-                "💡 Pour le top entreprises, la comparaison multi-département, le "
-                "dynamisme du territoire, les embauches et les établissements, direction "
-                "l'onglet **🧩 KPIs avancés**."
-            )
-
-            st.divider()
-            st.caption(
                 "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
                 "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
                 "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
