@@ -1187,7 +1187,23 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
 
 @st.cache_data(ttl=1800)
 def volumes_departement_offres(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None):
-    """Total offres pour un code ROME (ou tous, via mots-clés) sur un département."""
+    """
+    Total offres pour un code ROME (ou tous, via mots-clés) sur un département.
+
+    Si secteur_activite est une LISTE (multi-secteur), l'API ne permet pas de filtrer
+    côté serveur (un seul secteurActivite par requête) : impossible d'utiliser le
+    simple total Content-Range dans ce cas, il refléterait TOUS les secteurs. On
+    récupère alors les offres (paginé) et on compte après filtrage post-fetch, comme
+    le fait déjà offres_par_ville() — plus coûteux mais seul moyen d'avoir un total
+    cohérent avec le reste de l'app en multi-secteur.
+    """
+    if isinstance(secteur_activite, list) and secteur_activite:
+        offres = rechercher_offres_completes(
+            code_rome, departement, max_pages=5, mots_cles=mots_cles,
+            secteur_activite=secteur_activite, jours_max=jours_max,
+        )
+        return len(offres)
+
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -1518,8 +1534,6 @@ def conseils_tension(tension):
         "tension.",
         "Élargis l'intitulé de poste : ajoute 2 à 3 intitulés proches via les suggestions du "
         "sélecteur de poste.",
-        "Les offres « Entreprise non communiquée » ne sont pas à ignorer — souvent des "
-        "recrutements discrets, moins de concurrence dessus.",
     ]
 
 
