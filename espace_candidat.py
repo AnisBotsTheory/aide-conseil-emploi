@@ -278,14 +278,16 @@ with tab_profil:
             help=aide_secteur,
         )
         code_secteur_profil = options_secteurs_poste[secteur_choisi_profil]
+        bouton_lancer_analyse = col_sect.button("Lancer l'analyse de mon profil")
     else:
         # "Tous les postes", plusieurs postes, ou poste pas encore résolvable :
         # secteurs en multi-sélection (filtrage post-fusion, pas de liste NAF
         # spécifique à un poste ici).
         with col_sect:
             secteurs_labels_profil, code_secteur_profil = _selecteur_secteur("profil")
+            bouton_lancer_analyse = st.button("Lancer l'analyse de mon profil")
 
-    if st.button("Lancer l'analyse de mon profil"):
+    if bouton_lancer_analyse:
         if departement_profil == "":
             st.error("Sélectionne au moins un département avant de lancer l'analyse (ou coche « Toute la France »).")
         else:
