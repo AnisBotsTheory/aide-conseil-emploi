@@ -46,6 +46,51 @@ labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations
 # Retourne (postes_choisis: list[str], codes_par_poste: dict[str, str|None]).
 # Cas particulier : (["🌐 Tous les postes"], {}) si la case est cochée.
 # ---------------------------------------------------------------------------
+def _selecteur_departement(cle_prefixe):
+    """
+    Sélecteur de département en MULTI-sélection, avec option "Toute la France"
+    (recherche nationale — l'API le permet nativement en omettant le paramètre
+    département). Plusieurs départements sont envoyés à l'API sous forme de
+    codes séparés par une virgule (accepté nativement par l'API Offres d'emploi).
+
+    Retourne une valeur de paramètre département :
+    - None -> "Toute la France" (aucun filtre)
+    - ""   -> rien sélectionné (état invalide, à gérer par l'appelant)
+    - "13" ou "13,75" -> un ou plusieurs codes
+    """
+    cle_checkbox = f"{cle_prefixe}_checkbox_toute_france"
+    cle_multiselect = f"{cle_prefixe}_departements_multiselect"
+
+    toute_la_france = st.checkbox("🇫🇷 Toute la France (aucun filtre département)", key=cle_checkbox)
+    if toute_la_france:
+        return None
+
+    if cle_multiselect not in st.session_state:
+        st.session_state[cle_multiselect] = ["13 - Bouches-du-Rhône"]
+
+    options_departements = sorted(f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items())
+    labels_choisis = st.multiselect(
+        "Département(s) (région d'intérêt)",
+        options=options_departements,
+        key=cle_multiselect,
+    )
+    if not labels_choisis:
+        st.info("Sélectionne au moins un département ci-dessus, ou coche « Toute la France ».")
+        return ""
+    return ",".join(label.split(" - ")[0] for label in labels_choisis)
+
+
+def _libelle_departement_affiche(departement_param):
+    """Libellé lisible pour un titre de section ('département 13', 'départements
+    13, 75', 'toute la France')."""
+    if not departement_param:
+        return "toute la France"
+    codes = departement_param.split(",")
+    if len(codes) == 1:
+        return f"département {codes[0]}"
+    return "départements " + ", ".join(codes)
+
+
 def _selecteur_secteur(cle_prefixe):
     """
     Sélecteur de secteur d'activité en MULTI-sélection. Filtrage post-fusion côté
@@ -184,12 +229,10 @@ with tab_profil:
         "métier unique : elle nécessite un seul poste sélectionné."
     )
 
-    # Valeur du département utilisée pour la résolution de poste : celle du run précédent
-    # (le widget lui-même est rendu plus bas, sur la même ligne que le secteur). Cette
-    # résolution ne s'en sert qu'en dernier recours (la plupart des suggestions sont déjà
-    # dans le référentiel), un décalage d'un run est donc sans incidence pratique.
-    departement_pour_resolution_profil = st.session_state.get("dep_profil", "13")
-    postes_choisis_profil, codes_par_poste_profil = _selecteur_poste("profil", departement_pour_resolution_profil)
+    # Valeur du département utilisée pour la résolution de poste — un simple repère
+    # ("13" par défaut), cette résolution ne s'en sert qu'en dernier recours (la
+    # plupart des suggestions sont déjà dans le référentiel), sans incidence pratique.
+    postes_choisis_profil, codes_par_poste_profil = _selecteur_poste("profil", "13")
 
     codes_resolus_profil = [c for c in codes_par_poste_profil.values() if c]
     # secteurs_pour_poste() attend un code ROME unique : résolution précise seulement
@@ -203,9 +246,10 @@ with tab_profil:
     )
 
     col_sect, col_dep = st.columns(2)
-    departement_profil = col_dep.text_input("Département (région d'intérêt)", value="13", key="dep_profil")
+    with col_dep:
+        departement_profil = _selecteur_departement("profil")
 
-    if code_rome_pour_secteurs:
+    if code_rome_pour_secteurs and departement_profil:
         with st.spinner("Recherche des secteurs qui recrutent pour ce poste..."):
             df_secteurs_poste = secteurs_pour_poste(code_rome_pour_secteurs, departement_profil)
 
@@ -232,47 +276,51 @@ with tab_profil:
             secteurs_labels_profil, code_secteur_profil = _selecteur_secteur("profil")
 
     if st.button("Lancer l'analyse de mon profil"):
-        with st.spinner("Préparation de l'analyse..."):
-            if postes_choisis_profil == ["🌐 Tous les postes"]:
-                df_rome = resoudre_codes_rome(
-                    mots_cles=None, departement=departement_profil, secteur_activite=code_secteur_profil
-                )
-                st.session_state["df_rome_profil"] = df_rome
-                st.session_state["code_rome_choisi"] = "TOUS"
-                st.session_state["codes_rome_choisis"] = []
-                st.session_state["mots_cles_profil_actif"] = ""
-            elif not postes_choisis_profil:
-                st.error("Sélectionne au moins un poste avant de lancer l'analyse (ou coche « Tous les postes »).")
-                st.session_state.pop("df_rome_profil", None)
-            elif not codes_resolus_profil:
-                st.error(
-                    "Impossible de résoudre ce(s) poste(s) pour l'instant (aucune offre trouvée pour "
-                    "les recouper). Essaie un autre poste ou élargis le département."
-                )
-                st.session_state.pop("df_rome_profil", None)
-            else:
-                st.session_state["df_rome_profil"] = pd.DataFrame(
-                    [
-                        {"code_rome": code, "libelle": label, "nb_offres_echantillon": None}
-                        for label, code in codes_par_poste_profil.items()
-                        if code
-                    ]
-                )
-                if len(codes_resolus_profil) == 1:
-                    st.session_state["code_rome_choisi"] = codes_resolus_profil[0]
+        if departement_profil == "":
+            st.error("Sélectionne au moins un département avant de lancer l'analyse (ou coche « Toute la France »).")
+        else:
+            with st.spinner("Préparation de l'analyse..."):
+                if postes_choisis_profil == ["🌐 Tous les postes"]:
+                    df_rome = resoudre_codes_rome(
+                        mots_cles=None, departement=departement_profil, secteur_activite=code_secteur_profil
+                    )
+                    st.session_state["df_rome_profil"] = df_rome
+                    st.session_state["code_rome_choisi"] = "TOUS"
+                    st.session_state["codes_rome_choisis"] = []
+                    st.session_state["mots_cles_profil_actif"] = ""
+                elif not postes_choisis_profil:
+                    st.error("Sélectionne au moins un poste avant de lancer l'analyse (ou coche « Tous les postes »).")
+                    st.session_state.pop("df_rome_profil", None)
+                elif not codes_resolus_profil:
+                    st.error(
+                        "Impossible de résoudre ce(s) poste(s) pour l'instant (aucune offre trouvée pour "
+                        "les recouper). Essaie un autre poste ou élargis le département."
+                    )
+                    st.session_state.pop("df_rome_profil", None)
                 else:
-                    st.session_state["code_rome_choisi"] = "MULTI"
-                st.session_state["codes_rome_choisis"] = codes_resolus_profil
-                st.session_state["mots_cles_profil_actif"] = " / ".join(postes_choisis_profil)
+                    st.session_state["df_rome_profil"] = pd.DataFrame(
+                        [
+                            {"code_rome": code, "libelle": label, "nb_offres_echantillon": None}
+                            for label, code in codes_par_poste_profil.items()
+                            if code
+                        ]
+                    )
+                    if len(codes_resolus_profil) == 1:
+                        st.session_state["code_rome_choisi"] = codes_resolus_profil[0]
+                    else:
+                        st.session_state["code_rome_choisi"] = "MULTI"
+                    st.session_state["codes_rome_choisis"] = codes_resolus_profil
+                    st.session_state["mots_cles_profil_actif"] = " / ".join(postes_choisis_profil)
 
-            st.session_state["departement_profil_actif"] = departement_profil
-            st.session_state["secteur_profil_actif"] = code_secteur_profil
-            # Force la sélection secteur de l'onglet "Offres d'emploi" — doit être fait
-            # AVANT que ce widget soit instancié plus bas dans le script (même rerun).
-            # Uniquement dans le cas générique multi-secteur : le sélecteur précis lié à
-            # un poste (avec compteur d'offres) n'a pas d'équivalent direct côté Offres.
-            if not code_rome_pour_secteurs:
-                st.session_state["offres_secteurs_multiselect"] = secteurs_labels_profil
+                st.session_state["departement_profil_actif"] = departement_profil
+                st.session_state["secteur_profil_actif"] = code_secteur_profil
+                # Force la sélection secteur de l'onglet "Offres d'emploi" — doit être fait
+                # AVANT que ce widget soit instancié plus bas dans le script (même rerun).
+                # Uniquement dans le cas générique multi-secteur : le sélecteur précis lié à
+                # un poste (avec compteur d'offres) n'a pas d'équivalent direct côté Offres.
+                if not (code_rome_pour_secteurs and departement_profil):
+                    st.session_state["offres_secteurs_multiselect"] = secteurs_labels_profil
+
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
@@ -298,12 +346,19 @@ with tab_profil:
                 "90 derniers jours": 90,
             }[fraicheur_choisie]
 
-            st.markdown(f"#### ⚖️ Tension du marché — département {departement_actif}")
+            st.markdown(f"#### ⚖️ Tension du marché — {_libelle_departement_affiche(departement_actif)}")
             if code_rome_choisi == "TOUS":
                 st.info(
                     "⚖️ La tension du marché nécessite un ou plusieurs postes précis (l'indicateur "
                     "officiel raisonne par métier). Sélectionne au moins un poste ci-dessus pour "
                     "voir ce calcul."
+                )
+            elif departement_est_multiple(departement_actif):
+                st.info(
+                    "⚖️ La tension du marché nécessite un seul département sélectionné (statistique "
+                    "officielle trimestrielle, un appel par territoire) — indisponible pour « Toute "
+                    "la France » ou une sélection de plusieurs départements. Choisis un seul "
+                    "département ci-dessus pour voir ce calcul."
                 )
             else:
                 st.caption(
@@ -344,7 +399,7 @@ with tab_profil:
                     )
                 else:
                     c1, c2 = st.columns(2)
-                    c1.metric(f"Offres — département {departement_actif}", total_dep_offres)
+                    c1.metric(f"Offres — {_libelle_departement_affiche(departement_actif)}", total_dep_offres)
                     c2.metric(
                         f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
                         total_dep_demandeurs,
@@ -363,7 +418,7 @@ with tab_profil:
 
             st.divider()
 
-            st.markdown(f"#### 📍 Offres par ville — département {departement_actif}")
+            st.markdown(f"#### 📍 Offres par ville — {_libelle_departement_affiche(departement_actif)}")
 
             with st.spinner("Récupération des offres par ville..."):
                 if recherche_multi:
@@ -550,17 +605,14 @@ with tab_offres:
         "(combinables), ou coche « Tous les postes » pour une recherche large."
     )
 
-    departement_pour_resolution_offres = st.session_state.get("dep_offres", "13")
+    departement_pour_resolution_offres = "13"
     postes_choisis_offres, codes_par_poste_offres = _selecteur_poste("offres", departement_pour_resolution_offres)
 
     codes_resolus_offres = [c for c in codes_par_poste_offres.values() if c]
 
     col_sect_off, col_dep_off = st.columns(2)
-    departement = col_dep_off.text_input(
-        "Département (ex: 13 = Bouches-du-Rhône)",
-        value=st.session_state.get("departement_profil_actif", "13"),
-        key="dep_offres",
-    )
+    with col_dep_off:
+        departement = _selecteur_departement("offres")
     with col_sect_off:
         _, secteur_naf = _selecteur_secteur("offres")
     fraicheur_choisie_offres = st.selectbox(
@@ -579,7 +631,10 @@ with tab_offres:
         resultats, total = [], 0
         recherche_ok = True
 
-        if postes_choisis_offres == ["🌐 Tous les postes"]:
+        if departement == "":
+            st.error("Sélectionne au moins un département (ou coche « Toute la France »).")
+            recherche_ok = False
+        elif postes_choisis_offres == ["🌐 Tous les postes"]:
             with st.spinner("Recherche en cours..."):
                 resultats, total = chercher_offres(
                     "TOUS", departement, secteur_naf, jours_max_offres, mots_cles=""
