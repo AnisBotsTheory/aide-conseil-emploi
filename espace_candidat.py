@@ -46,6 +46,35 @@ labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations
 # Retourne (postes_choisis: list[str], codes_par_poste: dict[str, str|None]).
 # Cas particulier : (["🌐 Tous les postes"], {}) si la case est cochée.
 # ---------------------------------------------------------------------------
+def _selecteur_secteur(cle_prefixe):
+    """
+    Sélecteur de secteur d'activité en MULTI-sélection. Filtrage post-fusion côté
+    Python (moteur_recherche.filtrer_offres_par_secteurs) plutôt que par combinaison
+    poste x secteur côté API : une requête par poste (sans secteur dans l'appel),
+    puis filtrage du résultat fusionné sur la liste de secteurs retenus — l'API
+    France Travail n'acceptant qu'un seul code secteurActivite par requête, ça
+    évite de multiplier les appels (postes x secteurs) pour une sélection large.
+    Une sélection vide équivaut à "tous secteurs" (pas de filtre).
+
+    Retourne (labels_choisis: list[str], codes_choisis: list[str] | None).
+    """
+    cle_multiselect = f"{cle_prefixe}_secteurs_multiselect"
+    labels_disponibles = [l for l in options_secteurs.keys() if l != "Tous secteurs"]
+    labels_choisis = st.multiselect(
+        "Secteur(s) d'activité de l'entreprise (laisser vide = tous secteurs)",
+        options=labels_disponibles,
+        key=cle_multiselect,
+        help=(
+            "Filtre sur le secteur d'activité de l'ENTREPRISE qui recrute, pas sur le type de "
+            "poste — une entreprise du secteur assurance peut par exemple recruter des postes "
+            "très variés (médical, IT, RH...). Sélectionne plusieurs secteurs pour élargir."
+        ),
+    )
+    if not labels_choisis:
+        return [], None
+    return labels_choisis, [options_secteurs[l] for l in labels_choisis]
+
+
 def _selecteur_poste(cle_prefixe, departement_pour_resolution):
     cle_checkbox = f"{cle_prefixe}_checkbox_tous_postes"
     cle_texte = f"{cle_prefixe}_poste_texte_libre"
@@ -197,14 +226,10 @@ with tab_profil:
         code_secteur_profil = options_secteurs_poste[secteur_choisi_profil]
     else:
         # "Tous les postes", plusieurs postes, ou poste pas encore résolvable :
-        # liste NAF générique complète
-        secteur_choisi_profil = col_sect.selectbox(
-            "Secteur d'activité de l'entreprise",
-            list(options_secteurs.keys()),
-            key="secteur_profil",
-            help=aide_secteur,
-        )
-        code_secteur_profil = options_secteurs[secteur_choisi_profil]
+        # secteurs en multi-sélection (filtrage post-fusion, pas de liste NAF
+        # spécifique à un poste ici).
+        with col_sect:
+            secteurs_labels_profil, code_secteur_profil = _selecteur_secteur("profil")
 
     if st.button("Lancer l'analyse de mon profil"):
         with st.spinner("Préparation de l'analyse..."):
@@ -242,12 +267,12 @@ with tab_profil:
 
             st.session_state["departement_profil_actif"] = departement_profil
             st.session_state["secteur_profil_actif"] = code_secteur_profil
-            # Force la valeur du sélecteur secteur de l'onglet "Offres d'emploi" — doit être
-            # fait AVANT que ce widget soit instancié plus bas dans le script (même rerun).
-            # Uniquement si le libellé correspond au format générique attendu là-bas (le
-            # sélecteur filtré par poste a un format différent, avec le nombre d'offres).
-            if secteur_choisi_profil in options_secteurs:
-                st.session_state["secteur_offres"] = secteur_choisi_profil
+            # Force la sélection secteur de l'onglet "Offres d'emploi" — doit être fait
+            # AVANT que ce widget soit instancié plus bas dans le script (même rerun).
+            # Uniquement dans le cas générique multi-secteur : le sélecteur précis lié à
+            # un poste (avec compteur d'offres) n'a pas d'équivalent direct côté Offres.
+            if not code_rome_pour_secteurs:
+                st.session_state["offres_secteurs_multiselect"] = secteurs_labels_profil
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
@@ -329,6 +354,10 @@ with tab_profil:
                 if tension is not None:
                     st.metric("Indice de tension (offres / demandeurs)", tension)
                     st.info(interpreter_tension(tension))
+                    duree_estimee, note_source_duree = estimer_duree_recherche(tension)
+                    if duree_estimee:
+                        st.metric("Durée de recherche estimée", duree_estimee)
+                        st.caption(f"ℹ️ {note_source_duree}")
                 else:
                     st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
 
@@ -354,12 +383,11 @@ with tab_profil:
                         )
                     )
             st.metric("Total offres dans la région", total_region)
-            if date_min_pub and date_max_pub:
-                st.caption(
-                    f"📅 Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]} "
-                    "(format AAAA-MM-JJ) — l'API ne filtre pas par ancienneté par défaut, "
-                    "ces offres sont simplement celles encore actives aujourd'hui."
-                )
+            # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
+            # donnent la plage de publication réelle des offres renvoyées par l'API —
+            # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
+            # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
+            # offres sont simplement celles encore actives aujourd'hui.
             if not df_villes.empty:
                 df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
                 nb_offres_approx = int(df_carte.loc[df_carte["approximatif"], "nombre_offres"].sum()) if not df_carte.empty else 0
@@ -488,6 +516,11 @@ with tab_profil:
                         "les offres sont diffusées de façon anonyme."
                     )
                 else:
+                    st.caption(
+                        "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
+                        "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
+                        "peuvent valoir une candidature directe."
+                    )
                     st.dataframe(
                         df_entreprises.rename(
                             columns={
@@ -498,11 +531,6 @@ with tab_profil:
                         ),
                         use_container_width=True,
                         hide_index=True,
-                    )
-                    st.caption(
-                        "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
-                        "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
-                        "peuvent valoir une candidature directe."
                     )
 
             st.divider()
@@ -533,8 +561,8 @@ with tab_offres:
         value=st.session_state.get("departement_profil_actif", "13"),
         key="dep_offres",
     )
-    secteur_choisi_offres = col_sect_off.selectbox("Secteur d'activité", list(options_secteurs.keys()), key="secteur_offres")
-    secteur_naf = options_secteurs[secteur_choisi_offres]
+    with col_sect_off:
+        _, secteur_naf = _selecteur_secteur("offres")
     fraicheur_choisie_offres = st.selectbox(
         "Publiées depuis",
         ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
