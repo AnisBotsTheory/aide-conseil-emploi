@@ -118,7 +118,7 @@ def _selecteur_secteur(cle_prefixe):
         "Secteur(s) d'activité de l'entreprise",
         options=labels_disponibles,
         key=cle_multiselect,
-        placeholder="Tous secteurs (rien sélectionné = aucun filtre)",
+        placeholder="Choisir secteur (par défaut tous secteurs)",
         help=(
             "Filtre sur le secteur d'activité de l'ENTREPRISE qui recrute, pas sur le type de "
             "poste — une entreprise du secteur assurance peut par exemple recruter des postes "
