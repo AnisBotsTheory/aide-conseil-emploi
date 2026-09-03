@@ -916,6 +916,16 @@ def repartition_contrats_et_salaires_multi(codes_rome, departement, jours_max=No
     return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_experience
 
 
+LABEL_ENTREPRISE_ANONYME = "Entreprise non communiquée"
+
+
+def _nom_entreprise_normalise(offre):
+    """Nom d'entreprise d'une offre, ou LABEL_ENTREPRISE_ANONYME si l'offre est diffusée
+    sans nom d'entreprise visible (recrutement anonyme) — regroupe ces offres sous une
+    même étiquette au lieu de les exclure du tableau des recruteurs."""
+    return offre.get("entreprise", {}).get("nom") or LABEL_ENTREPRISE_ANONYME
+
+
 @st.cache_data(ttl=1800)
 def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
     token = get_token(SCOPE_OFFRES)
@@ -955,13 +965,12 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
             }
         lieux[ville]["nombre_offres"] += 1
 
-        nom_entreprise = offre.get("entreprise", {}).get("nom")
-        if nom_entreprise:
-            nom_ville = ville.split(" - ", 1)[-1].strip() if " - " in ville else ville
-            if nom_entreprise not in entreprises:
-                entreprises[nom_entreprise] = {"nombre_offres": 0, "villes": set()}
-            entreprises[nom_entreprise]["nombre_offres"] += 1
-            entreprises[nom_entreprise]["villes"].add(nom_ville)
+        nom_entreprise = _nom_entreprise_normalise(offre)
+        nom_ville = ville.split(" - ", 1)[-1].strip() if " - " in ville else ville
+        if nom_entreprise not in entreprises:
+            entreprises[nom_entreprise] = {"nombre_offres": 0, "villes": set()}
+        entreprises[nom_entreprise]["nombre_offres"] += 1
+        entreprises[nom_entreprise]["villes"].add(nom_ville)
 
         date_creation = offre.get("dateCreation")
         if date_creation:
@@ -984,11 +993,15 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     if not df_entreprises.empty:
         df_entreprises = df_entreprises.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
 
-    nb_offres_anonymes = sum(1 for o in toutes_offres if not o.get("entreprise", {}).get("nom"))
+    # Les offres anonymes sont désormais regroupées dans df_entreprises (sous
+    # LABEL_ENTREPRISE_ANONYME) plutôt qu'exclues — ce compteur séparé n'a plus lieu
+    # d'être, conservé à 0 uniquement pour ne pas casser la signature de retour.
+    nb_offres_anonymes = 0
 
     date_min_pub = min(dates_creation) if dates_creation else None
     date_max_pub = max(dates_creation) if dates_creation else None
     return df, len(toutes_offres), date_min_pub, date_max_pub, df_entreprises, nb_offres_anonymes
+
 
 
 
@@ -1306,6 +1319,8 @@ __all__ = [
     "offres_par_ville_multi",
     "evolution_offres_annuelle_multi",
     "repartition_contrats_et_salaires_multi",
+    "LABEL_ENTREPRISE_ANONYME",
+    "_nom_entreprise_normalise",
     "offres_par_ville",
     "volumes_departement_offres",
     "_CANDIDATS_SCOPE_STATS_MARCHE",
