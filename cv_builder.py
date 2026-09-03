@@ -5,11 +5,23 @@ Formulaire de création de CV pour l'application "Aide Conseil Emploi".
 Mise en page à deux colonnes (bandeau latéral coloré + colonne principale),
 avec 3 thèmes de couleur au choix. Pas de photo (décision produit actuelle).
 
+V4 :
+- Le "Titre du poste recherché" passe par le sélecteur de poste à tags
+  partagé (selecteur_poste_tags, moteur_recherche.py) au lieu d'un simple
+  champ texte : l'utilisateur choisit les appellations ROME officielles
+  proches de son intitulé, dès l'onglet CV.
+- Les suggestions de compétences / outils / langages se déclenchent
+  automatiquement dès qu'un poste est sélectionné (plus besoin de repasser
+  par "Tendance par profil" ni de cliquer sur un bouton).
+- Langues : liste des 10 langues les plus parlées + niveau + ajout libre.
+- Centres d'intérêt : rendu en puces dans le .docx (au lieu d'une ligne
+  séparée par des points).
+
 Intégration dans app.py :
     from cv_builder import afficher_generateur_cv
     ...
     with tab_cv:
-        afficher_generateur_cv()
+        afficher_generateur_cv(fonction_analyse_competences_multi=analyser_competences_multi)
 """
 
 import streamlit as st
@@ -23,6 +35,8 @@ from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from io import BytesIO
+
+from moteur_recherche import selecteur_poste_tags
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +143,7 @@ DRAPEAUX_LANGUES = {
     "coréen": "🇰🇷", "turc": "🇹🇷", "polonais": "🇵🇱", "grec": "🇬🇷",
     "hébreu": "🇮🇱", "hindi": "🇮🇳", "suédois": "🇸🇪", "norvégien": "🇳🇴",
     "danois": "🇩🇰", "finnois": "🇫🇮", "roumain": "🇷🇴", "ukrainien": "🇺🇦",
+    "bengali": "🇧🇩", "indonésien": "🇮🇩",
 }
 
 
@@ -139,6 +154,16 @@ def _drapeau_pour_langue(texte_ligne):
         if debut.startswith(nom):
             return drapeau + " "
     return ""
+
+
+# ---------------------------------------------------------------------------
+# V4 — Langues : top 10 des langues les plus parlées + niveaux proposés
+# ---------------------------------------------------------------------------
+TOP_10_LANGUES = [
+    "Anglais", "Mandarin", "Hindi", "Espagnol", "Français",
+    "Arabe", "Bengali", "Russe", "Portugais", "Indonésien",
+]
+NIVEAUX_LANGUE = ["Débutant", "Intermédiaire", "Courant", "Bilingue", "Langue maternelle"]
 
 
 # ---------------------------------------------------------------------------
@@ -547,12 +572,13 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
                 _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
 
     # --- Centres d'intérêt ---
+    # V4 : rendu en puces (comme les autres blocs du bandeau) au lieu d'une
+    # seule ligne séparée par des points médians.
     if data.get("interets"):
         _titre_section(cell_bandeau, libelles["interets"], bandeau_texte, echelle=echelle)
         interets_list = [i.strip() for i in data["interets"].replace("\n", ",").split(",") if i.strip()]
-        p = cell_bandeau.add_paragraph()
-        run = p.add_run(" · ".join(interets_list))
-        run.font.size = _pt(10, echelle)
+        for interet in interets_list:
+            _puce(cell_bandeau, interet, echelle=echelle, caractere="▪")
 
     # =======================================================================
     # COLONNE PRINCIPALE
@@ -680,15 +706,6 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 # Suggestions de compétences / outils / langages (basées sur les offres réelles)
 # ---------------------------------------------------------------------------
 def _ajouter_suggestion(cle_session, valeur):
-    """Ajoute une ligne à un textarea (par clé de session_state) si elle n'y est pas déjà."""
-    actuel = st.session_state.get(cle_session, "")
-    lignes = [l.strip() for l in actuel.split("\n") if l.strip()]
-    if valeur not in lignes:
-        lignes.append(valeur)
-        st.session_state[cle_session] = "\n".join(lignes)
-
-
-def _ajouter_suggestion(cle_session, valeur):
     """Ajoute une valeur à une liste d'options (session_state) si elle n'y est pas déjà."""
     if cle_session not in st.session_state:
         st.session_state[cle_session] = []
@@ -737,29 +754,32 @@ def _champ_liste_avec_ajout(titre, cle_base, valeurs_par_defaut, aide=None):
     return "\n".join(selection)
 
 
-def _section_suggestions_competences(fonction_analyse_competences):
+def _section_suggestions_competences(fonction_analyse_competences_multi):
     """
-    Récupère (sur clic) les compétences/outils/langages les plus demandés pour le
-    poste sélectionné dans "Tendance par profil", et enrichit les listes d'options
-    correspondantes. Affiche aussi un aperçu des % les plus demandés à titre indicatif.
+    V4 — Enrichit AUTOMATIQUEMENT (sans bouton, sans dépendre de "Tendance par
+    profil") les listes de compétences/outils/langages dès qu'un ou plusieurs
+    postes sont sélectionnés via le sélecteur à tags ci-dessus
+    (st.session_state["cv_codes_rome_choisis"]). Se redéclenche uniquement
+    quand la sélection de postes change (signature en session), pas à chaque
+    rerun Streamlit.
     """
-    if not fonction_analyse_competences:
-        return
-    if "code_rome_choisi" not in st.session_state:
-        st.info(
-            "👉 Lance d'abord une recherche dans l'onglet **🎯 Tendance par profil** pour "
-            "enrichir ces listes avec les compétences réellement demandées sur ce métier "
-            "(sinon, une liste générique de base reste disponible ci-dessous)."
+    codes_rome = [c for c in st.session_state.get("cv_codes_rome_choisis", []) if c]
+
+    if not fonction_analyse_competences_multi or not codes_rome:
+        st.caption(
+            "👉 Sélectionne un poste ci-dessus — ces listes s'enrichiront automatiquement "
+            "avec les compétences réellement demandées sur ce métier (une liste générique "
+            "de base reste disponible en dessous en attendant)."
         )
         return
 
-    if st.button("🔍 Enrichir les listes avec les offres de ce poste", key="btn_suggestions_competences"):
+    cle_signature = "cv_suggestions_signature"
+    signature = tuple(sorted(codes_rome))
+
+    if st.session_state.get(cle_signature) != signature:
         with st.spinner("Analyse des offres en cours..."):
-            df_comp, df_outils, df_langages, nb_total = fonction_analyse_competences(
-                st.session_state["code_rome_choisi"],
-                st.session_state.get("departement_profil_actif"),
-                mots_cles=st.session_state.get("mots_cles_profil_actif"),
-                secteur_activite=st.session_state.get("secteur_profil_actif"),
+            df_comp, df_outils, df_langages, nb_total = fonction_analyse_competences_multi(
+                codes_rome, st.session_state.get("cv_departement")
             )
         for cle_options, df in [
             ("cv_competences_options", df_comp),
@@ -772,14 +792,14 @@ def _section_suggestions_competences(fonction_analyse_competences):
                 if lib not in st.session_state[cle_options]:
                     st.session_state[cle_options].append(lib)
         st.session_state["cv_suggestions_apercu"] = (df_comp, df_outils, df_langages, nb_total)
-        st.rerun()
+        st.session_state[cle_signature] = signature
 
     if "cv_suggestions_apercu" in st.session_state:
         df_comp, df_outils, df_langages, nb_total = st.session_state["cv_suggestions_apercu"]
         if nb_total < 10:
             st.caption(f"⚠️ Échantillon réduit ({nb_total} offre(s)) — indicatif seulement.")
         else:
-            st.caption(f"Listes enrichies à partir de {nb_total} offre(s) trouvée(s) pour ce poste.")
+            st.caption(f"Listes enrichies à partir de {nb_total} offre(s) trouvée(s) pour ce(s) poste(s).")
         for titre_apercu, df in [
             ("Compétences les + demandées", df_comp),
             ("Outils les + demandés", df_outils),
@@ -793,7 +813,7 @@ def _section_suggestions_competences(fonction_analyse_competences):
 # ---------------------------------------------------------------------------
 # Interface Streamlit
 # ---------------------------------------------------------------------------
-def afficher_generateur_cv(fonction_analyse_competences=None):
+def afficher_generateur_cv(fonction_analyse_competences_multi=None):
     _init_cv_state()
 
     st.header("🧾 Créez votre CV")
@@ -849,17 +869,31 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     prenom = c1.text_input("Prénom", key="cv_prenom")
     nom = c2.text_input("Nom", key="cv_nom")
 
+    # -----------------------------------------------------------------
+    # V4 — Sélecteur de poste par tags (partagé avec "Tendance par profil")
+    # -----------------------------------------------------------------
+    st.markdown("###### 🎯 Poste recherché")
+    postes_choisis, codes_par_poste = selecteur_poste_tags(
+        "cv",
+        valeur_initiale=st.session_state.get("cv_titre_libre", ""),
+        departement_pour_resolution=st.session_state.get("cv_departement"),
+        autoriser_tous_les_postes=False,
+    )
+    st.session_state["cv_postes_choisis"] = postes_choisis
+    st.session_state["cv_codes_rome_choisis"] = [c for c in codes_par_poste.values() if c]
+
     titre_recherche = st.text_input(
-        "Titre du poste recherché (ex: PMO Finance)",
-        key="cv_titre",
-        help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peut être personnalisé librement.",
+        "Intitulé à afficher sur le CV",
+        value=" / ".join(postes_choisis) if postes_choisis else st.session_state.get("cv_titre_libre", ""),
+        key="cv_titre_libre",
+        help=(
+            "Pré-rempli depuis ta sélection ci-dessus, modifiable librement — ex: personnaliser "
+            "en « Chef de projet PMO » plutôt que l'intitulé officiel ROME sélectionné."
+        ),
     )
-    st.caption(
-        "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
-        "Finance senior confirmé ») pour de meilleurs résultats de recherche. Pour analyser les "
-        "tendances du marché sur ce métier, direction l'onglet **🎯 Tendance par profil** — son "
-        "sélecteur de poste s'appuie directement sur la nomenclature officielle France Travail."
-    )
+    # Compat : conservé pour ne rien casser côté "Tendance par profil"
+    # (espace_candidat.py lit historiquement st.session_state["cv_titre"]).
+    st.session_state["cv_titre"] = titre_recherche
 
     c3, c4 = st.columns(2)
     email = c3.text_input("Email", key="cv_email")
@@ -900,11 +934,34 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
     st.divider()
     st.markdown("#### 🌍 Langues")
-    langues = st.text_area(
-        "Une langue par ligne (ex: Anglais - Courant)",
-        key="cv_langues",
-        height=80,
+    cle_options_langues = "cv_langues_options"
+    if cle_options_langues not in st.session_state:
+        st.session_state[cle_options_langues] = list(TOP_10_LANGUES)
+
+    langues_selectionnees = st.multiselect(
+        "Langues parlées (top 10 des plus parlées — ajoute la tienne si absente)",
+        options=st.session_state[cle_options_langues],
+        key="cv_langues_select",
     )
+    col_ajout_langue, col_bouton_langue = st.columns([4, 1])
+    nouvelle_langue = col_ajout_langue.text_input(
+        "Ajouter une langue non listée",
+        key="cv_langue_nouvelle",
+        label_visibility="collapsed",
+        placeholder="Ajouter une langue non listée...",
+    )
+    if col_bouton_langue.button("➕ Ajouter", key="cv_langue_bouton_ajout"):
+        valeur = nouvelle_langue.strip()
+        if valeur:
+            _ajouter_suggestion(cle_options_langues, valeur)
+            st.session_state["cv_langues_select"] = st.session_state["cv_langues_select"] + [valeur]
+            st.rerun()
+
+    lignes_langues = []
+    for lg in langues_selectionnees:
+        niveau = st.selectbox(f"Niveau — {lg}", NIVEAUX_LANGUE, index=2, key=f"cv_niveau_{lg}")
+        lignes_langues.append(f"{lg} - {niveau}")
+    langues = "\n".join(lignes_langues)
 
     st.divider()
     st.markdown("#### 💡 Compétences, outils & langages")
@@ -913,7 +970,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "permettent de calculer le score de correspondance affiché pour chaque offre dans "
         "l'onglet **📋 Offres d'emploi**."
     )
-    _section_suggestions_competences(fonction_analyse_competences)
+    _section_suggestions_competences(fonction_analyse_competences_multi)
 
     st.markdown("###### 🧠 Compétences")
     competences = _champ_liste_avec_ajout(
@@ -933,7 +990,8 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
     st.markdown("#### 🎯 Centres d'intérêt")
     interets = st.text_area(
-        "Séparés par une virgule ou une ligne (ex: Kayak, Dessin, Voyages)",
+        "Séparés par une virgule ou une ligne (ex: Kayak, Dessin, Voyages) — "
+        "affichés en puces sur le CV final",
         key="cv_interets",
         height=60,
     )
