@@ -829,7 +829,15 @@ def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_acti
         df_villes = (
             pd.concat(dfs_villes, ignore_index=True)
             .groupby("ville", as_index=False)
-            .agg({"nombre_offres": "sum", "latitude": "first", "longitude": "first"})
+            .agg(
+                nombre_offres=("nombre_offres", "sum"),
+                # "first" seul peut retomber sur une ligne à latitude/longitude manquantes
+                # si le même nom de ville apparaît d'abord dans les résultats d'un poste
+                # dont l'offre n'avait pas de coordonnées — on prend la première valeur
+                # RÉELLEMENT disponible parmi tous les postes fusionnés.
+                latitude=("latitude", lambda s: next((v for v in s if pd.notna(v)), None)),
+                longitude=("longitude", lambda s: next((v for v in s if pd.notna(v)), None)),
+            )
             .sort_values("nombre_offres", ascending=False)
             .reset_index(drop=True)
         )
@@ -837,13 +845,18 @@ def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_acti
         df_villes = pd.DataFrame(columns=["ville", "nombre_offres", "latitude", "longitude"])
 
     if dfs_entreprises:
-        df_entreprises = pd.concat(dfs_entreprises, ignore_index=True)
+        df_ent_concat = pd.concat(dfs_entreprises, ignore_index=True)
+        # Regroupement insensible à la casse/espaces : "Signe+" et "SIGNE +" doivent
+        # fusionner en une seule ligne plutôt que d'apparaître comme deux entreprises.
+        df_ent_concat["_cle"] = df_ent_concat["entreprise"].str.strip().str.lower()
         df_entreprises = (
-            df_entreprises.groupby("entreprise", as_index=False)
+            df_ent_concat.groupby("_cle", as_index=False)
             .agg(
+                entreprise=("entreprise", "first"),
                 nombre_offres=("nombre_offres", "sum"),
                 villes=("villes", lambda s: ", ".join(sorted({v.strip() for grp in s for v in grp.split(",")}))),
             )
+            .drop(columns="_cle")
             .sort_values("nombre_offres", ascending=False)
             .reset_index(drop=True)
         )
@@ -952,7 +965,7 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
             break
 
     lieux = {}
-    entreprises = {}
+    entreprises = {}  # cle_normalisee -> {"nom_affiche":..., "nombre_offres":..., "villes": set()}
     dates_creation = []
     for offre in toutes_offres:
         lieu_travail = offre.get("lieuTravail", {})
@@ -963,14 +976,20 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
                 "latitude": lieu_travail.get("latitude"),
                 "longitude": lieu_travail.get("longitude"),
             }
+        elif lieux[ville]["latitude"] is None and lieu_travail.get("latitude") is not None:
+            # Une offre précédente pour cette même ville n'avait pas de coordonnées :
+            # on les complète dès qu'une offre les fournit, plutôt que de rester à None.
+            lieux[ville]["latitude"] = lieu_travail.get("latitude")
+            lieux[ville]["longitude"] = lieu_travail.get("longitude")
         lieux[ville]["nombre_offres"] += 1
 
         nom_entreprise = _nom_entreprise_normalise(offre)
+        cle_entreprise = nom_entreprise.strip().lower()
         nom_ville = ville.split(" - ", 1)[-1].strip() if " - " in ville else ville
-        if nom_entreprise not in entreprises:
-            entreprises[nom_entreprise] = {"nombre_offres": 0, "villes": set()}
-        entreprises[nom_entreprise]["nombre_offres"] += 1
-        entreprises[nom_entreprise]["villes"].add(nom_ville)
+        if cle_entreprise not in entreprises:
+            entreprises[cle_entreprise] = {"nom_affiche": nom_entreprise.strip(), "nombre_offres": 0, "villes": set()}
+        entreprises[cle_entreprise]["nombre_offres"] += 1
+        entreprises[cle_entreprise]["villes"].add(nom_ville)
 
         date_creation = offre.get("dateCreation")
         if date_creation:
@@ -983,7 +1002,7 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     df_entreprises = pd.DataFrame(
         [
             {
-                "entreprise": nom,
+                "entreprise": infos["nom_affiche"],
                 "nombre_offres": infos["nombre_offres"],
                 "villes": ", ".join(sorted(infos["villes"])),
             }
