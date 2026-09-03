@@ -12,6 +12,16 @@ qui reste différenciant, c'est la lecture de marché (tension, évolution,
 répartition contrats/salaires, villes/recruteurs actifs) — pas le listing
 d'offres lui-même. "Villes qui recrutent"/"Top recruteurs" deviennent des
 pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
+
+V4 : le sélecteur de poste par tags (auparavant _selecteur_poste, privé à ce
+fichier) est désormais FACTORISÉ dans moteur_recherche.py sous le nom
+selecteur_poste_tags() — réutilisé aussi bien dans "Créer mon CV" que dans
+cette page. La sélection de poste se fait maintenant UNE SEULE FOIS, dès
+l'onglet "Créer mon CV" (st.session_state["cv_postes_choisis"] /
+["cv_codes_rome_choisis"]) : "Tendance par profil" lit directement cette
+sélection au lieu de la re-résoudre silencieusement depuis le texte libre
+cv_titre (ancien comportement, qui laissait d'ailleurs une variable
+postes_choisis_profil non définie plus bas dans ce fichier — corrigé ici).
 """
 
 import streamlit as st
@@ -26,7 +36,8 @@ from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 
 from cv_builder import afficher_generateur_cv
-from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées
+from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées (dont
+# selecteur_poste_tags et analyser_competences_multi, cf. V4)
 
 st.title("🎯 Aide Conseil Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
@@ -96,105 +107,13 @@ def _libelle_departement_affiche(departement_param):
     return "départements " + ", ".join(codes)
 
 
-def _selecteur_poste(cle_prefixe, departement_pour_resolution):
-    cle_checkbox = f"{cle_prefixe}_checkbox_tous_postes"
-    cle_texte = f"{cle_prefixe}_poste_texte_libre"
-    cle_selection = f"{cle_prefixe}_postes_selectionnes"  # liste de labels, bascule multi-sélection
-
-    if not labels_appellations:
-        st.caption("⚠️ Référentiel des postes indisponible pour le moment — recherche par mot-clé en secours.")
-        poste_texte_secours = st.text_input("Poste recherché (mot-clé)", key=f"{cle_prefixe}_poste_texte_secours")
-        poste_choisi = poste_texte_secours.strip() if poste_texte_secours.strip() else "🌐 Tous les postes"
-        return [poste_choisi], {}
-
-    if cle_texte not in st.session_state:
-        st.session_state[cle_texte] = st.session_state.get("cv_titre", "")
-    if cle_selection not in st.session_state:
-        st.session_state[cle_selection] = []
-
-    col_texte, col_checkbox = st.columns([3, 1])
-    recherche_tous_postes = col_checkbox.checkbox(
-        "🌐 Tous les postes (analyse globale, sans poste précis)",
-        key=cle_checkbox,
-    )
-    poste_texte_libre = col_texte.text_input(
-        "Poste recherché (tape même un intitulé moderne ou en anglais : "
-        "'Data Analyst', 'Product Owner'...)",
-        key=cle_texte,
-        disabled=recherche_tous_postes,
-    )
-
-    # Un nouveau terme de recherche efface la sélection précédente : sans ça, les
-    # postes choisis lors d'une recherche antérieure (ex: "big data") continuaient
-    # à apparaître cochés en changeant complètement de sujet (ex: "réceptionniste"),
-    # ce qui prêtait à confusion sur ce qui allait réellement être recherché.
-    cle_terme_precedent = f"{cle_prefixe}_poste_terme_precedent"
-    terme_precedent = st.session_state.get(cle_terme_precedent, poste_texte_libre)
-    if poste_texte_libre != terme_precedent and st.session_state[cle_selection]:
-        st.session_state[cle_selection] = []
-    st.session_state[cle_terme_precedent] = poste_texte_libre
-
-    if recherche_tous_postes:
-        st.success("Poste sélectionné : **🌐 Tous les postes**")
-        return ["🌐 Tous les postes"], {}
-
-    suggestions = suggerer_postes(poste_texte_libre) if poste_texte_libre.strip() else []
-
-    # Auto-sélectionne la meilleure suggestion pour ce terme, une seule fois (pour
-    # que "Créer mon CV" alimente automatiquement l'analyse sans clic supplémentaire).
-    # Ne se redéclenche pas si l'utilisateur retire ensuite volontairement ce choix.
-    cle_auto_poste_pour_terme = f"{cle_prefixe}_auto_poste_pour_terme"
-    if (
-        suggestions
-        and not st.session_state[cle_selection]
-        and st.session_state.get(cle_auto_poste_pour_terme) != poste_texte_libre
-    ):
-        st.session_state[cle_selection].append(suggestions[0])
-    st.session_state[cle_auto_poste_pour_terme] = poste_texte_libre
-
-    tous_les_tags = list(dict.fromkeys(suggestions + st.session_state[cle_selection]))
-
-    if tous_les_tags:
-        st.caption("💡 Suggestions — clique pour ajouter/retirer de ta sélection :")
-        colonnes_tags = st.columns(2)
-        for i, label in enumerate(tous_les_tags):
-            est_selectionne = label in st.session_state[cle_selection]
-            texte_bouton = f"✅ {label}" if est_selectionne else label
-            col_tag = colonnes_tags[i % 2]
-            if col_tag.button(texte_bouton, key=f"{cle_prefixe}_tag_{i}_{label}"):
-                if est_selectionne:
-                    st.session_state[cle_selection].remove(label)
-                else:
-                    st.session_state[cle_selection].append(label)
-                st.rerun()
-    elif poste_texte_libre.strip():
-        st.caption("Aucune suggestion trouvée pour ce terme — essaie une autre formulation.")
-
-    postes_choisis = st.session_state[cle_selection]
-
-    if not postes_choisis:
-        st.info("Sélectionne au moins un poste ci-dessus (ou coche « Tous les postes »).")
-        return [], {}
-
-    codes_par_poste = {}
-    for label in postes_choisis:
-        item_poste = next((a for a in appellations if a.get("libelle", "").strip() == label), None)
-        code = _extraire_code_rome(item_poste) if item_poste else None
-        if not code:
-            with st.spinner(f"Résolution de « {label} »..."):
-                df_resolu = resoudre_codes_rome(mots_cles=label, departement=departement_pour_resolution)
-            code = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
-        codes_par_poste[label] = code
-
-    postes_non_resolus = [label for label, code in codes_par_poste.items() if not code]
-    if postes_non_resolus:
-        st.warning(
-            "⚠️ Impossible de résoudre pour l'instant : " + ", ".join(postes_non_resolus) +
-            " — ce(s) poste(s) seront ignorés dans la recherche."
-        )
-
-    st.success("Poste(s) sélectionné(s) : **" + " · ".join(postes_choisis) + "**")
-    return postes_choisis, codes_par_poste
+# NB (V4) : l'ancien sélecteur de poste privé _selecteur_poste(...) a été
+# supprimé d'ici et déplacé dans moteur_recherche.py sous le nom public
+# selecteur_poste_tags(...) — importé plus haut via `from moteur_recherche
+# import *`. Utilisé désormais uniquement dans cv_builder.py (onglet "Créer
+# mon CV") : "Tendance par profil" lit directement la sélection qui en
+# résulte (st.session_state["cv_postes_choisis"] / ["cv_codes_rome_choisis"])
+# plutôt que de re-proposer un second sélecteur redondant.
 
 
 st.divider()
@@ -208,60 +127,53 @@ tab_cv, tab_profil, tab_avance = st.tabs(
 # "Métier recherché" doit être en place avant que ce champ ne soit affiché)
 # ---------------------------------------------------------------------------
 with tab_cv:
-    afficher_generateur_cv(fonction_analyse_competences=analyser_competences)
+    afficher_generateur_cv(fonction_analyse_competences_multi=analyser_competences_multi)
 
 # ---------------------------------------------------------------------------
 # Onglet 1 : Tendance par profil
 # ---------------------------------------------------------------------------
 with tab_profil:
     st.write(
-        "Analyse du marché pour le poste renseigné dans votre CV : où sont les offres près de "
-        "chez vous, le volume national, et le niveau de tension du marché sur ce métier."
+        "Analyse du marché pour le/les poste(s) sélectionné(s) dans votre CV : où sont les "
+        "offres près de chez vous, le volume national, et le niveau de tension du marché."
     )
 
     titre_poste_cv = st.session_state.get("cv_titre", "").strip()
+    postes_cv = st.session_state.get("cv_postes_choisis", [])
+    codes_rome_cv = [c for c in st.session_state.get("cv_codes_rome_choisis", []) if c]
     departement_cv = st.session_state.get("cv_departement") or "13"
 
-    if not titre_poste_cv:
+    if not titre_poste_cv or not codes_rome_cv:
         st.info(
-            "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV** — l'analyse se "
-            "lance automatiquement dès qu'il est rempli, pas besoin de le ressaisir ici."
+            "👉 Sélectionne un poste dans l'onglet **🧾 Créer mon CV** (tags de suggestions "
+            "sous le champ « Poste recherché ») — l'analyse se lance automatiquement dès qu'un "
+            "poste est choisi, pas besoin de le ressaisir ici."
         )
     else:
-        # Résolution silencieuse du poste (texte du CV) vers un code ROME — plus de champ
-        # affiché ici : poste et département viennent uniquement de "Créer mon CV".
+        # V4 : la résolution ROME se fait désormais UNE SEULE FOIS, côté "Créer mon CV"
+        # (sélecteur à tags). On reprend ici directement cv_postes_choisis /
+        # cv_codes_rome_choisis plutôt que de re-résoudre silencieusement le texte libre.
         cle_auto_signature = "profil_auto_analyse_signature"
-        signature_actuelle = (titre_poste_cv, departement_cv)
+        signature_actuelle = (tuple(sorted(codes_rome_cv)), departement_cv)
 
         if st.session_state.get(cle_auto_signature) != signature_actuelle:
-            with st.spinner("Analyse du marché en cours..."):
-                suggestions = suggerer_postes(titre_poste_cv)
-                if suggestions:
-                    libelle_resolu = suggestions[0]
-                    item_poste = next(
-                        (a for a in appellations if a.get("libelle", "").strip() == libelle_resolu), None
-                    )
-                    code_resolu = _extraire_code_rome(item_poste) if item_poste else None
-                    if not code_resolu:
-                        df_resolu_apercu = resoudre_codes_rome(mots_cles=libelle_resolu, departement=departement_cv)
-                        code_resolu = (
-                            df_resolu_apercu.iloc[0]["code_rome"] if not df_resolu_apercu.empty else None
-                        )
-                else:
-                    libelle_resolu, code_resolu = titre_poste_cv, None
+            if len(codes_rome_cv) == 1:
+                st.session_state["df_rome_profil"] = pd.DataFrame(
+                    [{"code_rome": codes_rome_cv[0], "libelle": postes_cv[0], "nb_offres_echantillon": None}]
+                )
+                st.session_state["code_rome_choisi"] = codes_rome_cv[0]
+                st.session_state["codes_rome_choisis"] = codes_rome_cv
+                st.session_state["mots_cles_profil_actif"] = postes_cv[0]
+            else:
+                st.session_state["df_rome_profil"] = pd.DataFrame(
+                    [{"code_rome": "MULTI", "libelle": " / ".join(postes_cv), "nb_offres_echantillon": None}]
+                )
+                st.session_state["code_rome_choisi"] = "MULTI"
+                st.session_state["codes_rome_choisis"] = codes_rome_cv
+                st.session_state["mots_cles_profil_actif"] = " ".join(postes_cv)
 
-                if not code_resolu:
-                    st.session_state["df_rome_profil"] = pd.DataFrame()
-                else:
-                    st.session_state["df_rome_profil"] = pd.DataFrame(
-                        [{"code_rome": code_resolu, "libelle": libelle_resolu, "nb_offres_echantillon": None}]
-                    )
-                    st.session_state["code_rome_choisi"] = code_resolu
-                    st.session_state["codes_rome_choisis"] = [code_resolu]
-                    st.session_state["mots_cles_profil_actif"] = libelle_resolu
-
-                st.session_state["departement_profil_actif"] = departement_cv
-                st.session_state[cle_auto_signature] = signature_actuelle
+            st.session_state["departement_profil_actif"] = departement_cv
+            st.session_state[cle_auto_signature] = signature_actuelle
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
@@ -269,6 +181,7 @@ with tab_profil:
         mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
         code_rome_choisi = st.session_state.get("code_rome_choisi")
         codes_rome_choisis = st.session_state.get("codes_rome_choisis", [])
+        postes_choisis_profil = st.session_state.get("cv_postes_choisis", [])
         recherche_multi = code_rome_choisi == "MULTI"
 
         if df_rome.empty:
@@ -491,7 +404,7 @@ with tab_profil:
 with tab_avance:
     if "code_rome_choisi" not in st.session_state:
         st.info(
-            "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
+            "👉 Sélectionne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
             "s'appuient sur l'analyse automatique de l'onglet Tendance par profil."
         )
     else:
