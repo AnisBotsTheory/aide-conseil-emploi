@@ -13,6 +13,7 @@ from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avan
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import altair as alt
 import plotly.express as px
+import plotly.graph_objects as go
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 
@@ -106,7 +107,7 @@ def _selecteur_secteur(cle_prefixe):
     cle_multiselect = f"{cle_prefixe}_secteurs_multiselect"
     labels_disponibles = [l for l in options_secteurs.keys() if l != "Tous secteurs"]
     labels_choisis = st.multiselect(
-        "Secteur(s) d'activité de l'entreprise (laisser vide = tous secteurs)",
+        "Secteur(s) d'activité de l'entreprise",
         options=labels_disponibles,
         key=cle_multiselect,
         help=(
@@ -115,6 +116,7 @@ def _selecteur_secteur(cle_prefixe):
             "très variés (médical, IT, RH...). Sélectionne plusieurs secteurs pour élargir."
         ),
     )
+    st.caption("Laisser vide = tous secteurs.")
     if not labels_choisis:
         return [], None
     return labels_choisis, [options_secteurs[l] for l in labels_choisis]
@@ -334,19 +336,18 @@ with tab_profil:
         if df_rome.empty:
             st.error("Aucune offre trouvée pour ce secteur/département. Essaie d'élargir les critères.")
         else:
-            fraicheur_choisie = st.selectbox(
-                "Publiées depuis",
-                ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
-                key="fraicheur_offres_ville",
-            )
+            # Valeur de "Publiées depuis" du run précédent (le widget lui-même est rendu plus
+            # bas, juste au-dessus de "Offres par ville") — pour que la tension reste filtrée
+            # de façon cohérente avec ce sélecteur sans l'afficher deux fois.
+            fraicheur_precedente = st.session_state.get("fraicheur_offres_ville", "Toutes les offres actives")
             jours_max = {
                 "Toutes les offres actives": None,
                 "7 derniers jours": 7,
                 "30 derniers jours": 30,
                 "90 derniers jours": 90,
-            }[fraicheur_choisie]
+            }[fraicheur_precedente]
 
-            st.markdown(f"#### ⚖️ Tension du marché — {_libelle_departement_affiche(departement_actif)}")
+            st.markdown("#### ⚖️ Tension du marché")
             if code_rome_choisi == "TOUS":
                 st.info(
                     "⚖️ La tension du marché nécessite un ou plusieurs postes précis (l'indicateur "
@@ -362,7 +363,7 @@ with tab_profil:
                 )
             else:
                 st.caption(
-                    "ℹ️ Le nombre d'offres respecte le filtre « Publiées depuis » ci-dessus ; les "
+                    "ℹ️ Le nombre d'offres respecte le filtre « Publiées depuis » ci-dessous ; les "
                     "demandeurs d'emploi restent une statistique officielle trimestrielle "
                     "(non filtrable par date)."
                     + (
@@ -409,14 +410,16 @@ with tab_profil:
                 if tension is not None:
                     st.metric("Indice de tension (offres / demandeurs)", tension)
                     st.info(interpreter_tension(tension))
-                    duree_estimee, note_source_duree = estimer_duree_recherche(tension)
-                    if duree_estimee:
-                        st.metric("Durée de recherche estimée", duree_estimee)
-                        st.caption(f"ℹ️ {note_source_duree}")
                 else:
                     st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
 
             st.divider()
+
+            fraicheur_choisie = st.selectbox(
+                "Publiées depuis",
+                ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
+                key="fraicheur_offres_ville",
+            )
 
             st.markdown(f"#### 📍 Offres par ville — {_libelle_departement_affiche(departement_actif)}")
 
@@ -593,6 +596,15 @@ with tab_profil:
                 "💡 Pour le top entreprises, la comparaison multi-département, le "
                 "dynamisme du territoire, les embauches et les établissements, direction "
                 "l'onglet **🧩 KPIs avancés**."
+            )
+
+            st.divider()
+            st.caption(
+                "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
+                "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
+                "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
+                "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
+                "avec prudence si tu cherches un point de comparaison sur ce type de poste."
             )
 
 # ---------------------------------------------------------------------------
@@ -784,19 +796,39 @@ with tab_avance:
             if df_contrats.empty:
                 st.info("Aucune donnée de type de contrat disponible pour ces critères.")
             else:
-                fig_contrats = px.treemap(
-                    df_contrats,
-                    path=["type_contrat"],
-                    values="nombre_offres",
-                    color="nombre_offres",
-                    color_continuous_scale="Blues",
+                df_contrats_tri = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+                fig_contrats = go.Figure(
+                    go.Scatter(
+                        x=list(range(len(df_contrats_tri))),
+                        y=[0] * len(df_contrats_tri),
+                        mode="markers+text",
+                        marker=dict(
+                            # sizemode="area" + cette formule standard Plotly rend l'AIRE du
+                            # cercle proportionnelle à nombre_offres (pas le diamètre, qui
+                            # exagérerait visuellement les écarts entre types de contrat).
+                            size=df_contrats_tri["nombre_offres"],
+                            sizemode="area",
+                            sizeref=2.0 * df_contrats_tri["nombre_offres"].max() / (110.0 ** 2),
+                            sizemin=18,
+                            color=df_contrats_tri["nombre_offres"],
+                            colorscale="Blues",
+                            line=dict(width=2, color="white"),
+                        ),
+                        text=[
+                            f"{row.type_contrat}<br>{row.nombre_offres}"
+                            for row in df_contrats_tri.itertuples()
+                        ],
+                        textposition="middle center",
+                        textfont=dict(size=13, color="white"),
+                        hoverinfo="skip",
+                    )
                 )
-                fig_contrats.update_traces(
-                    textinfo="label+value",
-                    textfont_size=16,
-                    marker=dict(line=dict(width=2, color="white")),
+                fig_contrats.update_xaxes(visible=False, range=[-1, len(df_contrats_tri)])
+                fig_contrats.update_yaxes(visible=False, range=[-1.2, 1.2])
+                fig_contrats.update_layout(
+                    height=280, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 )
-                fig_contrats.update_layout(margin=dict(t=10, l=10, r=10, b=10))
                 st.plotly_chart(fig_contrats, use_container_width=True)
 
                 st.dataframe(
@@ -813,8 +845,38 @@ with tab_avance:
                 st.info("Aucune des offres trouvées n'indique de salaire.")
             else:
                 pct = round(100 * nb_avec_salaire / nb_total_offres)
-                st.metric("Offres indiquant un salaire", f"{nb_avec_salaire} / {nb_total_offres} ({pct}%)")
-                st.dataframe(df_salaires, use_container_width=True, hide_index=True)
+                st.metric("Offres indiquant un salaire (tous contrats)", f"{nb_avec_salaire} / {nb_total_offres} ({pct}%)")
+
+                df_salaires_cdi = (
+                    df_salaires[df_salaires["Type de contrat"] == "CDI"]
+                    if "Type de contrat" in df_salaires.columns
+                    else df_salaires.iloc[0:0]
+                )
+                if df_salaires_cdi.empty:
+                    st.info("Aucune offre en CDI avec salaire indiqué pour ces critères.")
+                else:
+                    groupement_choisi = st.radio(
+                        "Regrouper les salaires (CDI uniquement) par",
+                        ["Poste", "Entreprise"],
+                        horizontal=True,
+                        key="salaire_groupement",
+                    )
+                    df_salaires_groupes = (
+                        df_salaires_cdi.groupby(groupement_choisi, as_index=False)
+                        .agg(
+                            nombre_offres=(groupement_choisi, "count"),
+                            salaires=("Salaire indiqué", lambda s: " · ".join(sorted(set(s)))),
+                        )
+                        .sort_values("nombre_offres", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    st.dataframe(
+                        df_salaires_groupes.rename(
+                            columns={"nombre_offres": "Nombre d'offres CDI", "salaires": "Salaires indiqués"}
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
             st.divider()
             st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
