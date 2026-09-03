@@ -40,17 +40,32 @@ def _params_filtre_poste(code_rome, mots_cles=None, secteur_activite=None):
     """
     Retourne le(s) paramètre(s) de filtre à utiliser pour l'API Offres d'emploi :
     - codeROME pour un poste précis
-    - motsCles + secteurActivite (si renseignés) pour "Tous les postes" (recherche large,
-      indexée sur le même métier et le même secteur que la recherche de profil).
+    - motsCles (si renseigné) pour "Tous les postes" (recherche large, indexée sur le
+      même métier que la recherche de profil)
+    secteur_activite : un code NAF unique (str) est transmis directement en paramètre
+    d'API, quel que soit code_rome. Une LISTE de codes (multi-secteur) n'est en
+    revanche jamais transmise à l'API (qui n'accepte qu'une seule valeur) — le
+    filtrage se fait après coup côté Python via filtrer_offres_par_secteurs().
     """
-    if code_rome == "TOUS":
-        params = {}
-        if mots_cles:
-            params["motsCles"] = mots_cles
-        if secteur_activite:
-            params["secteurActivite"] = secteur_activite
-        return params
-    return {"codeROME": code_rome}
+    params = {} if code_rome == "TOUS" else {"codeROME": code_rome}
+    if code_rome == "TOUS" and mots_cles:
+        params["motsCles"] = mots_cles
+    if secteur_activite and isinstance(secteur_activite, str):
+        params["secteurActivite"] = secteur_activite
+    return params
+
+
+def filtrer_offres_par_secteurs(offres, codes_secteurs):
+    """
+    Filtre une liste d'offres brutes sur une liste de codes NAF (multi-secteur,
+    filtrage post-fusion — l'API France Travail n'accepte qu'un seul code
+    secteurActivite par requête). Si codes_secteurs est None, vide, ou un simple
+    code unique (str, déjà appliqué côté API), renvoie les offres inchangées.
+    """
+    if not codes_secteurs or isinstance(codes_secteurs, str):
+        return offres
+    codes_secteurs = set(codes_secteurs)
+    return [o for o in offres if o.get("secteurActivite") in codes_secteurs]
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +420,7 @@ def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mo
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     params = {"departement": departement, "range": range_str}
     params.update(_params_filtre_poste(code_rome, mots_cles))
-    if secteur_naf:
+    if secteur_naf and isinstance(secteur_naf, str):
         params["secteurActivite"] = secteur_naf
     if jours_max:
         date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
@@ -428,7 +443,13 @@ def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mo
             total = int(content_range.split("/")[-1])
         except ValueError:
             total = 0
-    return data.get("resultats", []), total
+    resultats = data.get("resultats", [])
+    if isinstance(secteur_naf, list) and secteur_naf:
+        resultats = filtrer_offres_par_secteurs(resultats, secteur_naf)
+        # Le total renvoyé par l'API ne reflète pas ce filtrage post-fetch multi-secteur :
+        # on retombe sur le nombre réellement filtré, plus honnête que le total brut.
+        total = len(resultats)
+    return resultats, total
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +475,7 @@ def resoudre_codes_rome(mots_cles=None, departement=None, secteur_activite=None,
             params["motsCles"] = mots_cles
         if departement:
             params["departement"] = departement
-        if secteur_activite:
+        if secteur_activite and isinstance(secteur_activite, str):
             params["secteurActivite"] = secteur_activite
         r = requests.get(url, headers=headers, params=params)
         if r.status_code not in (200, 206):
@@ -463,6 +484,8 @@ def resoudre_codes_rome(mots_cles=None, departement=None, secteur_activite=None,
         toutes_offres.extend(resultats)
         if len(resultats) < taille_page:
             break
+
+    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
 
     compteur = Counter()
     libelles = {}
@@ -544,7 +567,7 @@ def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=N
         fin = debut + taille_page - 1
         params = {"departement": departement, "range": f"{debut}-{fin}"}
         params.update(_params_filtre_poste(code_rome, mots_cles))
-        if secteur_activite:
+        if secteur_activite and isinstance(secteur_activite, str):
             params["secteurActivite"] = secteur_activite
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
@@ -557,7 +580,7 @@ def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=N
         toutes_offres.extend(resultats)
         if len(resultats) < taille_page:
             break
-    return toutes_offres
+    return filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
 
 
 # ---------------------------------------------------------------------------
@@ -1028,6 +1051,8 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
         if len(resultats) < taille_page:
             break
 
+    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
+
     lieux = {}
     entreprises = {}  # cle_normalisee -> {"nom_affiche":..., "nombre_offres":..., "villes": set()}
     dates_creation = []
@@ -1254,6 +1279,12 @@ def evolution_offres_annuelle(code_rome, departement, mots_cles=None, secteur_ac
     """
     Volume d'offres par mois sur les 12 derniers mois, pour un ROME (ou tous, via
     mots-clés) et un département. Une requête par mois (compte via Content-Range).
+
+    NB multi-secteur : ce compteur s'appuie uniquement sur Content-Range (pas de
+    liste d'offres brutes à filtrer après coup), donc contrairement aux autres
+    fonctions de ce module, une LISTE de codes secteur n'est pas filtrable ici —
+    _params_filtre_poste l'ignore silencieusement (retombe sur "tous secteurs"
+    pour ce graphique précis) plutôt que de fausser le compte.
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -1323,6 +1354,8 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
         if len(resultats) < taille_page:
             break
 
+    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
+
     compteur_contrats = Counter()
     compteur_experience = Counter()
     lignes_salaires = []
@@ -1379,6 +1412,44 @@ def interpreter_tension(tension):
     return "Marché très concurrentiel (peu d'offres pour beaucoup de candidats)."
 
 
+def estimer_duree_recherche(tension):
+    """
+    Estimation INDICATIVE (maison, non officielle) d'une durée de recherche
+    d'emploi côté candidat, à partir de l'indice de tension local. Il n'existe
+    pas d'étude publiée (Dares, Apec, cabinets de conseil) reliant précisément
+    un indice de tension à une durée de recherche candidat — ce n'est donc pas
+    une statistique officielle, juste une mise à l'échelle des 4 mêmes paliers
+    que interpreter_tension(), calée sur le seul repère chiffré et sourcé
+    trouvé : la durée moyenne de RECRUTEMENT (côté entreprise, pas candidat)
+    observée par l'Apec pour les cadres, environ 9 à 11 semaines
+    (source : Apec, "Pratiques de recrutement des cadres",
+    https://corporate.apec.fr/home/espace-medias/pratiques-de-recrutements-des-cadres-en-2022.html).
+    Cette durée d'entreprise sert d'ancrage pour le palier "équilibré", les
+    autres paliers sont des fourchettes plus rapides/plus longues par
+    extrapolation, pas des données mesurées.
+
+    Retourne (fourchette_texte, note_source) ou (None, None) si tension est None.
+    """
+    if tension is None:
+        return None, None
+
+    note_source = (
+        "Estimation indicative, non officielle — aucune étude publiée ne relie précisément "
+        "un indice de tension à une durée de recherche candidat. Calée sur le seul repère "
+        "chiffré et sourcé disponible : la durée moyenne de RECRUTEMENT (côté entreprise) "
+        "observée par l'Apec pour les cadres, environ 9 à 11 semaines (Apec, « Pratiques de "
+        "recrutement des cadres »)."
+    )
+
+    if tension >= 1.5:
+        return "environ 4 à 6 semaines", note_source
+    if tension >= 1.0:
+        return "environ 6 à 9 semaines", note_source
+    if tension >= 0.5:
+        return "environ 9 à 14 semaines", note_source
+    return "environ 14 à 26 semaines (3 à 6 mois)", note_source
+
+
 
 
 __all__ = [
@@ -1387,6 +1458,7 @@ __all__ = [
     "SCOPE_OFFRES",
     "get_token",
     "_params_filtre_poste",
+    "filtrer_offres_par_secteurs",
     "_REF_LANGAGES_INFORMATIQUES",
     "_REF_OUTILS_INFORMATIQUES",
     "_classifier_competence",
@@ -1437,4 +1509,5 @@ __all__ = [
     "repartition_contrats_et_salaires",
     "calculer_tension",
     "interpreter_tension",
+    "estimer_duree_recherche",
 ]
