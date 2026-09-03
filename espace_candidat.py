@@ -458,9 +458,8 @@ with tab_profil:
                         columns={
                             "entreprise": "Entreprise",
                             "nombre_offres": "Nombre d'offres",
-                            "villes": "Ville",
                         }
-                    ),
+                    ).drop(columns=["villes"]),
                     use_container_width=True,
                     hide_index=True,
                 )
