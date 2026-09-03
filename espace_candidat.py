@@ -372,7 +372,9 @@ with tab_profil:
                     carte = folium.Map(
                         location=[df_carte["latitude"].mean(), df_carte["longitude"].mean()],
                         zoom_start=zoom_auto,
-                        tiles="CartoDB dark_matter",
+                        # CartoDB dark_matter exige désormais une clé API (changement récent
+                        # de Carto) — OpenStreetMap reste gratuit et sans clé, en thème clair.
+                        tiles="OpenStreetMap",
                     )
                     cluster = MarkerCluster(
                         options={"maxClusterRadius": 60, "disableClusteringAtZoom": 15}
@@ -439,7 +441,7 @@ with tab_profil:
                                 )
                         offres_de_cette_entreprise = [
                             o for o in offres_top_recruteur
-                            if _nom_entreprise_normalise(o) == entreprise_choisie_top
+                            if _nom_entreprise_normalise(o).strip().lower() == entreprise_choisie_top.strip().lower()
                         ]
 
                         st.markdown(f"##### 📋 Offres chez {entreprise_choisie_top}")
