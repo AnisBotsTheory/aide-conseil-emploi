@@ -601,6 +601,14 @@ with tab_offres:
         _, secteur_naf = _selecteur_secteur("offres")
         bouton_lancer_recherche = st.button("Lancer la recherche")
 
+    if adzuna_configure():
+        st.caption("🔎 Sources actives : France Travail + Adzuna.")
+    else:
+        st.caption(
+            "🔎 Source active : France Travail uniquement (clé Adzuna non configurée — "
+            "ADZUNA_APP_ID/ADZUNA_APP_KEY absents des variables d'environnement)."
+        )
+
     if bouton_lancer_recherche:
         resultats, total = [], 0
         recherche_ok = True
@@ -608,31 +616,20 @@ with tab_offres:
         if departement == "":
             st.error("Sélectionne au moins un département (ou coche « Toute la France »).")
             recherche_ok = False
-        elif postes_choisis_offres == ["🌐 Tous les postes"]:
-            with st.spinner("Recherche en cours..."):
-                resultats, total = chercher_offres(
-                    "TOUS", departement, secteur_naf, jours_max_offres, mots_cles=""
-                )
         elif not postes_choisis_offres:
             st.error("Sélectionne au moins un poste (ou coche « Tous les postes »).")
             recherche_ok = False
-        elif not codes_resolus_offres:
+        elif postes_choisis_offres != ["🌐 Tous les postes"] and not codes_resolus_offres:
             st.error(
                 "Impossible de résoudre ce(s) poste(s) pour l'instant (aucune offre trouvée pour "
                 "les recouper). Essaie un autre poste, élargis le département, ou coche "
                 "\"Tous les postes\"."
             )
             recherche_ok = False
-        elif len(codes_resolus_offres) == 1:
-            with st.spinner("Recherche en cours..."):
-                resultats, total = chercher_offres(
-                    codes_resolus_offres[0], departement, secteur_naf, jours_max_offres,
-                    mots_cles=postes_choisis_offres[0],
-                )
         else:
             with st.spinner("Recherche en cours..."):
-                resultats, total = chercher_offres_multi(
-                    codes_resolus_offres, departement, secteur_naf, jours_max_offres
+                resultats, total = rechercher_offres_toutes_sources(
+                    postes_choisis_offres, codes_resolus_offres, departement, secteur_naf, jours_max_offres,
                 )
 
         if recherche_ok:
@@ -656,11 +653,12 @@ with tab_offres:
                     entreprise = o.get("entreprise", {}).get("nom", "N/C")
                     lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
                     date_pub = o.get("dateCreation", "")[:10]
+                    source_o = o.get("source", "France Travail")
 
                     score, detail = calculer_correspondance_offre(
                         o, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur
                     )
-                    ligne_titre = f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub}"
+                    ligne_titre = f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub} — _{source_o}_"
                     if score is not None:
                         ligne_titre += f"  \n🎯 Correspondance : **{score}%**"
                         if detail:
