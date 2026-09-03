@@ -158,13 +158,21 @@ def _selecteur_poste(cle_prefixe, departement_pour_resolution):
         disabled=recherche_tous_postes,
     )
 
+    # Un nouveau terme de recherche efface la sélection précédente : sans ça, les
+    # postes choisis lors d'une recherche antérieure (ex: "big data") continuaient
+    # à apparaître cochés en changeant complètement de sujet (ex: "réceptionniste"),
+    # ce qui prêtait à confusion sur ce qui allait réellement être recherché.
+    cle_terme_precedent = f"{cle_prefixe}_poste_terme_precedent"
+    terme_precedent = st.session_state.get(cle_terme_precedent, poste_texte_libre)
+    if poste_texte_libre != terme_precedent and st.session_state[cle_selection]:
+        st.session_state[cle_selection] = []
+    st.session_state[cle_terme_precedent] = poste_texte_libre
+
     if recherche_tous_postes:
         st.success("Poste sélectionné : **🌐 Tous les postes**")
         return ["🌐 Tous les postes"], {}
 
     suggestions = suggerer_postes(poste_texte_libre) if poste_texte_libre.strip() else []
-    # Union avec la sélection déjà en cours, pour ne pas perdre visuellement un poste
-    # sélectionné si l'utilisateur retape un mot-clé différent entre deux sélections.
     tous_les_tags = list(dict.fromkeys(suggestions + st.session_state[cle_selection]))
 
     if tous_les_tags:
