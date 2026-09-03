@@ -383,7 +383,8 @@ with tab_profil:
                 if recherche_multi:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
                         total_dep_offres = volumes_departement_offres_multi(
-                            codes_rome_choisis, departement_actif, jours_max=jours_max_periode_offres
+                            codes_rome_choisis, departement_actif,
+                            jours_max=jours_max_periode_offres, secteur_activite=secteur_actif,
                         )
                         total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = (
                             demandeurs_emploi_departement_multi(codes_rome_choisis, departement_actif)
@@ -391,7 +392,8 @@ with tab_profil:
                 else:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
                         total_dep_offres = volumes_departement_offres(
-                            code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres
+                            code_rome_choisi, departement_actif,
+                            jours_max=jours_max_periode_offres, secteur_activite=secteur_actif,
                         )
                         total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
                             code_rome_choisi, departement_actif
