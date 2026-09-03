@@ -261,6 +261,18 @@ with tab_profil:
         if df_rome.empty:
             st.error("Aucune offre trouvée pour ce secteur/département. Essaie d'élargir les critères.")
         else:
+            fraicheur_choisie = st.selectbox(
+                "Publiées depuis",
+                ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
+                key="fraicheur_offres_ville",
+            )
+            jours_max = {
+                "Toutes les offres actives": None,
+                "7 derniers jours": 7,
+                "30 derniers jours": 30,
+                "90 derniers jours": 90,
+            }[fraicheur_choisie]
+
             st.markdown(f"#### ⚖️ Tension du marché — département {departement_actif}")
             if code_rome_choisi == "TOUS":
                 st.info(
@@ -269,20 +281,30 @@ with tab_profil:
                     "voir ce calcul."
                 )
             else:
-                if recherche_multi:
-                    st.caption(
-                        "ℹ️ Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
+                st.caption(
+                    "ℹ️ Le nombre d'offres respecte le filtre « Publiées depuis » ci-dessus ; les "
+                    "demandeurs d'emploi restent une statistique officielle trimestrielle "
+                    "(non filtrable par date)."
+                    + (
+                        " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
                         "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
                         "indicateur officiel par métier unique."
+                        if recherche_multi else ""
                     )
+                )
+                if recherche_multi:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
-                        total_dep_offres = volumes_departement_offres_multi(codes_rome_choisis, departement_actif)
+                        total_dep_offres = volumes_departement_offres_multi(
+                            codes_rome_choisis, departement_actif, jours_max=jours_max
+                        )
                         total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = (
                             demandeurs_emploi_departement_multi(codes_rome_choisis, departement_actif)
                         )
                 else:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
-                        total_dep_offres = volumes_departement_offres(code_rome_choisi, departement_actif)
+                        total_dep_offres = volumes_departement_offres(
+                            code_rome_choisi, departement_actif, jours_max=jours_max
+                        )
                         total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
                             code_rome_choisi, departement_actif
                         )
@@ -313,17 +335,6 @@ with tab_profil:
             st.divider()
 
             st.markdown(f"#### 📍 Offres par ville — département {departement_actif}")
-            fraicheur_choisie = st.selectbox(
-                "Publiées depuis",
-                ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
-                key="fraicheur_offres_ville",
-            )
-            jours_max = {
-                "Toutes les offres actives": None,
-                "7 derniers jours": 7,
-                "30 derniers jours": 30,
-                "90 derniers jours": 90,
-            }[fraicheur_choisie]
 
             with st.spinner("Récupération des offres par ville..."):
                 if recherche_multi:
@@ -351,6 +362,15 @@ with tab_profil:
                 )
             if not df_villes.empty:
                 df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
+                nb_offres_approx = int(df_carte.loc[df_carte["approximatif"], "nombre_offres"].sum()) if not df_carte.empty else 0
+                if nb_offres_approx > 0:
+                    st.caption(
+                        f"📍 {nb_offres_approx} offre(s) sur {total_region} n'ont pas de coordonnées GPS "
+                        "précises côté France Travail (lieu renseigné au niveau département seulement, ou "
+                        "télétravail) — elles sont positionnées sur la plus grande ville du département "
+                        "(marqueurs oranges ci-dessous), à titre indicatif."
+                    )
+                ville_cliquee = None
                 if not df_carte.empty:
                     df_carte["latitude"] = df_carte["latitude"].astype(float)
                     df_carte["longitude"] = df_carte["longitude"].astype(float)
@@ -381,27 +401,85 @@ with tab_profil:
                     ).add_to(carte)
 
                     for _, row in df_carte.iterrows():
+                        couleur = "#e67e22" if row["approximatif"] else "#0066cc"
+                        tooltip_texte = f"{row['ville']} : {int(row['nombre_offres'])} offre(s)"
+                        if row["approximatif"]:
+                            tooltip_texte += " (position approximative)"
                         for _ in range(int(row["nombre_offres"])):
                             folium.CircleMarker(
                                 location=[row["latitude"], row["longitude"]],
                                 radius=8,
-                                tooltip=f"{row['ville']} : {int(row['nombre_offres'])} offre(s)",
-                                color="#0066cc",
+                                tooltip=tooltip_texte,
+                                color=couleur,
                                 fill=True,
-                                fill_color="#0066cc",
+                                fill_color=couleur,
                                 fill_opacity=0.8,
                                 weight=1,
                             ).add_to(cluster)
 
-                    st_folium(
+                    st.caption("👇 Clique sur un marqueur pour consulter les offres de cette ville.")
+                    resultat_carte = st_folium(
                         carte,
                         use_container_width=True,
                         height=500,
                         key="carte_offres_ville",
-                        returned_objects=[],
+                        returned_objects=["last_object_clicked_tooltip"],
                     )
+                    tooltip_clique = resultat_carte.get("last_object_clicked_tooltip") if resultat_carte else None
+                    if tooltip_clique:
+                        ville_cliquee = tooltip_clique.split(" : ")[0].strip()
                 else:
                     st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
+
+                if ville_cliquee:
+                    with st.spinner(f"Récupération des offres à {ville_cliquee}..."):
+                        if recherche_multi:
+                            offres_carte = rechercher_offres_completes_multi(
+                                codes_rome_choisis, departement_actif, max_pages=5, secteur_activite=secteur_actif,
+                            )
+                        else:
+                            offres_carte = rechercher_offres_completes(
+                                code_rome_choisi, departement_actif, max_pages=5,
+                                mots_cles=mots_cles_actifs, secteur_activite=secteur_actif,
+                            )
+                    offres_de_cette_ville = [
+                        o for o in offres_carte
+                        if (o.get("lieuTravail", {}) or {}).get("libelle") == ville_cliquee
+                    ]
+
+                    st.markdown(f"##### 📋 Offres à {ville_cliquee}")
+                    if not offres_de_cette_ville:
+                        st.info(
+                            "Aucune offre retrouvée pour ce lieu pour l'instant — les résultats peuvent "
+                            "varier légèrement entre deux recherches successives."
+                        )
+                    else:
+                        for o in offres_de_cette_ville:
+                            entreprise_o = _nom_entreprise_normalise(o)
+                            date_pub_o = o.get("dateCreation", "")[:10]
+                            with st.expander(f"**{o.get('intitule', '')}** — {entreprise_o} — publiée le {date_pub_o}"):
+                                type_contrat_o = o.get("typeContratLibelle") or o.get("typeContrat")
+                                if type_contrat_o:
+                                    st.markdown(f"**Type de contrat :** {type_contrat_o}")
+                                salaire_o = o.get("salaire", {}).get("libelle")
+                                if salaire_o:
+                                    st.markdown(f"**Salaire :** {salaire_o}")
+                                description_o = o.get("description")
+                                if description_o:
+                                    st.markdown("**Description :**")
+                                    st.write(description_o)
+                                competences_offre_o = o.get("competences", [])
+                                if competences_offre_o:
+                                    libelles_o = ", ".join(
+                                        c.get("libelle", "") for c in competences_offre_o if c.get("libelle")
+                                    )
+                                    if libelles_o:
+                                        st.markdown(f"**Compétences demandées :** {libelles_o}")
+                                url_offre_o = o.get("origineOffre", {}).get("urlOrigine")
+                                if url_offre_o:
+                                    st.markdown(
+                                        f"🔗 [Voir l'offre complète et postuler sur France Travail]({url_offre_o})"
+                                    )
 
                 st.markdown("#### 🏢 Top recruteurs")
                 if df_entreprises.empty:
@@ -410,8 +488,7 @@ with tab_profil:
                         "les offres sont diffusées de façon anonyme."
                     )
                 else:
-                    st.caption("👇 Clique sur une entreprise pour consulter ses offres.")
-                    selection_top_recruteur = st.dataframe(
+                    st.dataframe(
                         df_entreprises.rename(
                             columns={
                                 "entreprise": "Entreprise",
@@ -421,62 +498,12 @@ with tab_profil:
                         ),
                         use_container_width=True,
                         hide_index=True,
-                        on_select="rerun",
-                        selection_mode="single-row",
-                        key="table_top_recruteurs",
                     )
-
-                    lignes_top_recruteur_sel = selection_top_recruteur["selection"]["rows"]
-                    if lignes_top_recruteur_sel:
-                        entreprise_choisie_top = df_entreprises.iloc[lignes_top_recruteur_sel[0]]["entreprise"]
-                        with st.spinner(f"Récupération des offres de {entreprise_choisie_top}..."):
-                            if recherche_multi:
-                                offres_top_recruteur = rechercher_offres_completes_multi(
-                                    codes_rome_choisis, departement_actif, max_pages=5, secteur_activite=secteur_actif,
-                                )
-                            else:
-                                offres_top_recruteur = rechercher_offres_completes(
-                                    code_rome_choisi, departement_actif, max_pages=5,
-                                    mots_cles=mots_cles_actifs, secteur_activite=secteur_actif,
-                                )
-                        offres_de_cette_entreprise = [
-                            o for o in offres_top_recruteur
-                            if _nom_entreprise_normalise(o).strip().lower() == entreprise_choisie_top.strip().lower()
-                        ]
-
-                        st.markdown(f"##### 📋 Offres chez {entreprise_choisie_top}")
-                        if not offres_de_cette_entreprise:
-                            st.info(
-                                "Aucune offre retrouvée pour cette entreprise pour l'instant — les "
-                                "résultats peuvent varier légèrement entre deux recherches successives."
-                            )
-                        else:
-                            for o in offres_de_cette_entreprise:
-                                lieu_o = o.get("lieuTravail", {}).get("libelle", "N/C")
-                                date_pub_o = o.get("dateCreation", "")[:10]
-                                with st.expander(f"**{o.get('intitule', '')}** — {lieu_o} — publiée le {date_pub_o}"):
-                                    type_contrat_o = o.get("typeContratLibelle") or o.get("typeContrat")
-                                    if type_contrat_o:
-                                        st.markdown(f"**Type de contrat :** {type_contrat_o}")
-                                    salaire_o = o.get("salaire", {}).get("libelle")
-                                    if salaire_o:
-                                        st.markdown(f"**Salaire :** {salaire_o}")
-                                    description_o = o.get("description")
-                                    if description_o:
-                                        st.markdown("**Description :**")
-                                        st.write(description_o)
-                                    competences_offre_o = o.get("competences", [])
-                                    if competences_offre_o:
-                                        libelles_o = ", ".join(
-                                            c.get("libelle", "") for c in competences_offre_o if c.get("libelle")
-                                        )
-                                        if libelles_o:
-                                            st.markdown(f"**Compétences demandées :** {libelles_o}")
-                                    url_offre_o = o.get("origineOffre", {}).get("urlOrigine")
-                                    if url_offre_o:
-                                        st.markdown(
-                                            f"🔗 [Voir l'offre complète et postuler sur France Travail]({url_offre_o})"
-                                        )
+                    st.caption(
+                        "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
+                        "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
+                        "peuvent valoir une candidature directe."
+                    )
 
             st.divider()
             st.info(
