@@ -937,6 +937,57 @@ def chercher_offres_multi(codes_rome, departement, secteur_naf=None, jours_max=N
     return offres_dedupliquees, len(offres_dedupliquees)
 
 
+def _rechercher_offres_adzuna_pour_recherche(postes_choisis, departement):
+    """
+    Complète une recherche France Travail avec Adzuna, quand c'est pertinent.
+    Adzuna ne filtre ni par code ROME ni par secteur NAF, seulement par texte
+    libre (what) et lieu (where) — donc pas exploitable en mode "Tous les
+    postes" (aucun mot-clé précis à lui donner). Le département est converti
+    en nom de ville via departement_vers_lieu_adzuna() ; en cas de sélection
+    multi-département ou "Toute la France", on interroge Adzuna sans filtre de
+    lieu (résultats plus larges, dédupliqués ensuite avec fusionner_offres).
+    Renvoie une liste vide si les identifiants Adzuna ne sont pas configurés
+    (dégradation silencieuse, comme partout ailleurs dans ce module).
+    """
+    if not adzuna_configure():
+        return []
+    if not postes_choisis or postes_choisis == ["🌐 Tous les postes"]:
+        return []
+    mots_cles = " ".join(postes_choisis)
+    lieu = departement_vers_lieu_adzuna(departement) if departement and "," not in departement else None
+    return rechercher_offres_adzuna(mots_cles, ou=lieu)
+
+
+def rechercher_offres_toutes_sources(postes_choisis, codes_resolus, departement, secteur_naf, jours_max):
+    """
+    Exécute chercher_offres/chercher_offres_multi selon le même branchement que
+    l'onglet Offres d'emploi (poste unique / plusieurs postes / "Tous les postes"),
+    PUIS complète avec Adzuna et fusionne/déduplique les deux sources. Recherche
+    strictement telle que configurée par l'utilisateur — aucun filtre n'est relâché
+    automatiquement.
+    """
+    if postes_choisis == ["🌐 Tous les postes"]:
+        resultats, total = chercher_offres("TOUS", departement, secteur_naf, jours_max, mots_cles="")
+    elif not codes_resolus:
+        resultats, total = [], 0
+    elif len(codes_resolus) == 1:
+        libelle = postes_choisis[0] if postes_choisis else None
+        resultats, total = chercher_offres(codes_resolus[0], departement, secteur_naf, jours_max, mots_cles=libelle)
+    else:
+        resultats, total = chercher_offres_multi(codes_resolus, departement, secteur_naf, jours_max)
+
+    for o in resultats:
+        o.setdefault("source", "France Travail")
+
+    offres_adzuna = _rechercher_offres_adzuna_pour_recherche(postes_choisis, departement)
+    if offres_adzuna:
+        resultats = fusionner_offres(resultats, offres_adzuna)
+        # Le total France Travail seul ne reflète pas les offres Adzuna ajoutées.
+        total = max(total, len(resultats))
+
+    return resultats, total
+
+
 def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_activite=None):
     """
     Fusionne les résultats de offres_par_ville() pour plusieurs codes ROME :
@@ -1618,6 +1669,7 @@ __all__ = [
     "volumes_departement_offres_multi",
     "rechercher_offres_completes_multi",
     "chercher_offres_multi",
+    "rechercher_offres_toutes_sources",
     "offres_par_ville_multi",
     "evolution_offres_annuelle_multi",
     "repartition_contrats_et_salaires_multi",
