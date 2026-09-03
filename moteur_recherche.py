@@ -10,6 +10,7 @@ entre les deux espaces (cf. synthèse technique, section "Architecture retenue")
 
 import streamlit as st
 import requests
+import re
 import os
 import pandas as pd
 from datetime import datetime, timedelta, timezone
@@ -226,7 +227,9 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
     for page in range(max_pages):
         debut = page * taille_page
         fin = debut + taille_page - 1
-        params = {"departement": departement, "range": f"{debut}-{fin}"}
+        params = {"range": f"{debut}-{fin}"}
+        if departement:
+            params["departement"] = departement
         params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
@@ -418,7 +421,9 @@ def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mo
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"departement": departement, "range": range_str}
+    params = {"range": range_str}
+    if departement:
+        params["departement"] = departement
     params.update(_params_filtre_poste(code_rome, mots_cles))
     if secteur_naf and isinstance(secteur_naf, str):
         params["secteurActivite"] = secteur_naf
@@ -565,7 +570,9 @@ def rechercher_offres_completes(code_rome, departement, max_pages=1, mots_cles=N
     for page in range(max_pages):
         debut = page * taille_page
         fin = debut + taille_page - 1
-        params = {"departement": departement, "range": f"{debut}-{fin}"}
+        params = {"range": f"{debut}-{fin}"}
+        if departement:
+            params["departement"] = departement
         params.update(_params_filtre_poste(code_rome, mots_cles))
         if secteur_activite and isinstance(secteur_activite, str):
             params["secteurActivite"] = secteur_activite
@@ -692,6 +699,53 @@ DEPARTEMENTS_CHEF_LIEU = {
     "973": ("Cayenne", 4.9224, -52.3135), "974": ("Saint-Denis", -20.8789, 55.4481),
     "976": ("Mamoudzou", -12.7806, 45.2278),
 }
+
+
+def departements_vers_param(departements):
+    """
+    Convertit une sélection de départements en valeur du paramètre 'departement'
+    pour l'API France Travail, qui accepte plusieurs codes séparés par une
+    virgule (cf. data.gouv.fr : "L'API Offres d'emploi offre la possibilité de
+    filtrer sur plusieurs métiers, communes, départements"). None ou une liste
+    vide -> pas de paramètre du tout (recherche "Toute la France").
+    """
+    if not departements:
+        return None
+    if isinstance(departements, str):
+        return departements
+    return ",".join(departements)
+
+
+def departement_est_multiple(departement_param):
+    """True si departement_param couvre plus d'un département : soit une
+    recherche nationale (None, aucun filtre), soit plusieurs codes explicites
+    séparés par une virgule. Utilisé pour désactiver la tension du marché, qui
+    ne se calcule proprement que pour UN seul département (statistique Dares
+    trimestrielle, un appel par territoire)."""
+    return departement_param is None or "," in str(departement_param)
+
+
+_RE_CODE_DEPARTEMENT_PREFIXE = re.compile(r"^(2[AB]|\d{2,3})\s*-")
+
+
+def _deviner_departement_offre(ville_libelle, departement_recherche):
+    """
+    Déduit un code département pour positionner sur la carte une offre sans
+    coordonnées précises : d'abord depuis le préfixe du libellé de lieu
+    lui-même (ex: "13 - Bouches-du-Rhône" -> "13", fiable quel que soit le
+    nombre de départements recherchés), sinon depuis le département de
+    recherche SI c'est un code unique (pas une liste multi-département ni une
+    recherche nationale, où on ne peut pas savoir lequel des départements
+    sélectionnés concerne cette offre précise — dans ce cas, retourne None :
+    l'offre restera non localisée plutôt que mal placée).
+    """
+    m = _RE_CODE_DEPARTEMENT_PREFIXE.match(ville_libelle or "")
+    if m:
+        return m.group(1)
+    if departement_recherche and isinstance(departement_recherche, str) and "," not in departement_recherche:
+        return departement_recherche
+    return None
+
 
 
 def adzuna_configure():
@@ -1037,7 +1091,9 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     for page in range(max_pages):
         debut = page * taille_page
         fin = debut + taille_page - 1
-        params = {"departement": departement, "range": f"{debut}-{fin}"}
+        params = {"range": f"{debut}-{fin}"}
+        if departement:
+            params["departement"] = departement
         params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
@@ -1056,7 +1112,6 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     lieux = {}
     entreprises = {}  # cle_normalisee -> {"nom_affiche":..., "nombre_offres":..., "villes": set()}
     dates_creation = []
-    chef_lieu = DEPARTEMENTS_CHEF_LIEU.get(str(departement).strip().upper())
     for offre in toutes_offres:
         lieu_travail = offre.get("lieuTravail", {})
         ville = lieu_travail.get("libelle", "Non renseigné")
@@ -1067,10 +1122,13 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
                 lieux[ville] = {
                     "nombre_offres": 0, "latitude": lat_brute, "longitude": lon_brute, "approximatif": False,
                 }
-            elif chef_lieu:
+            elif (chef_lieu := DEPARTEMENTS_CHEF_LIEU.get(
+                str(_deviner_departement_offre(ville, departement) or "").strip().upper()
+            )):
                 # Pas de coordonnées précises pour cette offre (lieu renseigné seulement au
                 # niveau département, ou télétravail) : on positionne sur la plus grande
-                # ville du département plutôt que d'exclure l'offre de la carte.
+                # ville DU DÉPARTEMENT DE L'OFFRE (déduit du libellé, fiable même en
+                # recherche multi-département ou nationale) plutôt que d'exclure l'offre.
                 _, lat_repli, lon_repli = chef_lieu
                 lieux[ville] = {
                     "nombre_offres": 0, "latitude": lat_repli, "longitude": lon_repli, "approximatif": True,
@@ -1133,7 +1191,9 @@ def volumes_departement_offres(code_rome, departement, mots_cles=None, secteur_a
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"departement": departement, "range": "0-0"}
+    params = {"range": "0-0"}
+    if departement:
+        params["departement"] = departement
     params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
     if jours_max:
         date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
@@ -1305,11 +1365,12 @@ def evolution_offres_annuelle(code_rome, departement, mots_cles=None, secteur_ac
             fin_mois = datetime(annee, mois + 1, 1, tzinfo=timezone.utc)
 
         params = {
-            "departement": departement,
             "range": "0-0",
             "minCreationDate": debut_mois.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "maxCreationDate": fin_mois.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
+        if departement:
+            params["departement"] = departement
         params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
         r = requests.get(url, headers=headers, params=params)
         total = 0
@@ -1340,7 +1401,9 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
     for page in range(max_pages):
         debut = page * taille_page
         fin = debut + taille_page - 1
-        params = {"departement": departement, "range": f"{debut}-{fin}"}
+        params = {"range": f"{debut}-{fin}"}
+        if departement:
+            params["departement"] = departement
         params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
         if jours_max:
             date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
@@ -1481,6 +1544,9 @@ __all__ = [
     "ADZUNA_BASE_URL",
     "DEPARTEMENTS_VERS_NOM",
     "DEPARTEMENTS_CHEF_LIEU",
+    "departements_vers_param",
+    "departement_est_multiple",
+    "_deviner_departement_offre",
     "adzuna_configure",
     "departement_vers_lieu_adzuna",
     "rechercher_offres_adzuna",
