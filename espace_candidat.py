@@ -582,11 +582,6 @@ with tab_offres:
 
     codes_resolus_offres = [c for c in codes_par_poste_offres.values() if c]
 
-    col_sect_off, col_dep_off = st.columns(2)
-    with col_dep_off:
-        departement = _selecteur_departement("offres")
-    with col_sect_off:
-        _, secteur_naf = _selecteur_secteur("offres")
     fraicheur_choisie_offres = st.selectbox(
         "Publiées depuis",
         ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
@@ -599,7 +594,14 @@ with tab_offres:
         "90 derniers jours": 90,
     }[fraicheur_choisie_offres]
 
-    if st.button("Chercher des offres"):
+    col_sect_off, col_dep_off = st.columns(2)
+    with col_dep_off:
+        departement = _selecteur_departement("offres")
+    with col_sect_off:
+        _, secteur_naf = _selecteur_secteur("offres")
+        bouton_lancer_recherche = st.button("Lancer la recherche")
+
+    if bouton_lancer_recherche:
         resultats, total = [], 0
         recherche_ok = True
 
