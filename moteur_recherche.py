@@ -1476,6 +1476,53 @@ def interpreter_tension(tension):
     return "Marché très concurrentiel (peu d'offres pour beaucoup de candidats)."
 
 
+def conseils_tension(tension):
+    """
+    Conseils actionnables selon le palier de tension (même paliers que
+    interpreter_tension). Chaque conseil pointe vers quelque chose de concret
+    dans l'app plutôt qu'un principe général. Retourne une liste vide si
+    tension est None.
+    """
+    if tension is None:
+        return []
+    if tension >= 1.5:
+        return [
+            "Le marché est en tension pour les recruteurs : les process sont souvent plus "
+            "rapides. Mène 2 à 3 candidatures en parallèle plutôt qu'une seule à la fois.",
+            "Position de force pour négocier salaire, télétravail, date de démarrage — ne te "
+            "sous-vends pas sur la première offre.",
+            "Regarde en priorité les offres sans salaire affiché : sur un marché tendu pour "
+            "l'employeur, c'est souvent négociable à la hausse.",
+        ]
+    if tension >= 1.0:
+        return [
+            "Cible reste précise, pas besoin d'élargir — mais vérifie la fraîcheur des offres "
+            "(« Publiées depuis ») pour prioriser les plus récentes, les plus anciennes ont "
+            "souvent déjà un candidat en cours de process.",
+            "Repère les entreprises qui publient plusieurs offres dans le tableau « Top "
+            "recruteurs » : signe d'un recrutement actif, bon candidat pour une candidature "
+            "spontanée sur un poste proche non publié.",
+        ]
+    if tension >= 0.5:
+        return [
+            "Vérifie que ton % de correspondance (onglet Offres d'emploi) dépasse 60-70% avant "
+            "de candidater, sinon ajuste tes mots-clés sectoriels dans « Créer mon CV ».",
+            "Élargis d'un cran plutôt que de dix : ajoute 1 à 2 intitulés proches via les "
+            "suggestions du sélecteur de poste plutôt que de basculer directement sur « Tous "
+            "les postes ».",
+        ]
+    return [
+        "Priorité candidature spontanée : cible directement les entreprises du tableau « Top "
+        "recruteurs », même sans offre publiée en ce moment.",
+        "Élargis la zone géographique : essaie un département limitrophe et compare sa "
+        "tension.",
+        "Élargis l'intitulé de poste : ajoute 2 à 3 intitulés proches via les suggestions du "
+        "sélecteur de poste.",
+        "Les offres « Entreprise non communiquée » ne sont pas à ignorer — souvent des "
+        "recrutements discrets, moins de concurrence dessus.",
+    ]
+
+
 def estimer_duree_recherche(tension):
     """
     Estimation INDICATIVE (maison, non officielle) d'une durée de recherche
@@ -1576,5 +1623,6 @@ __all__ = [
     "repartition_contrats_et_salaires",
     "calculer_tension",
     "interpreter_tension",
+    "conseils_tension",
     "estimer_duree_recherche",
 ]
