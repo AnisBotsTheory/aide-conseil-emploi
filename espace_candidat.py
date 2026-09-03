@@ -1,9 +1,17 @@
 """
 espace_candidat.py
 --------------------
-Page "Espace Candidat" — les 4 onglets existants (Créer mon CV, Tendance par
-profil, Offres d'emploi, KPIs avancés), accès gratuit et public. Toute la
-logique de calcul vient de moteur_recherche.py (aucune duplication).
+Page "Espace Candidat" — 3 onglets (Créer mon CV, Tendance par profil, KPIs
+avancés), accès gratuit et public. Toute la logique de calcul vient de
+moteur_recherche.py (aucune duplication).
+
+L'onglet "Offres d'emploi" a été retiré : lister des offres n'a pas d'avantage
+face aux plateformes dédiées (France Travail, LinkedIn, Indeed...) — pas
+d'alertes, pas de candidature en un clic, pas de sauvegarde de recherche. Ce
+qui reste différenciant, c'est la lecture de marché (tension, évolution,
+répartition contrats/salaires, villes/recruteurs actifs) — pas le listing
+d'offres lui-même. "Villes qui recrutent"/"Top recruteurs" deviennent des
+pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
 """
 
 import streamlit as st
@@ -23,36 +31,17 @@ from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partag
 st.title("🎯 Aide Conseil Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
-secteurs = get_secteurs_activite()
-options_secteurs = {"Tous secteurs": None}
-for s in secteurs:
-    code = s.get("code")
-    libelle = s.get("libelle")
-    if code and libelle:
-        options_secteurs[f"{libelle} ({code})"] = code
-
 appellations = get_referentiel_appellations()
 labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
 
 
-# ---------------------------------------------------------------------------
-# Sélecteur de poste partagé entre "Tendance par profil" et "Offres d'emploi" :
-# case à cocher "Tous les postes" (facultative, recherche large) au-dessus du
-# champ de saisie libre, puis SÉLECTION MULTIPLE parmi les suggestions ROME —
-# plusieurs intitulés proches peuvent être combinés dans une même recherche
-# (ex: "Consultant" + "Consultant ERP" + "Consultant IT"). Préremplit la saisie
-# depuis le titre de poste renseigné dans "Créer mon CV" (champ cv_titre) si
-# l'utilisateur n'a encore rien tapé sur cet onglet.
-#
-# Retourne (postes_choisis: list[str], codes_par_poste: dict[str, str|None]).
-# Cas particulier : (["🌐 Tous les postes"], {}) si la case est cochée.
-# ---------------------------------------------------------------------------
 def _selecteur_departement(cle_prefixe):
     """
     Sélecteur de département en MULTI-sélection, avec option "Toute la France"
     (recherche nationale — l'API le permet nativement en omettant le paramètre
     département). Plusieurs départements sont envoyés à l'API sous forme de
-    codes séparés par une virgule (accepté nativement par l'API Offres d'emploi).
+    codes séparés par une virgule (accepté nativement par l'API Offres d'emploi
+    France Travail).
 
     Retourne une valeur de paramètre département :
     - None -> "Toute la France" (aucun filtre)
@@ -69,7 +58,14 @@ def _selecteur_departement(cle_prefixe):
     toute_la_france_precedente = st.session_state.get(cle_checkbox, False)
 
     if cle_multiselect not in st.session_state:
-        st.session_state[cle_multiselect] = ["13 - Bouches-du-Rhône"]
+        # Préremplit depuis le département renseigné dans "Créer mon CV" (cv_departement),
+        # sinon retombe sur le département par défaut de l'app.
+        code_departement_cv = st.session_state.get("cv_departement")
+        nom_departement_cv = DEPARTEMENTS_VERS_NOM.get(code_departement_cv) if code_departement_cv else None
+        if code_departement_cv and nom_departement_cv:
+            st.session_state[cle_multiselect] = [f"{code_departement_cv} - {nom_departement_cv}"]
+        else:
+            st.session_state[cle_multiselect] = ["13 - Bouches-du-Rhône"]
 
     options_departements = sorted(f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items())
     labels_choisis = st.multiselect(
@@ -98,36 +94,6 @@ def _libelle_departement_affiche(departement_param):
     if len(codes) == 1:
         return f"département {codes[0]}"
     return "départements " + ", ".join(codes)
-
-
-def _selecteur_secteur(cle_prefixe):
-    """
-    Sélecteur de secteur d'activité en MULTI-sélection. Filtrage post-fusion côté
-    Python (moteur_recherche.filtrer_offres_par_secteurs) plutôt que par combinaison
-    poste x secteur côté API : une requête par poste (sans secteur dans l'appel),
-    puis filtrage du résultat fusionné sur la liste de secteurs retenus — l'API
-    France Travail n'acceptant qu'un seul code secteurActivite par requête, ça
-    évite de multiplier les appels (postes x secteurs) pour une sélection large.
-    Une sélection vide équivaut à "tous secteurs" (pas de filtre).
-
-    Retourne (labels_choisis: list[str], codes_choisis: list[str] | None).
-    """
-    cle_multiselect = f"{cle_prefixe}_secteurs_multiselect"
-    labels_disponibles = [l for l in options_secteurs.keys() if l != "Tous secteurs"]
-    labels_choisis = st.multiselect(
-        "Secteur(s) d'activité de l'entreprise",
-        options=labels_disponibles,
-        key=cle_multiselect,
-        placeholder="Choisir secteur (par défaut tous secteurs)",
-        help=(
-            "Filtre sur le secteur d'activité de l'ENTREPRISE qui recrute, pas sur le type de "
-            "poste — une entreprise du secteur assurance peut par exemple recruter des postes "
-            "très variés (médical, IT, RH...). Sélectionne plusieurs secteurs pour élargir."
-        ),
-    )
-    if not labels_choisis:
-        return [], None
-    return labels_choisis, [options_secteurs[l] for l in labels_choisis]
 
 
 def _selecteur_poste(cle_prefixe, departement_pour_resolution):
@@ -173,6 +139,19 @@ def _selecteur_poste(cle_prefixe, departement_pour_resolution):
         return ["🌐 Tous les postes"], {}
 
     suggestions = suggerer_postes(poste_texte_libre) if poste_texte_libre.strip() else []
+
+    # Auto-sélectionne la meilleure suggestion pour ce terme, une seule fois (pour
+    # que "Créer mon CV" alimente automatiquement l'analyse sans clic supplémentaire).
+    # Ne se redéclenche pas si l'utilisateur retire ensuite volontairement ce choix.
+    cle_auto_poste_pour_terme = f"{cle_prefixe}_auto_poste_pour_terme"
+    if (
+        suggestions
+        and not st.session_state[cle_selection]
+        and st.session_state.get(cle_auto_poste_pour_terme) != poste_texte_libre
+    ):
+        st.session_state[cle_selection].append(suggestions[0])
+    st.session_state[cle_auto_poste_pour_terme] = poste_texte_libre
+
     tous_les_tags = list(dict.fromkeys(suggestions + st.session_state[cle_selection]))
 
     if tous_les_tags:
@@ -220,8 +199,8 @@ def _selecteur_poste(cle_prefixe, departement_pour_resolution):
 
 st.divider()
 
-tab_cv, tab_profil, tab_offres, tab_avance = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance par profil", "📋 Offres d'emploi", "🧩 KPIs avancés"]
+tab_cv, tab_profil, tab_avance = st.tabs(
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés"]
 )
 
 # ---------------------------------------------------------------------------
@@ -236,123 +215,64 @@ with tab_cv:
 # ---------------------------------------------------------------------------
 with tab_profil:
     st.write(
-        "Choisissez le(s) poste(s) que vous ciblez : nous calculons pour vous où sont les offres "
-        "près de chez vous, le volume national, et le niveau de tension du marché sur ce métier."
-    )
-    st.caption(
-        "Cette recherche s'appuie sur la nomenclature officielle des métiers de France Travail "
-        "(ROME). Choisis un ou plusieurs postes précis dans la liste pour une analyse ciblée "
-        "(combinable) — ou coche **🌐 Tous les postes** pour une analyse globale sur tout un "
-        "secteur, sans poste précis. La tension du marché reste toutefois un indicateur par "
-        "métier unique : elle nécessite un seul poste sélectionné."
+        "Analyse du marché pour le poste renseigné dans votre CV : où sont les offres près de "
+        "chez vous, le volume national, et le niveau de tension du marché sur ce métier."
     )
 
-    # Valeur du département utilisée pour la résolution de poste — un simple repère
-    # ("13" par défaut), cette résolution ne s'en sert qu'en dernier recours (la
-    # plupart des suggestions sont déjà dans le référentiel), sans incidence pratique.
-    postes_choisis_profil, codes_par_poste_profil = _selecteur_poste("profil", "13")
+    titre_poste_cv = st.session_state.get("cv_titre", "").strip()
+    departement_cv = st.session_state.get("cv_departement") or "13"
 
-    codes_resolus_profil = [c for c in codes_par_poste_profil.values() if c]
-    # secteurs_pour_poste() attend un code ROME unique : résolution précise seulement
-    # quand un seul poste (résolu) est sélectionné, sinon liste NAF générique complète.
-    code_rome_pour_secteurs = codes_resolus_profil[0] if len(codes_resolus_profil) == 1 else None
-
-    aide_secteur = (
-        "Filtre sur le secteur d'activité de l'ENTREPRISE qui recrute, pas sur le type de "
-        "poste — une entreprise du secteur assurance peut par exemple recruter des postes "
-        "très variés (médical, IT, RH...)."
-    )
-
-    col_sect, col_dep = st.columns(2)
-    with col_dep:
-        departement_profil = _selecteur_departement("profil")
-
-    if code_rome_pour_secteurs and departement_profil:
-        with st.spinner("Recherche des secteurs qui recrutent pour ce poste..."):
-            df_secteurs_poste = secteurs_pour_poste(code_rome_pour_secteurs, departement_profil)
-
-        options_secteurs_poste = {"Tous secteurs": None}
-        for _, ligne in df_secteurs_poste.iterrows():
-            libelle_option = f"{ligne['libelle']} ({ligne['code']}) — {ligne['nombre_offres']} offre(s)"
-            options_secteurs_poste[libelle_option] = ligne["code"]
-
-        if len(options_secteurs_poste) <= 1:
-            options_secteurs_poste = dict(options_secteurs)
-
-        secteur_choisi_profil = col_sect.selectbox(
-            "Secteur d'activité de l'entreprise",
-            list(options_secteurs_poste.keys()),
-            key="secteur_profil",
-            help=aide_secteur,
+    if not titre_poste_cv:
+        st.info(
+            "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV** — l'analyse se "
+            "lance automatiquement dès qu'il est rempli, pas besoin de le ressaisir ici."
         )
-        code_secteur_profil = options_secteurs_poste[secteur_choisi_profil]
-        bouton_lancer_analyse = col_sect.button("Lancer l'analyse de mon profil")
     else:
-        # "Tous les postes", plusieurs postes, ou poste pas encore résolvable :
-        # secteurs en multi-sélection (filtrage post-fusion, pas de liste NAF
-        # spécifique à un poste ici).
-        with col_sect:
-            secteurs_labels_profil, code_secteur_profil = _selecteur_secteur("profil")
-            bouton_lancer_analyse = st.button("Lancer l'analyse de mon profil")
+        # Résolution silencieuse du poste (texte du CV) vers un code ROME — plus de champ
+        # affiché ici : poste et département viennent uniquement de "Créer mon CV".
+        cle_auto_signature = "profil_auto_analyse_signature"
+        signature_actuelle = (titre_poste_cv, departement_cv)
 
-    if bouton_lancer_analyse:
-        if departement_profil == "":
-            st.error("Sélectionne au moins un département avant de lancer l'analyse (ou coche « Toute la France »).")
-        else:
-            with st.spinner("Préparation de l'analyse..."):
-                if postes_choisis_profil == ["🌐 Tous les postes"]:
-                    df_rome = resoudre_codes_rome(
-                        mots_cles=None, departement=departement_profil, secteur_activite=code_secteur_profil
+        if st.session_state.get(cle_auto_signature) != signature_actuelle:
+            with st.spinner("Analyse du marché en cours..."):
+                suggestions = suggerer_postes(titre_poste_cv)
+                if suggestions:
+                    libelle_resolu = suggestions[0]
+                    item_poste = next(
+                        (a for a in appellations if a.get("libelle", "").strip() == libelle_resolu), None
                     )
-                    st.session_state["df_rome_profil"] = df_rome
-                    st.session_state["code_rome_choisi"] = "TOUS"
-                    st.session_state["codes_rome_choisis"] = []
-                    st.session_state["mots_cles_profil_actif"] = ""
-                elif not postes_choisis_profil:
-                    st.error("Sélectionne au moins un poste avant de lancer l'analyse (ou coche « Tous les postes »).")
-                    st.session_state.pop("df_rome_profil", None)
-                elif not codes_resolus_profil:
-                    st.error(
-                        "Impossible de résoudre ce(s) poste(s) pour l'instant (aucune offre trouvée pour "
-                        "les recouper). Essaie un autre poste ou élargis le département."
-                    )
-                    st.session_state.pop("df_rome_profil", None)
+                    code_resolu = _extraire_code_rome(item_poste) if item_poste else None
+                    if not code_resolu:
+                        df_resolu_apercu = resoudre_codes_rome(mots_cles=libelle_resolu, departement=departement_cv)
+                        code_resolu = (
+                            df_resolu_apercu.iloc[0]["code_rome"] if not df_resolu_apercu.empty else None
+                        )
+                else:
+                    libelle_resolu, code_resolu = titre_poste_cv, None
+
+                if not code_resolu:
+                    st.session_state["df_rome_profil"] = pd.DataFrame()
                 else:
                     st.session_state["df_rome_profil"] = pd.DataFrame(
-                        [
-                            {"code_rome": code, "libelle": label, "nb_offres_echantillon": None}
-                            for label, code in codes_par_poste_profil.items()
-                            if code
-                        ]
+                        [{"code_rome": code_resolu, "libelle": libelle_resolu, "nb_offres_echantillon": None}]
                     )
-                    if len(codes_resolus_profil) == 1:
-                        st.session_state["code_rome_choisi"] = codes_resolus_profil[0]
-                    else:
-                        st.session_state["code_rome_choisi"] = "MULTI"
-                    st.session_state["codes_rome_choisis"] = codes_resolus_profil
-                    st.session_state["mots_cles_profil_actif"] = " / ".join(postes_choisis_profil)
+                    st.session_state["code_rome_choisi"] = code_resolu
+                    st.session_state["codes_rome_choisis"] = [code_resolu]
+                    st.session_state["mots_cles_profil_actif"] = libelle_resolu
 
-                st.session_state["departement_profil_actif"] = departement_profil
-                st.session_state["secteur_profil_actif"] = code_secteur_profil
-                # Force la sélection secteur de l'onglet "Offres d'emploi" — doit être fait
-                # AVANT que ce widget soit instancié plus bas dans le script (même rerun).
-                # Uniquement dans le cas générique multi-secteur : le sélecteur précis lié à
-                # un poste (avec compteur d'offres) n'a pas d'équivalent direct côté Offres.
-                if not (code_rome_pour_secteurs and departement_profil):
-                    st.session_state["offres_secteurs_multiselect"] = secteurs_labels_profil
-
+                st.session_state["departement_profil_actif"] = departement_cv
+                st.session_state[cle_auto_signature] = signature_actuelle
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
         departement_actif = st.session_state["departement_profil_actif"]
         mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
-        secteur_actif = st.session_state.get("secteur_profil_actif")
         code_rome_choisi = st.session_state.get("code_rome_choisi")
         codes_rome_choisis = st.session_state.get("codes_rome_choisis", [])
         recherche_multi = code_rome_choisi == "MULTI"
 
         if df_rome.empty:
-            st.error("Aucune offre trouvée pour ce secteur/département. Essaie d'élargir les critères.")
+            st.error("Aucune offre trouvée pour ce département. Essaie d'élargir les critères.")
         else:
             # Tous les indicateurs de cet onglet (tension, top recruteurs, top villes)
             # partagent désormais la même base de temps : depuis le 1er janvier de l'année
@@ -391,8 +311,7 @@ with tab_profil:
                 if recherche_multi:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
                         total_dep_offres = volumes_departement_offres_multi(
-                            codes_rome_choisis, departement_actif,
-                            jours_max=jours_max_periode_offres, secteur_activite=secteur_actif,
+                            codes_rome_choisis, departement_actif, jours_max=jours_max_periode_offres,
                         )
                         total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = (
                             demandeurs_emploi_departement_multi(codes_rome_choisis, departement_actif)
@@ -400,8 +319,7 @@ with tab_profil:
                 else:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
                         total_dep_offres = volumes_departement_offres(
-                            code_rome_choisi, departement_actif,
-                            jours_max=jours_max_periode_offres, secteur_activite=secteur_actif,
+                            code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
                         )
                         total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
                             code_rome_choisi, departement_actif
@@ -437,18 +355,15 @@ with tab_profil:
 
             st.divider()
 
+            mots_cles_recherche_large = (
+                "" if postes_choisis_profil == ["🌐 Tous les postes"] else " ".join(postes_choisis_profil)
+            )
+
             with st.spinner("Récupération des recruteurs actifs..."):
-                if recherche_multi:
-                    _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
-                        codes_rome_choisis, departement_actif,
-                        jours_max=jours_max_periode_offres, secteur_activite=secteur_actif,
-                    )
-                else:
-                    _, _, _, _, df_entreprises, _ = offres_par_ville(
-                        code_rome_choisi, departement_actif,
-                        jours_max=jours_max_periode_offres,
-                        mots_cles=mots_cles_actifs, secteur_activite=secteur_actif,
-                    )
+                _, _, _, _, df_entreprises, _ = offres_par_ville(
+                    "TOUS", departement_actif,
+                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
+                )
 
             st.markdown("#### 🏢 Top recruteurs")
             st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
@@ -479,16 +394,10 @@ with tab_profil:
             st.markdown("#### 📍 Villes qui recrutent")
             st.caption(f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top recruteurs).")
             with st.spinner("Récupération des offres par ville..."):
-                if recherche_multi:
-                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_multi(
-                        codes_rome_choisis, departement_actif,
-                        jours_max=jours_max_periode_offres, secteur_activite=secteur_actif,
-                    )
-                else:
-                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
-                        code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
-                        mots_cles=mots_cles_actifs, secteur_activite=secteur_actif,
-                    )
+                df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
+                    "TOUS", departement_actif,
+                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
+                )
             st.metric("Total offres dans la région", total_region)
             # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
             # donnent la plage de publication réelle des offres renvoyées par l'API —
@@ -552,10 +461,11 @@ with tab_profil:
                                 weight=1,
                             ).add_to(cluster)
 
-                    # Carte purement visuelle ici (tendance) : pas de clic-vers-détail — cette
-                    # fonctionnalité vit désormais dans l'onglet "📋 Offres d'emploi", dédié à
-                    # la consultation des offres. returned_objects=[] évite les allers-retours
-                    # serveur au zoom/déplacement (meilleure stabilité, notamment sur mobile).
+                    # Carte purement visuelle (tendance) : pas de listing d'offres cliquables —
+                    # l'app ne cherche plus à concurrencer les plateformes de recrutement dédiées,
+                    # seule la lecture de marché (villes qui recrutent) est montrée ici.
+                    # returned_objects=[] évite les allers-retours serveur au zoom/déplacement
+                    # (meilleure stabilité, notamment sur mobile).
                     st_folium(
                         carte,
                         use_container_width=True,
@@ -576,165 +486,52 @@ with tab_profil:
             )
 
 # ---------------------------------------------------------------------------
-# Onglet 2 : Offres d'emploi — autonome, même principe de sélection de poste
-# (multi-sélection incluse) que "Tendance par profil".
-# ---------------------------------------------------------------------------
-with tab_offres:
-    st.write(
-        "Recherchez directement des offres correspondant à un ou plusieurs postes précis "
-        "(combinables), ou coche « Tous les postes » pour une recherche large."
-    )
-
-    departement_pour_resolution_offres = "13"
-    postes_choisis_offres, codes_par_poste_offres = _selecteur_poste("offres", departement_pour_resolution_offres)
-
-    codes_resolus_offres = [c for c in codes_par_poste_offres.values() if c]
-
-    fraicheur_choisie_offres = st.selectbox(
-        "Publiées depuis",
-        ["Toutes les offres actives", "7 derniers jours", "30 derniers jours", "90 derniers jours"],
-        key="fraicheur_offres",
-    )
-    jours_max_offres = {
-        "Toutes les offres actives": None,
-        "7 derniers jours": 7,
-        "30 derniers jours": 30,
-        "90 derniers jours": 90,
-    }[fraicheur_choisie_offres]
-
-    col_sect_off, col_dep_off = st.columns(2)
-    with col_dep_off:
-        departement = _selecteur_departement("offres")
-    with col_sect_off:
-        _, secteur_naf = _selecteur_secteur("offres")
-        bouton_lancer_recherche = st.button("Lancer la recherche")
-
-    if adzuna_configure():
-        st.caption("🔎 Sources actives : France Travail + Adzuna.")
-    else:
-        st.caption(
-            "🔎 Source active : France Travail uniquement (clé Adzuna non configurée — "
-            "ADZUNA_APP_ID/ADZUNA_APP_KEY absents des variables d'environnement)."
-        )
-
-    if bouton_lancer_recherche:
-        resultats, total = [], 0
-        recherche_ok = True
-
-        if departement == "":
-            st.error("Sélectionne au moins un département (ou coche « Toute la France »).")
-            recherche_ok = False
-        elif not postes_choisis_offres:
-            st.error("Sélectionne au moins un poste (ou coche « Tous les postes »).")
-            recherche_ok = False
-        elif postes_choisis_offres != ["🌐 Tous les postes"] and not codes_resolus_offres:
-            st.error(
-                "Impossible de résoudre ce(s) poste(s) pour l'instant (aucune offre trouvée pour "
-                "les recouper). Essaie un autre poste, élargis le département, ou coche "
-                "\"Tous les postes\"."
-            )
-            recherche_ok = False
-        else:
-            with st.spinner("Recherche en cours..."):
-                resultats, total = rechercher_offres_toutes_sources(
-                    postes_choisis_offres, codes_resolus_offres, departement, secteur_naf, jours_max_offres,
-                )
-
-        if recherche_ok:
-            if not resultats:
-                st.warning("Aucune offre trouvée (ou erreur, voir message ci-dessus).")
-            else:
-                st.success(f"{len(resultats)} offres affichées sur {total} au total")
-
-                competences_utilisateur = st.session_state.get("cv_competences_select", [])
-                outils_utilisateur = st.session_state.get("cv_outils_select", [])
-                langages_utilisateur = st.session_state.get("cv_langages_select", [])
-                mots_cles_secteur = st.session_state.get("cv_mots_cles_secteur", "")
-
-                if not competences_utilisateur and not mots_cles_secteur:
-                    st.info(
-                        "💡 Renseigne tes compétences et/ou tes mots-clés sectoriels dans "
-                        "**🧾 Créer mon CV** pour activer le % de correspondance sur ces offres."
-                    )
-
-                for o in resultats:
-                    entreprise = o.get("entreprise", {}).get("nom", "N/C")
-                    lieu = o.get("lieuTravail", {}).get("libelle", "N/C")
-                    date_pub = o.get("dateCreation", "")[:10]
-                    source_o = o.get("source", "France Travail")
-
-                    score, detail = calculer_correspondance_offre(
-                        o, competences_utilisateur, outils_utilisateur, langages_utilisateur, mots_cles_secteur
-                    )
-                    ligne_titre = f"**{o['intitule']}** — {entreprise} — {lieu} — publiée le {date_pub} — _{source_o}_"
-                    if score is not None:
-                        ligne_titre += f"  \n🎯 Correspondance : **{score}%**"
-                        if detail:
-                            ligne_titre += " (" + " · ".join(f"{k} {n}/{d}" for k, (n, d) in detail.items()) + ")"
-
-                    with st.expander(ligne_titre):
-                        type_contrat = o.get("typeContratLibelle") or o.get("typeContrat")
-                        if type_contrat:
-                            st.markdown(f"**Type de contrat :** {type_contrat}")
-                        salaire = o.get("salaire", {}).get("libelle")
-                        if salaire:
-                            st.markdown(f"**Salaire :** {salaire}")
-                        description = o.get("description")
-                        if description:
-                            st.markdown("**Description :**")
-                            st.write(description)
-                        competences_offre = o.get("competences", [])
-                        if competences_offre:
-                            libelles = ", ".join(c.get("libelle", "") for c in competences_offre if c.get("libelle"))
-                            if libelles:
-                                st.markdown(f"**Compétences demandées :** {libelles}")
-                        url_offre = o.get("origineOffre", {}).get("urlOrigine")
-                        if url_offre:
-                            st.markdown(f"🔗 [Voir l'offre complète et postuler sur France Travail]({url_offre})")
-
-# ---------------------------------------------------------------------------
 # Onglet "KPIs avancés"
 # ---------------------------------------------------------------------------
 with tab_avance:
     if "code_rome_choisi" not in st.session_state:
         st.info(
-            "👉 Lance d'abord une analyse dans l'onglet **🎯 Tendance par profil** "
-            "pour choisir ton métier — les KPIs avancés s'appuient dessus."
+            "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
+            "s'appuient sur l'analyse automatique de l'onglet Tendance par profil."
         )
     else:
         code_rome_actif = st.session_state["code_rome_choisi"]
         codes_rome_choisis_avance = st.session_state.get("codes_rome_choisis", [])
         departement_actif = st.session_state["departement_profil_actif"]
         mots_cles_actifs_avance = st.session_state.get("mots_cles_profil_actif", "")
-        secteur_actif_avance = st.session_state.get("secteur_profil_actif")
         recherche_multi_avance = code_rome_actif == "MULTI"
 
-        if st.button("🚀 Lancer l'analyse complète", type="primary", key="btn_analyse_complete"):
+        # Auto-déclenchement : se relance seul dès que le poste/département actif change
+        # (mis à jour automatiquement par "Tendance par profil"), résultats conservés en
+        # session pour rester affichés en revenant sur cet onglet.
+        cle_signature_avance = "avance_auto_signature"
+        signature_avance_actuelle = (code_rome_actif, tuple(codes_rome_choisis_avance), departement_actif)
+
+        if st.session_state.get(cle_signature_avance) != signature_avance_actuelle:
             with st.spinner("Analyse en cours (évolution, contrats, salaires, expérience)..."):
                 if recherche_multi_avance:
-                    df_evolution = evolution_offres_annuelle_multi(
-                        codes_rome_choisis_avance, departement_actif, secteur_activite=secteur_actif_avance,
-                    )
+                    df_evolution = evolution_offres_annuelle_multi(codes_rome_choisis_avance, departement_actif)
                     df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
-                        repartition_contrats_et_salaires_multi(
-                            codes_rome_choisis_avance, departement_actif, secteur_activite=secteur_actif_avance,
-                        )
+                        repartition_contrats_et_salaires_multi(codes_rome_choisis_avance, departement_actif)
                     )
                 else:
                     df_evolution = evolution_offres_annuelle(
-                        code_rome_actif,
-                        departement_actif,
-                        mots_cles=mots_cles_actifs_avance,
-                        secteur_activite=secteur_actif_avance,
+                        code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
                     )
                     df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                         repartition_contrats_et_salaires(
-                            code_rome_actif,
-                            departement_actif,
-                            mots_cles=mots_cles_actifs_avance,
-                            secteur_activite=secteur_actif_avance,
+                            code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
                         )
                     )
+            st.session_state["avance_resultats"] = (
+                df_evolution, df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience,
+            )
+            st.session_state[cle_signature_avance] = signature_avance_actuelle
+
+        if "avance_resultats" in st.session_state:
+            df_evolution, df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
+                st.session_state["avance_resultats"]
+            )
 
             st.divider()
             annee_courante = datetime.now().year
@@ -745,6 +542,7 @@ with tab_avance:
                 df_evolution_affiche = df_evolution.copy()
                 df_evolution_affiche["mois_label"] = df_evolution_affiche["mois"].apply(_formater_mois_fr)
                 ordre_mois = list(df_evolution_affiche["mois_label"])
+
 
                 base_evolution = alt.Chart(df_evolution_affiche).encode(
                     x=alt.X(
