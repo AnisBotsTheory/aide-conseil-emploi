@@ -609,6 +609,67 @@ DEPARTEMENTS_VERS_NOM = {
     "974": "La Réunion", "976": "Mayotte",
 }
 
+# ---------------------------------------------------------------------------
+# Ville de repli (la plus grande ville du département — généralement la
+# préfecture, sauf quelques exceptions notables comme 76 -> Le Havre plutôt que
+# Rouen) avec ses coordonnées GPS approximatives. Utilisée pour positionner sur
+# la carte les offres dont le lieu de travail n'est renseigné qu'au niveau
+# département (pas de latitude/longitude précise côté France Travail).
+# ---------------------------------------------------------------------------
+DEPARTEMENTS_CHEF_LIEU = {
+    "01": ("Bourg-en-Bresse", 46.2058, 5.2255), "02": ("Laon", 49.5642, 3.6247),
+    "03": ("Moulins", 46.5606, 3.3325), "04": ("Digne-les-Bains", 44.0925, 6.2361),
+    "05": ("Gap", 44.5594, 6.0790), "06": ("Nice", 43.7102, 7.2620),
+    "07": ("Privas", 44.7355, 4.5985), "08": ("Charleville-Mézières", 49.7714, 4.7199),
+    "09": ("Foix", 42.9646, 1.6050), "10": ("Troyes", 48.2973, 4.0744),
+    "11": ("Carcassonne", 43.2130, 2.3491), "12": ("Rodez", 44.3505, 2.5738),
+    "13": ("Marseille", 43.2965, 5.3698), "14": ("Caen", 49.1829, -0.3707),
+    "15": ("Aurillac", 44.9282, 2.4444), "16": ("Angoulême", 45.6484, 0.1562),
+    "17": ("La Rochelle", 46.1603, -1.1511), "18": ("Bourges", 47.0810, 2.3987),
+    "19": ("Brive-la-Gaillarde", 45.1590, 1.5335), "2A": ("Ajaccio", 41.9192, 8.7386),
+    "2B": ("Bastia", 42.7028, 9.4508), "21": ("Dijon", 47.3220, 5.0415),
+    "22": ("Saint-Brieuc", 48.5141, -2.7654), "23": ("Guéret", 46.1700, 1.8700),
+    "24": ("Périgueux", 45.1848, 0.7217), "25": ("Besançon", 47.2380, 6.0243),
+    "26": ("Valence", 44.9334, 4.8924), "27": ("Évreux", 49.0270, 1.1509),
+    "28": ("Chartres", 48.4439, 1.4894), "29": ("Brest", 48.3904, -4.4861),
+    "30": ("Nîmes", 43.8367, 4.3601), "31": ("Toulouse", 43.6047, 1.4442),
+    "32": ("Auch", 43.6465, 0.5854), "33": ("Bordeaux", 44.8378, -0.5792),
+    "34": ("Montpellier", 43.6108, 3.8767), "35": ("Rennes", 48.1173, -1.6778),
+    "36": ("Châteauroux", 46.8106, 1.6910), "37": ("Tours", 47.3941, 0.6848),
+    "38": ("Grenoble", 45.1885, 5.7245), "39": ("Lons-le-Saunier", 46.6742, 5.5527),
+    "40": ("Mont-de-Marsan", 43.8897, -0.4980), "41": ("Blois", 47.5861, 1.3359),
+    "42": ("Saint-Étienne", 45.4397, 4.3872), "43": ("Le Puy-en-Velay", 45.0432, 3.8859),
+    "44": ("Nantes", 47.2184, -1.5536), "45": ("Orléans", 47.9029, 1.9093),
+    "46": ("Cahors", 44.4478, 1.4409), "47": ("Agen", 44.2049, 0.6205),
+    "48": ("Mende", 44.5183, 3.5006), "49": ("Angers", 47.4784, -0.5632),
+    "50": ("Cherbourg-en-Cotentin", 49.6337, -1.6222), "51": ("Reims", 49.2583, 4.0317),
+    "52": ("Chaumont", 48.1113, 5.1391), "53": ("Laval", 48.0698, -0.7700),
+    "54": ("Nancy", 48.6921, 6.1844), "55": ("Bar-le-Duc", 48.7714, 5.1608),
+    "56": ("Lorient", 47.7482, -3.3660), "57": ("Metz", 49.1193, 6.1757),
+    "58": ("Nevers", 46.9896, 3.1590), "59": ("Lille", 50.6292, 3.0573),
+    "60": ("Beauvais", 49.4295, 2.0807), "61": ("Alençon", 48.4322, 0.0900),
+    "62": ("Calais", 50.9513, 1.8587), "63": ("Clermont-Ferrand", 45.7772, 3.0870),
+    "64": ("Pau", 43.2951, -0.3708), "65": ("Tarbes", 43.2328, 0.0784),
+    "66": ("Perpignan", 42.6886, 2.8948), "67": ("Strasbourg", 48.5734, 7.7521),
+    "68": ("Mulhouse", 47.7508, 7.3359), "69": ("Lyon", 45.7640, 4.8357),
+    "70": ("Vesoul", 47.6236, 6.1548), "71": ("Chalon-sur-Saône", 46.7800, 4.8524),
+    "72": ("Le Mans", 48.0061, 0.1996), "73": ("Chambéry", 45.5646, 5.9178),
+    "74": ("Annecy", 45.8992, 6.1294), "75": ("Paris", 48.8566, 2.3522),
+    "76": ("Le Havre", 49.4944, 0.1079), "77": ("Melun", 48.5388, 2.6600),
+    "78": ("Versailles", 48.8049, 2.1204), "79": ("Niort", 46.3239, -0.4587),
+    "80": ("Amiens", 49.8942, 2.2957), "81": ("Albi", 43.9298, 2.1480),
+    "82": ("Montauban", 44.0181, 1.3533), "83": ("Toulon", 43.1242, 5.9280),
+    "84": ("Avignon", 43.9493, 4.8055), "85": ("La Roche-sur-Yon", 46.6705, -1.4269),
+    "86": ("Poitiers", 46.5802, 0.3404), "87": ("Limoges", 45.8336, 1.2611),
+    "88": ("Épinal", 48.1735, 6.4519), "89": ("Auxerre", 47.7982, 3.5731),
+    "90": ("Belfort", 47.6379, 6.8629), "91": ("Évry-Courcouronnes", 48.6288, 2.4419),
+    "92": ("Boulogne-Billancourt", 48.8397, 2.2400), "93": ("Saint-Denis", 48.9362, 2.3574),
+    "94": ("Créteil", 48.7904, 2.4556), "95": ("Argenteuil", 48.9479, 2.2467),
+    "971": ("Les Abymes", 16.2699, -61.5058), "972": ("Fort-de-France", 14.6161, -61.0588),
+    "973": ("Cayenne", 4.9224, -52.3135), "974": ("Saint-Denis", -20.8789, 55.4481),
+    "976": ("Mamoudzou", -12.7806, 45.2278),
+}
+
 
 def adzuna_configure():
     """True si les identifiants Adzuna sont présents. Même logique de repli que
@@ -762,10 +823,10 @@ def fusionner_offres(*listes_offres):
 # d'appel API dupliquée. La tension du marché reste volontairement un
 # indicateur mono-poste (comme pour "Tous les postes") : pas de variante "_multi".
 # ---------------------------------------------------------------------------
-def volumes_departement_offres_multi(codes_rome, departement, secteur_activite=None):
+def volumes_departement_offres_multi(codes_rome, departement, secteur_activite=None, jours_max=None):
     """Somme des volumes d'offres pour une liste de codes ROME."""
     return sum(
-        volumes_departement_offres(code, departement, secteur_activite=secteur_activite)
+        volumes_departement_offres(code, departement, secteur_activite=secteur_activite, jours_max=jours_max)
         for code in codes_rome if code
     )
 
@@ -837,12 +898,15 @@ def offres_par_ville_multi(codes_rome, departement, jours_max=None, secteur_acti
                 # RÉELLEMENT disponible parmi tous les postes fusionnés.
                 latitude=("latitude", lambda s: next((v for v in s if pd.notna(v)), None)),
                 longitude=("longitude", lambda s: next((v for v in s if pd.notna(v)), None)),
+                # False (précis) l'emporte sur True (repli chef-lieu) si l'un des postes
+                # fusionnés avait bien des coordonnées précises pour ce même libellé de lieu.
+                approximatif=("approximatif", "min"),
             )
             .sort_values("nombre_offres", ascending=False)
             .reset_index(drop=True)
         )
     else:
-        df_villes = pd.DataFrame(columns=["ville", "nombre_offres", "latitude", "longitude"])
+        df_villes = pd.DataFrame(columns=["ville", "nombre_offres", "latitude", "longitude", "approximatif"])
 
     if dfs_entreprises:
         df_ent_concat = pd.concat(dfs_entreprises, ignore_index=True)
@@ -967,20 +1031,34 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     lieux = {}
     entreprises = {}  # cle_normalisee -> {"nom_affiche":..., "nombre_offres":..., "villes": set()}
     dates_creation = []
+    chef_lieu = DEPARTEMENTS_CHEF_LIEU.get(str(departement).strip().upper())
     for offre in toutes_offres:
         lieu_travail = offre.get("lieuTravail", {})
         ville = lieu_travail.get("libelle", "Non renseigné")
+        lat_brute = lieu_travail.get("latitude")
+        lon_brute = lieu_travail.get("longitude")
         if ville not in lieux:
-            lieux[ville] = {
-                "nombre_offres": 0,
-                "latitude": lieu_travail.get("latitude"),
-                "longitude": lieu_travail.get("longitude"),
-            }
-        elif lieux[ville]["latitude"] is None and lieu_travail.get("latitude") is not None:
-            # Une offre précédente pour cette même ville n'avait pas de coordonnées :
-            # on les complète dès qu'une offre les fournit, plutôt que de rester à None.
-            lieux[ville]["latitude"] = lieu_travail.get("latitude")
-            lieux[ville]["longitude"] = lieu_travail.get("longitude")
+            if lat_brute is not None and lon_brute is not None:
+                lieux[ville] = {
+                    "nombre_offres": 0, "latitude": lat_brute, "longitude": lon_brute, "approximatif": False,
+                }
+            elif chef_lieu:
+                # Pas de coordonnées précises pour cette offre (lieu renseigné seulement au
+                # niveau département, ou télétravail) : on positionne sur la plus grande
+                # ville du département plutôt que d'exclure l'offre de la carte.
+                _, lat_repli, lon_repli = chef_lieu
+                lieux[ville] = {
+                    "nombre_offres": 0, "latitude": lat_repli, "longitude": lon_repli, "approximatif": True,
+                }
+            else:
+                lieux[ville] = {"nombre_offres": 0, "latitude": None, "longitude": None, "approximatif": True}
+        elif lieux[ville]["approximatif"] and lat_brute is not None:
+            # Une offre précédente pour ce même libellé de lieu était retombée sur le
+            # repli chef-lieu : si une offre ultérieure a bien des coordonnées précises,
+            # on les adopte.
+            lieux[ville]["latitude"] = lat_brute
+            lieux[ville]["longitude"] = lon_brute
+            lieux[ville]["approximatif"] = False
         lieux[ville]["nombre_offres"] += 1
 
         nom_entreprise = _nom_entreprise_normalise(offre)
@@ -1012,26 +1090,30 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     if not df_entreprises.empty:
         df_entreprises = df_entreprises.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
 
-    # Les offres anonymes sont désormais regroupées dans df_entreprises (sous
-    # LABEL_ENTREPRISE_ANONYME) plutôt qu'exclues — ce compteur séparé n'a plus lieu
-    # d'être, conservé à 0 uniquement pour ne pas casser la signature de retour.
-    nb_offres_anonymes = 0
+    # Nombre d'offres positionnées par repli sur le chef-lieu du département plutôt
+    # qu'avec des coordonnées précises (renommé nb_offres_anonymes -> nb_offres_approximatives
+    # côté sémantique, la position dans le tuple de retour reste inchangée pour compatibilité).
+    nb_offres_approximatives = int(df.loc[df["approximatif"], "nombre_offres"].sum()) if not df.empty else 0
 
     date_min_pub = min(dates_creation) if dates_creation else None
     date_max_pub = max(dates_creation) if dates_creation else None
-    return df, len(toutes_offres), date_min_pub, date_max_pub, df_entreprises, nb_offres_anonymes
+    return df, len(toutes_offres), date_min_pub, date_max_pub, df_entreprises, nb_offres_approximatives
 
 
 
 
 @st.cache_data(ttl=1800)
-def volumes_departement_offres(code_rome, departement, mots_cles=None, secteur_activite=None):
+def volumes_departement_offres(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None):
     """Total offres pour un code ROME (ou tous, via mots-clés) sur un département."""
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     params = {"departement": departement, "range": "0-0"}
     params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
+    if jours_max:
+        date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
+        params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+        params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     r = requests.get(url, headers=headers, params=params)
     if r.status_code not in (200, 206):
         return 0
@@ -1326,6 +1408,7 @@ __all__ = [
     "ADZUNA_APP_KEY",
     "ADZUNA_BASE_URL",
     "DEPARTEMENTS_VERS_NOM",
+    "DEPARTEMENTS_CHEF_LIEU",
     "adzuna_configure",
     "departement_vers_lieu_adzuna",
     "rechercher_offres_adzuna",
