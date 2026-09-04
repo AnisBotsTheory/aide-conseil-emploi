@@ -783,13 +783,6 @@ def _selecteur_poste_recherche(titre_recherche):
     st.session_state[cle_auto] = titre_recherche
 
     if suggestions or st.session_state[cle_selection]:
-        st.caption(
-            "💡 Ces intitulés viennent de la nomenclature officielle France Travail (ROME) — un "
-            "intitulé libre comme celui tapé ci-dessus n'existe pas toujours tel quel dans la "
-            "base. Sélectionne un ou plusieurs intitulés proches : ce sont eux qui seront "
-            "utilisés pour interroger France Travail (tendance de marché ci-dessous, et les "
-            "suggestions de compétences plus bas)."
-        )
         tous_les_tags = list(dict.fromkeys(suggestions + st.session_state[cle_selection]))
         colonnes_tags = st.columns(2)
         for i, label in enumerate(tous_les_tags):
@@ -943,8 +936,9 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     )
     st.caption(
         "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
-        "Finance senior confirmé ») pour de meilleurs résultats. L'onglet **🎯 Tendance par "
-        "profil** analyse automatiquement le marché pour ce poste dès qu'il est renseigné ici."
+        "Finance senior confirmé »). Ci-dessous, choisis un ou plusieurs intitulés officiels "
+        "France Travail (ROME) proches — ce sont eux qui alimentent l'analyse automatique de "
+        "l'onglet **🎯 Tendance par profil** et les suggestions de compétences plus bas."
     )
     _selecteur_poste_recherche(titre_recherche)
 
