@@ -100,15 +100,32 @@ _REF_OUTILS_INFORMATIQUES = {
 # ce même champ libre, comme pour les outils/langages — couverture partielle par nature,
 # à enrichir si des cas manquants remontent en usage réel.
 _REF_CERTIFICATIONS = {
-    "pmp", "prince2", "prince 2", "itil", "cobit", "six sigma", "lean six sigma",
-    "scrum master", "psm", "csm", "safe agilist", "safe",
-    "cissp", "cism", "cisa", "ceh", "comptia", "ccna", "ccnp",
-    "aws certified", "azure certified", "google cloud certified", "gcp certified",
-    "iso 27001", "iso 9001", "iso 14001",
-    "toeic", "toefl", "ielts", "bulats", "linguaskill",
-    "caces", "habilitation électrique", "habilitation electrique", "sst", "bafa", "bafd",
-    "permis b", "permis c", "permis poids lourd", "adr",
-    "amf", "ifop", "haccp", "qualiopi",
+    # Gestion de projet / méthodes
+    "pmp", "prince2", "prince 2", "capm", "itil", "cobit", "six sigma", "lean six sigma",
+    "lean management", "scrum master", "psm", "csm", "safe agilist", "safe", "product owner certifié",
+    "pspo",
+    # Cybersécurité / IT
+    "cissp", "cism", "cisa", "ceh", "oscp", "comptia", "security+", "network+",
+    "ccna", "ccnp", "ccie", "mcsa", "mcse", "rhce", "lpic",
+    # Cloud
+    "aws certified", "aws solutions architect", "azure certified", "microsoft certified",
+    "google cloud certified", "gcp certified", "terraform associate", "kubernetes certified", "ckad", "cka",
+    # Data / IA
+    "tensorflow developer certificate", "databricks certified", "sas certified",
+    # Qualité / normes
+    "iso 27001", "iso 9001", "iso 14001", "iso 45001", "haccp", "qualiopi",
+    # Langues
+    "toeic", "toefl", "ielts", "bulats", "linguaskill", "delf", "dalf", "goethe zertifikat", "dele",
+    # Finance / comptabilité / droit
+    "amf", "dscg", "dec", "cfa", "cfa level", "frm",
+    # Marketing / vente
+    "google ads", "google analytics certified", "hubspot certified", "meta blueprint",
+    # Sécurité / logistique / terrain
+    "caces", "habilitation électrique", "habilitation electrique", "sst", "hacces",
+    "bafa", "bafd", "permis b", "permis c", "permis ce", "permis poids lourd", "fimo", "fco", "adr",
+    "ifop", "ifsi", "diplôme d'état", "diplome d'etat",
+    # RH / immobilier
+    "carte professionnelle", "carte t", "certification voltaire", "tosa",
 }
 
 
@@ -1161,6 +1178,93 @@ def _nom_entreprise_normalise(offre):
     return offre.get("entreprise", {}).get("nom") or LABEL_ENTREPRISE_ANONYME
 
 
+# ---------------------------------------------------------------------------
+# Fiche entreprise — API "Recherche d'entreprises" (data.gouv.fr / DINUM), publique
+# et gratuite, SANS clé ni compte à créer (contrairement à ROMEO/RNCP/Data Emploi,
+# qui restent à intégrer une fois les accès confirmés). Synthèse des données SIRENE
+# (INSEE) et du Registre National des Entreprises — utile pour préparer une
+# candidature spontanée (candidat) ou un argumentaire de prospection (agence).
+# ---------------------------------------------------------------------------
+RECHERCHE_ENTREPRISES_URL = "https://recherche-entreprises.api.gouv.fr/search"
+
+# Codes INSEE "tranche d'effectif salarié" -> libellé lisible.
+TRANCHE_EFFECTIF_LABELS = {
+    "NN": "Effectif non renseigné", "00": "0 salarié", "01": "1 à 2 salariés",
+    "02": "3 à 5 salariés", "03": "6 à 9 salariés", "11": "10 à 19 salariés",
+    "12": "20 à 49 salariés", "21": "50 à 99 salariés", "22": "100 à 199 salariés",
+    "31": "200 à 249 salariés", "32": "250 à 499 salariés", "41": "500 à 999 salariés",
+    "42": "1 000 à 1 999 salariés", "51": "2 000 à 4 999 salariés",
+    "52": "5 000 à 9 999 salariés", "53": "10 000 salariés et plus",
+}
+
+
+@st.cache_data(ttl=86400)
+def rechercher_entreprise_siren(nom_entreprise):
+    """
+    Cherche une entreprise par nom sur l'API "Recherche d'entreprises" (DINUM,
+    gratuite, sans clé) et renvoie une fiche synthétique du MEILLEUR résultat, ou
+    None si rien trouvé. La recherche par nom étant approximative (plusieurs
+    entreprises peuvent porter des noms proches), le résultat doit être présenté
+    comme une correspondance probable à vérifier, pas une certitude — surtout pour
+    des noms d'entreprise courts ou très courants.
+    """
+    if not nom_entreprise or nom_entreprise == LABEL_ENTREPRISE_ANONYME:
+        return None
+    try:
+        r = requests.get(
+            RECHERCHE_ENTREPRISES_URL, params={"q": nom_entreprise, "per_page": 1}, timeout=8
+        )
+        r.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    resultats = r.json().get("results", [])
+    if not resultats:
+        return None
+    res = resultats[0]
+    siege = res.get("siege", {}) or {}
+    tranche = res.get("tranche_effectif_salarie")
+
+    return {
+        "nom": res.get("nom_complet") or res.get("nom_raison_sociale"),
+        "siren": res.get("siren"),
+        "siret_siege": siege.get("siret"),
+        "naf": res.get("activite_principale"),
+        "categorie_entreprise": res.get("categorie_entreprise"),  # TPE/PME/ETI/GE
+        "tranche_effectif_libelle": TRANCHE_EFFECTIF_LABELS.get(tranche, "Non renseigné"),
+        "adresse": siege.get("adresse"),
+        "date_creation": res.get("date_creation"),
+        "forme_juridique": res.get("nature_juridique"),
+        "est_qualiopi": (res.get("complements") or {}).get("est_qualiopi"),
+        # Proxy de présence géographique : nombre d'établissements ouverts sur le
+        # territoire. Ne dit pas OÙ (ça demanderait un appel supplémentaire par
+        # établissement), juste une idée de l'étendue — présenté comme tel.
+        "nombre_etablissements_ouverts": res.get("nombre_etablissements_ouverts"),
+        "url_annuaire": f"https://annuaire-entreprises.data.gouv.fr/entreprise/{res.get('siren')}" if res.get("siren") else None,
+    }
+
+
+def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
+    """
+    Repère, parmi une liste d'offres déjà récupérées, une offre de cette
+    entreprise et en extrait le nécessaire pour préparer un entretien : le
+    domaine d'activité TEL QUE DÉCRIT par France Travail (secteurActiviteLibelle,
+    un libellé humain — plus parlant qu'un code NAF brut) et la description
+    d'entreprise rédigée par l'employeur lui-même (entreprise.description),
+    jamais affichée jusqu'ici dans l'app alors qu'elle est déjà présente dans
+    les données qu'on récupère. Renvoie un dict (potentiellement partiel si
+    l'information manque) ou None si aucune offre de cette entreprise trouvée.
+    """
+    for offre in offres_disponibles:
+        if _nom_entreprise_normalise(offre).strip().lower() != nom_entreprise.strip().lower():
+            continue
+        description = (offre.get("entreprise", {}) or {}).get("description")
+        secteur_libelle = offre.get("secteurActiviteLibelle")
+        if description or secteur_libelle:
+            return {"description": description, "secteur_libelle": secteur_libelle}
+    return None
+
+
 @st.cache_data(ttl=1800)
 def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
     token = get_token(SCOPE_OFFRES)
@@ -1705,6 +1809,10 @@ __all__ = [
     "repartition_contrats_et_salaires_multi",
     "LABEL_ENTREPRISE_ANONYME",
     "_nom_entreprise_normalise",
+    "RECHERCHE_ENTREPRISES_URL",
+    "TRANCHE_EFFECTIF_LABELS",
+    "rechercher_entreprise_siren",
+    "infos_entretien_entreprise",
     "offres_par_ville",
     "volumes_departement_offres",
     "_CANDIDATS_SCOPE_STATS_MARCHE",
