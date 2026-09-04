@@ -440,10 +440,20 @@ def suggerer_postes(saisie, max_resultats=8):
                     if mot_cle_normalise in _normaliser_texte(label):
                         candidats[label] = max(candidats.get(label, 0), 100)  # priorité maximale
 
-    # 2) Recherche floue directe sur la saisie brute, en complément.
-    resultats_flous = process.extract(saisie, labels, scorer=fuzz.WRatio, limit=max_resultats * 2)
-    for label, score, _ in resultats_flous:
+    # 2) Recherche floue, en complément — sur la saisie ET le référentiel EXPLICITEMENT
+    # normalisés des deux côtés (au lieu de compter sur le traitement interne de
+    # fuzz.WRatio, qui a produit des résultats différents entre "PMO" et "pmo" en
+    # pratique — la casse ne doit jamais changer les suggestions).
+    labels_normalises = {label: _normaliser_texte(label) for label in labels}
+    norm_vers_label = {}
+    for label, norm in labels_normalises.items():
+        norm_vers_label.setdefault(norm, label)
+    resultats_flous = process.extract(
+        saisie_normalisee, list(norm_vers_label.keys()), scorer=fuzz.WRatio, limit=max_resultats * 2
+    )
+    for label_normalise, score, _ in resultats_flous:
         if score >= 55:  # seuil pour écarter le bruit non pertinent
+            label = norm_vers_label[label_normalise]
             candidats[label] = max(candidats.get(label, 0), score)
 
     # Pénalité par mot supplémentaire : fuzz.WRatio traite volontiers la saisie comme un
