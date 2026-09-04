@@ -16,14 +16,11 @@ pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
 
 import streamlit as st
 import pandas as pd
-import folium
 from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import altair as alt
 import plotly.express as px
 import plotly.graph_objects as go
-from folium.plugins import MarkerCluster
-from streamlit_folium import st_folium
 
 from cv_builder import afficher_generateur_cv
 from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées
@@ -211,27 +208,6 @@ with tab_profil:
 
             st.divider()
 
-            if "cv_suggestions_apercu" in st.session_state:
-                _, _, _, df_certifs, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
-                st.markdown("#### 🎓 Certifications les plus demandées")
-                st.caption(
-                    "ℹ️ France Travail n'a pas de champ dédié aux certifications — repérées par "
-                    "mot-clé dans les offres réelles (même échantillon que les suggestions de "
-                    "compétences de « Créer mon CV »), couverture partielle par construction."
-                )
-                if df_certifs.empty:
-                    st.info("Aucune certification identifiée dans les offres de cet échantillon.")
-                else:
-                    st.dataframe(
-                        df_certifs.rename(
-                            columns={"libelle": "Certification", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                st.divider()
-
             with st.spinner("Récupération des recruteurs actifs..."):
                 if recherche_multi:
                     _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
@@ -253,9 +229,10 @@ with tab_profil:
                 st.caption(
                     "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
                     "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
-                    "peuvent valoir une candidature directe."
+                    "peuvent valoir une candidature directe. Clique sur une ligne pour voir sa fiche "
+                    "entreprise (SIRET, secteur, taille, adresse — source : Recherche d'entreprises, DINUM)."
                 )
-                st.dataframe(
+                selection_recruteur = st.dataframe(
                     df_entreprises.rename(
                         columns={
                             "entreprise": "Entreprise",
@@ -264,12 +241,102 @@ with tab_profil:
                     ).drop(columns=["villes"]),
                     use_container_width=True,
                     hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="table_top_recruteurs",
                 )
+
+                lignes_selectionnees = selection_recruteur["selection"]["rows"]
+                if lignes_selectionnees:
+                    nom_choisi = df_entreprises.iloc[lignes_selectionnees[0]]["entreprise"]
+                    with st.spinner(f"Récupération des informations sur {nom_choisi}..."):
+                        fiche = rechercher_entreprise_siren(nom_choisi)
+                        if recherche_multi:
+                            offres_pour_fiche = rechercher_offres_completes_multi(
+                                codes_resolus_cv, departement_actif, max_pages=1,
+                            )
+                        else:
+                            offres_pour_fiche = rechercher_offres_completes(
+                                code_rome_choisi, departement_actif, max_pages=1,
+                            )
+                        infos_entretien = infos_entretien_entreprise(nom_choisi, offres_pour_fiche)
+
+                    if not fiche and not infos_entretien:
+                        st.info(
+                            f"Aucune information trouvée pour « {nom_choisi} » — ni dans le "
+                            "répertoire des entreprises, ni dans le descriptif de ses offres."
+                        )
+                    else:
+                        st.markdown(f"**{nom_choisi}**")
+
+                        if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
+                            st.caption("💡 À retenir pour un entretien ou une candidature spontanée :")
+                            if infos_entretien["secteur_libelle"]:
+                                st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
+                            if infos_entretien["description"]:
+                                st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
+
+                        if fiche:
+                            st.caption(
+                                "⚠️ Informations administratives ci-dessous : correspondance "
+                                "approximative sur le nom (à vérifier via le lien ci-dessous), "
+                                "surtout pour un nom court ou courant."
+                            )
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Effectif", fiche["tranche_effectif_libelle"])
+                            c2.metric("Catégorie", fiche["categorie_entreprise"] or "N/C")
+                            c3.metric(
+                                "Présence géographique",
+                                f"{fiche['nombre_etablissements_ouverts']} établissement(s)"
+                                if fiche["nombre_etablissements_ouverts"] else "N/C",
+                            )
+                            if fiche["adresse"]:
+                                st.markdown(f"📍 Siège : {fiche['adresse']}")
+                            if fiche["date_creation"]:
+                                st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
+                            if fiche["siret_siege"]:
+                                st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
+                            if fiche["est_qualiopi"]:
+                                st.markdown("🏅 Organisme certifié Qualiopi")
+                            if fiche["url_annuaire"]:
+                                st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
+                        elif infos_entretien:
+                            st.caption(
+                                "ℹ️ Aucune fiche administrative trouvée pour ce nom dans le "
+                                "répertoire des entreprises françaises (nom trop générique, "
+                                "entreprise étrangère, ou diffusion restreinte)."
+                            )
 
             st.divider()
 
+            if "cv_suggestions_apercu" in st.session_state:
+                _, _, _, df_certifs, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
+                st.markdown("#### 🎓 Certifications les plus demandées")
+                st.caption(
+                    "ℹ️ France Travail n'a pas de champ dédié aux certifications — repérées par "
+                    "mot-clé dans les offres réelles (même échantillon que les suggestions de "
+                    "compétences de « Créer mon CV »), couverture partielle par construction."
+                )
+                if df_certifs.empty:
+                    st.info("Aucune certification identifiée dans les offres de cet échantillon.")
+                else:
+                    st.dataframe(
+                        df_certifs.rename(
+                            columns={"libelle": "Certification", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                st.divider()
+
             st.markdown("#### 📍 Villes qui recrutent")
-            st.caption(f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top recruteurs).")
+            st.caption(
+                f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top "
+                "recruteurs). Basée sur le lieu tel qu'indiqué par l'offre — la plupart n'ont pas "
+                "de géolocalisation précise côté France Travail, donc pas de carte ici : un simple "
+                "classement, plus honnête qu'une carte gonflée artificiellement sur une seule ville."
+            )
             with st.spinner("Récupération des offres par ville..."):
                 if recherche_multi:
                     df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_multi(
@@ -285,77 +352,18 @@ with tab_profil:
             # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
             # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
             # offres sont simplement celles encore actives aujourd'hui.
-            if not df_villes.empty:
-                df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
-                nb_offres_approx = int(df_carte.loc[df_carte["approximatif"], "nombre_offres"].sum()) if not df_carte.empty else 0
-                if nb_offres_approx > 0:
-                    st.caption(
-                        f"📍 {nb_offres_approx} offre(s) sur {total_region} n'ont pas de coordonnées GPS "
-                        "précises côté France Travail (lieu renseigné au niveau département seulement, ou "
-                        "télétravail) — elles sont positionnées sur la plus grande ville du département "
-                        "(marqueurs oranges ci-dessous), à titre indicatif."
-                    )
-                ville_cliquee = None
-                if not df_carte.empty:
-                    df_carte["latitude"] = df_carte["latitude"].astype(float)
-                    df_carte["longitude"] = df_carte["longitude"].astype(float)
-
-                    etendue_lat = df_carte["latitude"].max() - df_carte["latitude"].min()
-                    etendue_lon = df_carte["longitude"].max() - df_carte["longitude"].min()
-                    etendue = max(etendue_lat, etendue_lon)
-                    if etendue < 0.03:
-                        zoom_auto = 12
-                    elif etendue < 0.1:
-                        zoom_auto = 11
-                    elif etendue < 0.3:
-                        zoom_auto = 10
-                    elif etendue < 0.8:
-                        zoom_auto = 9
-                    else:
-                        zoom_auto = 8
-
-                    carte = folium.Map(
-                        location=[df_carte["latitude"].mean(), df_carte["longitude"].mean()],
-                        zoom_start=zoom_auto,
-                        # CartoDB dark_matter exige désormais une clé API (changement récent
-                        # de Carto) — OpenStreetMap reste gratuit et sans clé, en thème clair.
-                        tiles="OpenStreetMap",
-                    )
-                    cluster = MarkerCluster(
-                        options={"maxClusterRadius": 60, "disableClusteringAtZoom": 15}
-                    ).add_to(carte)
-
-                    for _, row in df_carte.iterrows():
-                        couleur = "#e67e22" if row["approximatif"] else "#0066cc"
-                        tooltip_texte = f"{row['ville']} : {int(row['nombre_offres'])} offre(s)"
-                        if row["approximatif"]:
-                            tooltip_texte += " (position approximative)"
-                        for _ in range(int(row["nombre_offres"])):
-                            folium.CircleMarker(
-                                location=[row["latitude"], row["longitude"]],
-                                radius=8,
-                                tooltip=tooltip_texte,
-                                color=couleur,
-                                fill=True,
-                                fill_color=couleur,
-                                fill_opacity=0.8,
-                                weight=1,
-                            ).add_to(cluster)
-
-                    # Carte purement visuelle (tendance) : pas de listing d'offres cliquables —
-                    # l'app ne cherche plus à concurrencer les plateformes de recrutement dédiées,
-                    # seule la lecture de marché (villes qui recrutent) est montrée ici.
-                    # returned_objects=[] évite les allers-retours serveur au zoom/déplacement
-                    # (meilleure stabilité, notamment sur mobile).
-                    st_folium(
-                        carte,
-                        use_container_width=True,
-                        height=500,
-                        key="carte_offres_ville",
-                        returned_objects=[],
-                    )
-                else:
-                    st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
+            if df_villes.empty:
+                st.info("Aucune offre trouvée pour ces critères.")
+            else:
+                df_villes_top = df_villes[["ville", "nombre_offres"]].head(15)
+                st.bar_chart(df_villes_top.set_index("ville"))
+                st.dataframe(
+                    df_villes_top.rename(
+                        columns={"ville": "Lieu (tel qu'indiqué par l'offre)", "nombre_offres": "Nombre d'offres"}
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
             st.divider()
             st.info(
