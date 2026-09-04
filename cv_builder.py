@@ -68,21 +68,21 @@ LIBELLES = {
     "FR": {
         "contact": "Contact", "email": "E-mail", "telephone": "Téléphone", "adresse": "Adresse",
         "langues": "Langues", "competences": "Compétences", "outils": "Outils informatiques",
-        "langages": "Langages informatiques", "interets": "Centres d'intérêt",
+        "langages": "Langages informatiques", "certifications": "Certifications", "interets": "Centres d'intérêt",
         "experiences": "Expériences professionnelles", "formation": "Formation",
         "presentation": "Présentation", "disponibilite": "Disponibilité",
     },
     "EN-GB": {
         "contact": "Contact", "email": "Email", "telephone": "Phone", "adresse": "Address",
         "langues": "Languages", "competences": "Skills", "outils": "IT Tools",
-        "langages": "Programming Languages", "interets": "Interests",
+        "langages": "Programming Languages", "certifications": "Certifications", "interets": "Interests",
         "experiences": "Professional Experience", "formation": "Education",
         "presentation": "Profile", "disponibilite": "Availability",
     },
     "ES": {
         "contact": "Contacto", "email": "Correo electrónico", "telephone": "Teléfono", "adresse": "Dirección",
         "langues": "Idiomas", "competences": "Competencias", "outils": "Herramientas informáticas",
-        "langages": "Lenguajes informáticos", "interets": "Intereses",
+        "langages": "Lenguajes informáticos", "certifications": "Certificaciones", "interets": "Intereses",
         "experiences": "Experiencia profesional", "formation": "Formación",
         "presentation": "Presentación", "disponibilite": "Disponibilidad",
     },
@@ -161,6 +161,7 @@ def _estimer_volume_contenu(data):
     volume += len(data.get("competences", ""))
     volume += len(data.get("outils", ""))
     volume += len(data.get("langages_informatiques", ""))
+    volume += len(data.get("certifications", ""))
     volume += len(data.get("interets", ""))
     return volume
 
@@ -553,6 +554,14 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             if ligne:
                 _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
 
+    # --- Certifications (facultatif, invisible si vide) ---
+    if data.get("certifications"):
+        _titre_section(cell_bandeau, libelles["certifications"], bandeau_texte, echelle=echelle)
+        for ligne in data["certifications"].split("\n"):
+            ligne = _nettoyer_ligne(ligne)
+            if ligne:
+                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+
     # --- Centres d'intérêt ---
     if data.get("interets"):
         _titre_section(cell_bandeau, libelles["interets"], bandeau_texte, echelle=echelle)
@@ -710,6 +719,7 @@ _DEFAUTS_COMPETENCES = [
 ]
 _DEFAUTS_OUTILS = ["Excel", "Word", "PowerPoint", "Outlook", "Teams"]
 _DEFAUTS_LANGAGES = []  # vide par défaut : pertinent seulement pour les profils tech
+_DEFAUTS_CERTIFICATIONS = []  # vide par défaut : très spécifique au poste, pas de base générique pertinente
 # Top 10 des langues les plus parlées au monde (nombre total de locuteurs, classement
 # usuel type Ethnologue) — liste de départ ; le champ permet aussi d'en ajouter d'autres.
 _DEFAUTS_LANGUES = [
@@ -840,24 +850,25 @@ def _section_suggestions_competences(fonction_analyse_competences):
     if st.session_state.get(cle_signature) != signature_actuelle:
         with st.spinner("Analyse des offres en cours..."):
             mots_cles_larges = " ".join(postes_choisis)
-            df_comp, df_outils, df_langages, nb_total = fonction_analyse_competences(
+            df_comp, df_outils, df_langages, df_certifs, nb_total = fonction_analyse_competences(
                 "TOUS", departement_cv, mots_cles=mots_cles_larges,
             )
         for cle_options, df in [
             ("cv_competences_options", df_comp),
             ("cv_outils_options", df_outils),
             ("cv_langages_options", df_langages),
+            ("cv_certifications_options", df_certifs),
         ]:
             if cle_options not in st.session_state:
                 st.session_state[cle_options] = []
             for lib in df["libelle"]:
                 if lib not in st.session_state[cle_options]:
                     st.session_state[cle_options].append(lib)
-        st.session_state["cv_suggestions_apercu"] = (df_comp, df_outils, df_langages, nb_total)
+        st.session_state["cv_suggestions_apercu"] = (df_comp, df_outils, df_langages, df_certifs, nb_total)
         st.session_state[cle_signature] = signature_actuelle
 
     if "cv_suggestions_apercu" in st.session_state:
-        df_comp, df_outils, df_langages, nb_total = st.session_state["cv_suggestions_apercu"]
+        df_comp, df_outils, df_langages, df_certifs, nb_total = st.session_state["cv_suggestions_apercu"]
         if nb_total < 10:
             st.caption(f"⚠️ Échantillon réduit ({nb_total} offre(s)) — indicatif seulement.")
         else:
@@ -866,6 +877,7 @@ def _section_suggestions_competences(fonction_analyse_competences):
             ("Compétences les + demandées", df_comp),
             ("Outils les + demandés", df_outils),
             ("Langages les + demandés", df_langages),
+            ("Certifications les + demandées", df_certifs),
         ]:
             if not df.empty:
                 apercu = ", ".join(f"{r.libelle} ({r.pourcentage}%)" for _, r in df.head(6).iterrows())
@@ -1009,6 +1021,16 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "Sélectionne ou ajoute tes langages", "cv_langages", _DEFAUTS_LANGAGES
     )
 
+    st.markdown("###### 🎓 Certifications")
+    st.caption(
+        "Facultatif — ex: PMP, Scrum Master, CISSP, AWS Certified, CACES, permis... Les "
+        "suggestions ci-dessus (si disponibles) sont repérées par mot-clé dans les offres "
+        "réelles, pas un champ officiel dédié côté France Travail."
+    )
+    certifications = _champ_liste_avec_ajout(
+        "Sélectionne ou ajoute tes certifications", "cv_certifications", _DEFAUTS_CERTIFICATIONS
+    )
+
     st.markdown("#### 🎯 Centres d'intérêt")
     interets = st.text_area(
         "Séparés par une virgule ou une ligne (ex: Kayak, Dessin, Voyages)",
@@ -1037,6 +1059,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "competences": competences,
                 "langages_informatiques": langages_informatiques,
                 "outils": outils,
+                "certifications": certifications,
                 "interets": interets,
             }
             photo_bytes = photo_uploadee.getvalue() if photo_uploadee else None
