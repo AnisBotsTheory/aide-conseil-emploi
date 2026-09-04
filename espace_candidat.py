@@ -32,7 +32,7 @@ st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 st.divider()
 
 tab_cv, tab_profil, tab_entreprises, tab_avance = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🏢 Entreprises", "🧩 KPIs avancés"]
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "📇 Fiches entreprises", "🧩 KPIs avancés"]
 )
 
 # ---------------------------------------------------------------------------
@@ -205,6 +205,107 @@ with tab_profil:
 
             st.divider()
 
+            with st.spinner("Récupération des recruteurs actifs..."):
+                if recherche_multi:
+                    _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
+                        codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
+                    )
+                else:
+                    _, _, _, _, df_entreprises, _ = offres_par_ville(
+                        code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
+                    )
+
+            st.markdown("#### 🏢 Top recruteurs")
+            st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
+            if df_entreprises.empty:
+                st.info(
+                    "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
+                    "les offres sont diffusées de façon anonyme."
+                )
+            else:
+                st.caption(
+                    "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
+                    "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
+                    "peuvent valoir une candidature directe. Clique sur une ligne pour voir sa fiche "
+                    "entreprise (SIRET, secteur, taille, adresse — source : Recherche d'entreprises, DINUM)."
+                )
+                selection_recruteur = st.dataframe(
+                    df_entreprises.rename(
+                        columns={
+                            "entreprise": "Entreprise",
+                            "nombre_offres": "Nombre d'offres",
+                        }
+                    ).drop(columns=["villes"]),
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="table_top_recruteurs",
+                )
+
+                lignes_selectionnees = selection_recruteur["selection"]["rows"]
+                if lignes_selectionnees:
+                    nom_choisi = df_entreprises.iloc[lignes_selectionnees[0]]["entreprise"]
+                    with st.spinner(f"Récupération des informations sur {nom_choisi}..."):
+                        fiche = rechercher_entreprise_siren(nom_choisi)
+                        if recherche_multi:
+                            offres_pour_fiche = rechercher_offres_completes_multi(
+                                codes_resolus_cv, departement_actif, max_pages=1,
+                            )
+                        else:
+                            offres_pour_fiche = rechercher_offres_completes(
+                                code_rome_choisi, departement_actif, max_pages=1,
+                            )
+                        infos_entretien = infos_entretien_entreprise(nom_choisi, offres_pour_fiche)
+
+                    if not fiche and not infos_entretien:
+                        st.info(
+                            f"Aucune information trouvée pour « {nom_choisi} » — ni dans le "
+                            "répertoire des entreprises, ni dans le descriptif de ses offres."
+                        )
+                    else:
+                        st.markdown(f"**{nom_choisi}**")
+
+                        if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
+                            st.caption("💡 À retenir pour un entretien ou une candidature spontanée :")
+                            if infos_entretien["secteur_libelle"]:
+                                st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
+                            if infos_entretien["description"]:
+                                st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
+
+                        if fiche:
+                            st.caption(
+                                "⚠️ Informations administratives ci-dessous : correspondance "
+                                "approximative sur le nom (à vérifier via le lien ci-dessous), "
+                                "surtout pour un nom court ou courant."
+                            )
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Effectif", fiche["tranche_effectif_libelle"])
+                            c2.metric("Catégorie", fiche["categorie_entreprise"] or "N/C")
+                            c3.metric(
+                                "Présence géographique",
+                                f"{fiche['nombre_etablissements_ouverts']} établissement(s)"
+                                if fiche["nombre_etablissements_ouverts"] else "N/C",
+                            )
+                            if fiche["adresse"]:
+                                st.markdown(f"📍 Siège : {fiche['adresse']}")
+                            if fiche["date_creation"]:
+                                st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
+                            if fiche["siret_siege"]:
+                                st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
+                            if fiche["est_qualiopi"]:
+                                st.markdown("🏅 Organisme certifié Qualiopi")
+                            if fiche["url_annuaire"]:
+                                st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
+                        elif infos_entretien:
+                            st.caption(
+                                "ℹ️ Aucune fiche administrative trouvée pour ce nom dans le "
+                                "répertoire des entreprises françaises (nom trop générique, "
+                                "entreprise étrangère, ou diffusion restreinte)."
+                            )
+
+            st.divider()
+
             if "cv_suggestions_apercu" in st.session_state:
                 _, _, _, df_certifs, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
                 st.markdown("#### 🎓 Certifications les plus demandées")
@@ -271,135 +372,98 @@ with tab_profil:
             )
 
 # ---------------------------------------------------------------------------
-# Onglet "Entreprises" — recruteurs actifs sur le poste du CV, avec fiche
-# entreprise (infos d'entretien + données administratives). Utile côté
-# candidat (candidature spontanée, préparation d'entretien) et côté agence
-# (prospection commerciale).
+# Onglet "Fiches entreprises" — recherche libre par nom, indépendante du poste
+# sélectionné dans le CV. Utile pour préparer un entretien ou une candidature
+# spontanée sur une entreprise précise, ou pour une agence qui veut qualifier
+# un prospect avant de le démarcher.
 # ---------------------------------------------------------------------------
 with tab_entreprises:
     st.write(
-        "Recruteurs actifs sur le poste sélectionné dans votre CV — pistes de candidature "
-        "spontanée, préparation d'entretien, ou prospection commerciale."
+        "Tape le nom d'une entreprise pour voir sa fiche : secteur, taille, adresse, et — si "
+        "elle recrute actuellement sur le poste de ton CV — sa présentation et son domaine "
+        "d'activité tels qu'elle les décrit elle-même."
     )
 
-    if "code_rome_choisi" not in st.session_state:
-        st.info(
-            "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV** — les recruteurs "
-            "actifs s'affichent ici automatiquement dès qu'un poste est résolu."
-        )
-    else:
-        code_rome_choisi = st.session_state["code_rome_choisi"]
-        codes_rome_choisis = st.session_state.get("codes_rome_choisis", [])
-        departement_actif = st.session_state["departement_profil_actif"]
-        recherche_multi = code_rome_choisi == "MULTI"
+    nom_recherche = st.text_input(
+        "Nom de l'entreprise", key="entreprises_nom_recherche", placeholder="ex: Capgemini, Signe+..."
+    )
+    bouton_rechercher_entreprise = st.button("Rechercher")
 
-        aujourdhui = datetime.now()
-        if aujourdhui.month <= 6:
-            debut_periode = datetime(aujourdhui.year, 1, 1)
-            libelle_periode_offres = f"1er semestre {aujourdhui.year}"
+    if bouton_rechercher_entreprise:
+        if not nom_recherche.strip():
+            st.error("Tape un nom d'entreprise avant de lancer la recherche.")
         else:
-            debut_periode = datetime(aujourdhui.year, 7, 1)
-            libelle_periode_offres = f"2e semestre {aujourdhui.year}"
-        jours_max_periode_offres = (aujourdhui - debut_periode).days
+            with st.spinner(f"Récupération des informations sur {nom_recherche}..."):
+                fiche = rechercher_entreprise_siren(nom_recherche.strip())
 
-        with st.spinner("Récupération des recruteurs actifs..."):
-            if recherche_multi:
-                _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
-                    codes_rome_choisis, departement_actif, jours_max=jours_max_periode_offres,
-                )
-            else:
-                _, _, _, _, df_entreprises, _ = offres_par_ville(
-                    code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
-                )
-
-        st.markdown("#### 🏢 Top recruteurs")
-        st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
-        if df_entreprises.empty:
-            st.info(
-                "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
-                "les offres sont diffusées de façon anonyme."
-            )
-        else:
-            st.caption(
-                "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
-                "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
-                "peuvent valoir une candidature directe. Clique sur une ligne pour voir sa fiche "
-                "entreprise (SIRET, secteur, taille, adresse — source : Recherche d'entreprises, DINUM)."
-            )
-            selection_recruteur = st.dataframe(
-                df_entreprises.rename(
-                    columns={
-                        "entreprise": "Entreprise",
-                        "nombre_offres": "Nombre d'offres",
-                    }
-                ).drop(columns=["villes"]),
-                use_container_width=True,
-                hide_index=True,
-                on_select="rerun",
-                selection_mode="single-row",
-                key="table_top_recruteurs",
-            )
-
-            lignes_selectionnees = selection_recruteur["selection"]["rows"]
-            if lignes_selectionnees:
-                nom_choisi = df_entreprises.iloc[lignes_selectionnees[0]]["entreprise"]
-                with st.spinner(f"Récupération des informations sur {nom_choisi}..."):
-                    fiche = rechercher_entreprise_siren(nom_choisi)
-                    if recherche_multi:
-                        offres_pour_fiche = rechercher_offres_completes_multi(
-                            codes_rome_choisis, departement_actif, max_pages=1,
+                # Recherche best-effort d'une offre de cette entreprise, uniquement si un
+                # poste a déjà été résolu depuis le CV — cette partie peut légitimement ne
+                # rien trouver (l'entreprise tapée n'a pas forcément d'offre active sur ce
+                # poste précis, ou n'a peut-être pas d'offre du tout en ce moment).
+                infos_entretien = None
+                if "code_rome_choisi" in st.session_state:
+                    code_rome_choisi_recherche = st.session_state["code_rome_choisi"]
+                    codes_rome_choisis_recherche = st.session_state.get("codes_rome_choisis", [])
+                    departement_recherche = st.session_state.get("departement_profil_actif")
+                    if code_rome_choisi_recherche == "MULTI":
+                        offres_pour_recherche = rechercher_offres_completes_multi(
+                            codes_rome_choisis_recherche, departement_recherche, max_pages=1,
                         )
                     else:
-                        offres_pour_fiche = rechercher_offres_completes(
-                            code_rome_choisi, departement_actif, max_pages=1,
+                        offres_pour_recherche = rechercher_offres_completes(
+                            code_rome_choisi_recherche, departement_recherche, max_pages=1,
                         )
-                    infos_entretien = infos_entretien_entreprise(nom_choisi, offres_pour_fiche)
+                    infos_entretien = infos_entretien_entreprise(nom_recherche.strip(), offres_pour_recherche)
 
-                if not fiche and not infos_entretien:
-                    st.info(
-                        f"Aucune information trouvée pour « {nom_choisi} » — ni dans le "
-                        "répertoire des entreprises, ni dans le descriptif de ses offres."
+            if not fiche and not infos_entretien:
+                st.info(
+                    f"Aucune information trouvée pour « {nom_recherche} » — vérifie l'orthographe, "
+                    "ou l'entreprise n'est pas répertoriée (entreprise étrangère, très récente, ou "
+                    "diffusion restreinte)."
+                )
+            else:
+                st.markdown(f"**{nom_recherche}**")
+
+                if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
+                    st.caption(
+                        "💡 À retenir pour un entretien ou une candidature spontanée (cette "
+                        "entreprise a une offre active sur le poste de ton CV) :"
                     )
-                else:
-                    st.markdown(f"**{nom_choisi}**")
+                    if infos_entretien["secteur_libelle"]:
+                        st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
+                    if infos_entretien["description"]:
+                        st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
 
-                    if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
-                        st.caption("💡 À retenir pour un entretien ou une candidature spontanée :")
-                        if infos_entretien["secteur_libelle"]:
-                            st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
-                        if infos_entretien["description"]:
-                            st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
-
-                    if fiche:
-                        st.caption(
-                            "⚠️ Informations administratives ci-dessous : correspondance "
-                            "approximative sur le nom (à vérifier via le lien ci-dessous), "
-                            "surtout pour un nom court ou courant."
-                        )
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("Effectif", fiche["tranche_effectif_libelle"])
-                        c2.metric("Catégorie", fiche["categorie_entreprise"] or "N/C")
-                        c3.metric(
-                            "Présence géographique",
-                            f"{fiche['nombre_etablissements_ouverts']} établissement(s)"
-                            if fiche["nombre_etablissements_ouverts"] else "N/C",
-                        )
-                        if fiche["adresse"]:
-                            st.markdown(f"📍 Siège : {fiche['adresse']}")
-                        if fiche["date_creation"]:
-                            st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
-                        if fiche["siret_siege"]:
-                            st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
-                        if fiche["est_qualiopi"]:
-                            st.markdown("🏅 Organisme certifié Qualiopi")
-                        if fiche["url_annuaire"]:
-                            st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
-                    elif infos_entretien:
-                        st.caption(
-                            "ℹ️ Aucune fiche administrative trouvée pour ce nom dans le "
-                            "répertoire des entreprises françaises (nom trop générique, "
-                            "entreprise étrangère, ou diffusion restreinte)."
-                        )
+                if fiche:
+                    st.caption(
+                        "⚠️ Informations administratives ci-dessous : correspondance approximative "
+                        "sur le nom (à vérifier via le lien ci-dessous), surtout pour un nom court "
+                        "ou courant."
+                    )
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Effectif", fiche["tranche_effectif_libelle"])
+                    c2.metric("Catégorie", fiche["categorie_entreprise"] or "N/C")
+                    c3.metric(
+                        "Présence géographique",
+                        f"{fiche['nombre_etablissements_ouverts']} établissement(s)"
+                        if fiche["nombre_etablissements_ouverts"] else "N/C",
+                    )
+                    if fiche["adresse"]:
+                        st.markdown(f"📍 Siège : {fiche['adresse']}")
+                    if fiche["date_creation"]:
+                        st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
+                    if fiche["siret_siege"]:
+                        st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
+                    if fiche["est_qualiopi"]:
+                        st.markdown("🏅 Organisme certifié Qualiopi")
+                    if fiche["url_annuaire"]:
+                        st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
+                elif infos_entretien:
+                    st.caption(
+                        "ℹ️ Aucune fiche administrative trouvée pour ce nom dans le répertoire "
+                        "des entreprises françaises (nom trop générique, entreprise étrangère, "
+                        "ou diffusion restreinte)."
+                    )
 
 # ---------------------------------------------------------------------------
 # Onglet "KPIs avancés"
