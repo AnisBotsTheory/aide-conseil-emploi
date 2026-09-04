@@ -266,7 +266,11 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
             {"libelle": lib, "nombre_offres": n, "pourcentage": round(100 * n / nb_total_offres)}
             for lib, n in compteur.most_common(15)
         ]
-        return pd.DataFrame(lignes)
+        # Colonnes explicites : pd.DataFrame([]) sans "columns=" ne crée AUCUNE colonne
+        # quand lignes est vide (ex: des offres ont été trouvées mais aucune ne mentionne
+        # de compétence dans cette catégorie précise) — provoquait un KeyError("libelle")
+        # plus loin sur df["libelle"] au lieu d'un DataFrame vide exploitable normalement.
+        return pd.DataFrame(lignes, columns=["libelle", "nombre_offres", "pourcentage"])
 
     return (
         _construire_df(compteurs["competence"]),
