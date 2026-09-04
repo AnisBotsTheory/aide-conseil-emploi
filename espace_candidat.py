@@ -211,13 +211,36 @@ with tab_profil:
 
             st.divider()
 
-            mots_cles_recherche_large = " ".join(postes_cv)
+            if "cv_suggestions_apercu" in st.session_state:
+                _, _, _, df_certifs, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
+                st.markdown("#### 🎓 Certifications les plus demandées")
+                st.caption(
+                    "ℹ️ France Travail n'a pas de champ dédié aux certifications — repérées par "
+                    "mot-clé dans les offres réelles (même échantillon que les suggestions de "
+                    "compétences de « Créer mon CV »), couverture partielle par construction."
+                )
+                if df_certifs.empty:
+                    st.info("Aucune certification identifiée dans les offres de cet échantillon.")
+                else:
+                    st.dataframe(
+                        df_certifs.rename(
+                            columns={"libelle": "Certification", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                st.divider()
 
             with st.spinner("Récupération des recruteurs actifs..."):
-                _, _, _, _, df_entreprises, _ = offres_par_ville(
-                    "TOUS", departement_actif,
-                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
-                )
+                if recherche_multi:
+                    _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
+                        codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
+                    )
+                else:
+                    _, _, _, _, df_entreprises, _ = offres_par_ville(
+                        code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
+                    )
 
             st.markdown("#### 🏢 Top recruteurs")
             st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
@@ -248,10 +271,14 @@ with tab_profil:
             st.markdown("#### 📍 Villes qui recrutent")
             st.caption(f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top recruteurs).")
             with st.spinner("Récupération des offres par ville..."):
-                df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
-                    "TOUS", departement_actif,
-                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
-                )
+                if recherche_multi:
+                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_multi(
+                        codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
+                    )
+                else:
+                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
+                        code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
+                    )
             st.metric("Total offres dans la région", total_region)
             # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
             # donnent la plage de publication réelle des offres renvoyées par l'API —
