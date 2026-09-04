@@ -413,7 +413,20 @@ def suggerer_postes(saisie, max_resultats=8):
         if score >= 55:  # seuil pour écarter le bruit non pertinent
             candidats[label] = max(candidats.get(label, 0), score)
 
-    resultats_tries = sorted(candidats.items(), key=lambda x: x[1], reverse=True)
+    # Pénalité par mot supplémentaire : fuzz.WRatio traite volontiers la saisie comme un
+    # SOUS-TEXTE de l'appellation et lui donne un score élevé, même quand l'appellation
+    # ajoute un mot qui change complètement le métier (ex: "chef de projet" saisi ->
+    # "Assistant chef de projet" bien noté alors que ce n'est pas le même métier). On
+    # pénalise chaque mot en trop par rapport à la saisie pour repousser ces faux amis
+    # derrière les correspondances de longueur équivalente.
+    mots_saisie = len(saisie_normalisee.split())
+    candidats_ajustes = {}
+    for label, score in candidats.items():
+        mots_label = len(_normaliser_texte(label).split())
+        mots_en_trop = max(0, mots_label - mots_saisie)
+        candidats_ajustes[label] = score - (mots_en_trop * 8)
+
+    resultats_tries = sorted(candidats_ajustes.items(), key=lambda x: x[1], reverse=True)
     return [label for label, _ in resultats_tries[:max_resultats]]
 
 
