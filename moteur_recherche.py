@@ -1202,17 +1202,24 @@ TRANCHE_EFFECTIF_LABELS = {
 def rechercher_entreprise_siren(nom_entreprise):
     """
     Cherche une entreprise par nom sur l'API "Recherche d'entreprises" (DINUM,
-    gratuite, sans clé) et renvoie une fiche synthétique du MEILLEUR résultat, ou
-    None si rien trouvé. La recherche par nom étant approximative (plusieurs
-    entreprises peuvent porter des noms proches), le résultat doit être présenté
-    comme une correspondance probable à vérifier, pas une certitude — surtout pour
+    gratuite, sans clé) et renvoie une fiche synthétique, ou None si rien trouvé.
+
+    Récupère plusieurs candidats (pas juste le premier) et préfère celui qui a un
+    effectif renseigné : pour un grand groupe, le tout premier résultat est souvent
+    la holding de tête (ex: "Capgemini SE"), qui n'emploie souvent personne en
+    propre et n'a qu'un seul établissement déclaré — l'entité opérationnelle réelle
+    (qui a un vrai effectif) est presque toujours plus informative pour un candidat
+    ou un recruteur.
+
+    La recherche par nom reste approximative — le résultat doit être présenté
+    comme une correspondance probable à vérifier, pas une certitude, surtout pour
     des noms d'entreprise courts ou très courants.
     """
     if not nom_entreprise or nom_entreprise == LABEL_ENTREPRISE_ANONYME:
         return None
     try:
         r = requests.get(
-            RECHERCHE_ENTREPRISES_URL, params={"q": nom_entreprise, "per_page": 1}, timeout=8
+            RECHERCHE_ENTREPRISES_URL, params={"q": nom_entreprise, "per_page": 5}, timeout=8
         )
         r.raise_for_status()
     except requests.RequestException:
@@ -1221,7 +1228,8 @@ def rechercher_entreprise_siren(nom_entreprise):
     resultats = r.json().get("results", [])
     if not resultats:
         return None
-    res = resultats[0]
+
+    res = next((c for c in resultats if c.get("tranche_effectif_salarie")), resultats[0])
     siege = res.get("siege", {}) or {}
     tranche = res.get("tranche_effectif_salarie")
 
@@ -1230,6 +1238,7 @@ def rechercher_entreprise_siren(nom_entreprise):
         "siren": res.get("siren"),
         "siret_siege": siege.get("siret"),
         "naf": res.get("activite_principale"),
+        "secteur_libelle": naf_vers_libelle(res.get("activite_principale")),
         "categorie_entreprise": res.get("categorie_entreprise"),  # TPE/PME/ETI/GE
         "tranche_effectif_libelle": TRANCHE_EFFECTIF_LABELS.get(tranche, "Non renseigné"),
         "adresse": siege.get("adresse"),
@@ -1242,6 +1251,24 @@ def rechercher_entreprise_siren(nom_entreprise):
         "nombre_etablissements_ouverts": res.get("nombre_etablissements_ouverts"),
         "url_annuaire": f"https://annuaire-entreprises.data.gouv.fr/entreprise/{res.get('siren')}" if res.get("siren") else None,
     }
+
+
+@st.cache_data(ttl=3600)
+def _referentiel_naf_vers_libelle():
+    """Dict code NAF -> libellé, construit une seule fois à partir du référentiel
+    secteurs d'activité France Travail (mêmes codes que le paramètre secteurActivite
+    de l'API Offres d'emploi — à vérifier si jamais les codes SIRENE s'avèrent dans
+    un format légèrement différent en pratique)."""
+    return {s.get("code"): s.get("libelle") for s in get_secteurs_activite() if s.get("code")}
+
+
+def naf_vers_libelle(code_naf):
+    """Libellé humain d'un code NAF (ex: '84.11Z' -> 'Administration publique
+    générale'), ou None si le code est absent du référentiel — mieux vaut ne rien
+    afficher qu'un mauvais libellé deviné."""
+    if not code_naf:
+        return None
+    return _referentiel_naf_vers_libelle().get(code_naf)
 
 
 def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
@@ -1812,6 +1839,8 @@ __all__ = [
     "RECHERCHE_ENTREPRISES_URL",
     "TRANCHE_EFFECTIF_LABELS",
     "rechercher_entreprise_siren",
+    "_referentiel_naf_vers_libelle",
+    "naf_vers_libelle",
     "infos_entretien_entreprise",
     "offres_par_ville",
     "volumes_departement_offres",
