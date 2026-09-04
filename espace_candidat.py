@@ -105,12 +105,18 @@ with tab_profil:
             st.error("Aucune offre trouvée pour ce département. Essaie d'élargir les critères.")
         else:
             # Tous les indicateurs de cet onglet (tension, top recruteurs, top villes)
-            # partagent désormais la même base de temps : depuis le 1er janvier de l'année
-            # en cours. Poste et secteur restent les mêmes filtres que partout ailleurs.
+            # Tous les indicateurs de cet onglet (tension, top recruteurs, top villes)
+            # partagent désormais la même base de temps : depuis le début du semestre EN
+            # COURS (celui qui contient la date d'aujourd'hui). Poste et secteur restent
+            # les mêmes filtres que partout ailleurs.
             aujourdhui = datetime.now()
-            debut_annee = datetime(aujourdhui.year, 1, 1)
-            libelle_periode_offres = f"depuis janvier {aujourdhui.year}"
-            jours_max_periode_offres = (aujourdhui - debut_annee).days
+            if aujourdhui.month <= 6:
+                debut_periode = datetime(aujourdhui.year, 1, 1)
+                libelle_periode_offres = f"1er semestre {aujourdhui.year}"
+            else:
+                debut_periode = datetime(aujourdhui.year, 7, 1)
+                libelle_periode_offres = f"2e semestre {aujourdhui.year}"
+            jours_max_periode_offres = (aujourdhui - debut_periode).days
 
             st.markdown("#### ⚖️ Tension du marché")
             if code_rome_choisi == "TOUS":
@@ -128,24 +134,36 @@ with tab_profil:
                 )
             else:
                 st.caption(
-                    f"ℹ️ Le nombre d'offres porte sur le {libelle_periode_offres} (même base que "
-                    "le top recruteurs et le top villes plus bas) ; les demandeurs d'emploi "
-                    "restent une statistique officielle trimestrielle (non filtrable par date)."
+                    f"ℹ️ Les offres comptent depuis le début du semestre en cours (actuellement le "
+                    f"{libelle_periode_offres}) ; les demandeurs d'emploi restent une statistique "
+                    "officielle trimestrielle (non filtrable par date)."
                     + (
                         " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
                         "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
-                        "indicateur officiel par métier unique."
+                        "indicateur officiel par métier unique — détail par poste ci-dessous."
                         if recherche_multi else ""
                     )
                 )
+                detail_par_poste = []
                 if recherche_multi:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
-                        total_dep_offres = volumes_departement_offres_multi(
-                            codes_rome_choisis, departement_actif, jours_max=jours_max_periode_offres,
-                        )
-                        total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = (
-                            demandeurs_emploi_departement_multi(codes_rome_choisis, departement_actif)
-                        )
+                        for label, code in codes_par_poste_cv.items():
+                            if not code:
+                                continue
+                            offres_i = volumes_departement_offres(
+                                code, departement_actif, jours_max=jours_max_periode_offres
+                            )
+                            demandeurs_i, periode_i, erreur_i = demandeurs_emploi_departement(
+                                code, departement_actif
+                            )
+                            detail_par_poste.append((label, offres_i, demandeurs_i, erreur_i))
+                    total_dep_offres = sum(o for _, o, _, _ in detail_par_poste)
+                    demandeurs_valides = [d for _, _, d, e in detail_par_poste if not e]
+                    total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
+                    periode_demandeurs = None  # non affiché en multi (périodes potentiellement différentes par poste)
+                    erreur_demandeurs = (
+                        None if demandeurs_valides else "toutes les requêtes demandeurs ont échoué"
+                    )
                 else:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
                         total_dep_offres = volumes_departement_offres(
@@ -165,11 +183,19 @@ with tab_profil:
                     )
                 else:
                     c1, c2 = st.columns(2)
-                    c1.metric(f"Offres — {libelle_periode_offres}", total_dep_offres)
+                    c1.metric("Offres", total_dep_offres)
                     c2.metric(
                         f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
                         total_dep_demandeurs,
                     )
+
+                if recherche_multi and detail_par_poste:
+                    with st.expander("🔎 Détail par poste (pour repérer un éventuel poste hors-sujet)"):
+                        for label, offres_i, demandeurs_i, erreur_i in detail_par_poste:
+                            if erreur_i:
+                                st.caption(f"**{label}** — demandeurs indisponibles ({erreur_i})")
+                            else:
+                                st.caption(f"**{label}** — {offres_i} offre(s), {demandeurs_i} demandeur(s)")
 
                 tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
                 if tension is not None:
