@@ -1,584 +1,1073 @@
 """
-espace_candidat.py
---------------------
-Page "Espace Candidat" — 3 onglets (Créer mon CV, Tendance par profil, KPIs
-avancés), accès gratuit et public. Toute la logique de calcul vient de
-moteur_recherche.py (aucune duplication).
+cv_builder.py
+--------------
+Formulaire de création de CV pour l'application "Aide Conseil Emploi".
+Mise en page à deux colonnes (bandeau latéral coloré + colonne principale),
+avec 3 thèmes de couleur au choix. Pas de photo (décision produit actuelle).
 
-L'onglet "Offres d'emploi" a été retiré : lister des offres n'a pas d'avantage
-face aux plateformes dédiées (France Travail, LinkedIn, Indeed...) — pas
-d'alertes, pas de candidature en un clic, pas de sauvegarde de recherche. Ce
-qui reste différenciant, c'est la lecture de marché (tension, évolution,
-répartition contrats/salaires, villes/recruteurs actifs) — pas le listing
-d'offres lui-même. "Villes qui recrutent"/"Top recruteurs" deviennent des
-pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
-
-V4 : le sélecteur de poste par tags (auparavant _selecteur_poste, privé à ce
-fichier) est désormais FACTORISÉ dans moteur_recherche.py sous le nom
-selecteur_poste_tags() — réutilisé aussi bien dans "Créer mon CV" que dans
-cette page. La sélection de poste se fait maintenant UNE SEULE FOIS, dès
-l'onglet "Créer mon CV" (st.session_state["cv_postes_choisis"] /
-["cv_codes_rome_choisis"]) : "Tendance par profil" lit directement cette
-sélection au lieu de la re-résoudre silencieusement depuis le texte libre
-cv_titre (ancien comportement, qui laissait d'ailleurs une variable
-postes_choisis_profil non définie plus bas dans ce fichier — corrigé ici).
+Intégration dans app.py :
+    from cv_builder import afficher_generateur_cv
+    ...
+    with tab_cv:
+        afficher_generateur_cv()
 """
 
 import streamlit as st
-import pandas as pd
-import folium
-from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
-# moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
-import altair as alt
-import plotly.express as px
-import plotly.graph_objects as go
-from folium.plugins import MarkerCluster
-from streamlit_folium import st_folium
-
-from cv_builder import afficher_generateur_cv
-from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées (dont
-# selecteur_poste_tags et analyser_competences_multi, cf. V4)
-
-st.title("🎯 Aide Conseil Emploi")
-st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
-
-appellations = get_referentiel_appellations()
-labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
-
-
-def _selecteur_departement(cle_prefixe):
-    """
-    Sélecteur de département en MULTI-sélection, avec option "Toute la France"
-    (recherche nationale — l'API le permet nativement en omettant le paramètre
-    département). Plusieurs départements sont envoyés à l'API sous forme de
-    codes séparés par une virgule (accepté nativement par l'API Offres d'emploi
-    France Travail).
-
-    Retourne une valeur de paramètre département :
-    - None -> "Toute la France" (aucun filtre)
-    - ""   -> rien sélectionné (état invalide, à gérer par l'appelant)
-    - "13" ou "13,75" -> un ou plusieurs codes
-    """
-    cle_checkbox = f"{cle_prefixe}_checkbox_toute_france"
-    cle_multiselect = f"{cle_prefixe}_departements_multiselect"
-
-    # Valeur du run précédent pour désactiver le multiselect si "Toute la France" est
-    # cochée — la case est rendue APRÈS le multiselect (demande UX), donc on ne connaît
-    # sa valeur pour CE run qu'après l'avoir affichée ; celle du run précédent suffit
-    # pour l'état "disabled" (même trick que pour d'autres sélecteurs de l'app).
-    toute_la_france_precedente = st.session_state.get(cle_checkbox, False)
-
-    if cle_multiselect not in st.session_state:
-        # Préremplit depuis le département renseigné dans "Créer mon CV" (cv_departement),
-        # sinon retombe sur le département par défaut de l'app.
-        code_departement_cv = st.session_state.get("cv_departement")
-        nom_departement_cv = DEPARTEMENTS_VERS_NOM.get(code_departement_cv) if code_departement_cv else None
-        if code_departement_cv and nom_departement_cv:
-            st.session_state[cle_multiselect] = [f"{code_departement_cv} - {nom_departement_cv}"]
-        else:
-            st.session_state[cle_multiselect] = ["13 - Bouches-du-Rhône"]
-
-    options_departements = sorted(f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items())
-    labels_choisis = st.multiselect(
-        "Département(s) (région d'intérêt)",
-        options=options_departements,
-        key=cle_multiselect,
-        disabled=toute_la_france_precedente,
-    )
-
-    toute_la_france = st.checkbox("🇫🇷 Toute la France (aucun filtre département)", key=cle_checkbox)
-    if toute_la_france:
-        return None
-
-    if not labels_choisis:
-        st.info("Sélectionne au moins un département ci-dessus, ou coche « Toute la France ».")
-        return ""
-    return ",".join(label.split(" - ")[0] for label in labels_choisis)
-
-
-def _libelle_departement_affiche(departement_param):
-    """Libellé lisible pour un titre de section ('département 13', 'départements
-    13, 75', 'toute la France')."""
-    if not departement_param:
-        return "toute la France"
-    codes = departement_param.split(",")
-    if len(codes) == 1:
-        return f"département {codes[0]}"
-    return "départements " + ", ".join(codes)
-
-
-# NB (V4) : l'ancien sélecteur de poste privé _selecteur_poste(...) a été
-# supprimé d'ici et déplacé dans moteur_recherche.py sous le nom public
-# selecteur_poste_tags(...) — importé plus haut via `from moteur_recherche
-# import *`. Utilisé désormais uniquement dans cv_builder.py (onglet "Créer
-# mon CV") : "Tendance par profil" lit directement la sélection qui en
-# résulte (st.session_state["cv_postes_choisis"] / ["cv_codes_rome_choisis"])
-# plutôt que de re-proposer un second sélecteur redondant.
-
-
-st.divider()
-
-tab_cv, tab_profil, tab_avance = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés"]
+import re
+import os
+import requests
+from docx import Document
+from docx.shared import Pt, Cm, RGBColor, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from moteur_recherche import (
+    DEPARTEMENTS_VERS_NOM,
+    suggerer_postes,
+    get_referentiel_appellations,
+    _extraire_code_rome,
+    resoudre_codes_rome,
 )
+from io import BytesIO
+
 
 # ---------------------------------------------------------------------------
-# Onglet 0 : Créer mon CV (exécuté en premier : sa synchronisation vers
-# "Métier recherché" doit être en place avant que ce champ ne soit affiché)
+# Thèmes de couleur
 # ---------------------------------------------------------------------------
-with tab_cv:
-    afficher_generateur_cv(fonction_analyse_competences_multi=analyser_competences_multi)
+THEMES = {
+    "🔵 Bleu classique": {
+        "accent": "2E74B5",       # titres, nom, filets — couleur exacte de la référence
+        "bandeau_fond": "EAF1F8",  # fond du bandeau latéral
+        "bandeau_texte": "2E74B5",
+    },
+    "🍷 Bordeaux élégant": {
+        "accent": "7B2C3B",
+        "bandeau_fond": "F6ECEE",
+        "bandeau_texte": "7B2C3B",
+    },
+    "🟢 Vert forêt": {
+        "accent": "2F5233",
+        "bandeau_fond": "EAF2EA",
+        "bandeau_texte": "2F5233",
+    },
+}
+
 
 # ---------------------------------------------------------------------------
-# Onglet 1 : Tendance par profil
+# Traduction du CV (FR / EN / ES)
 # ---------------------------------------------------------------------------
-with tab_profil:
-    st.write(
-        "Analyse du marché pour le/les poste(s) sélectionné(s) dans votre CV : où sont les "
-        "offres près de chez vous, le volume national, et le niveau de tension du marché."
+LANGUES_CV = {
+    "🇫🇷 Français": "FR",
+    "🇬🇧 English": "EN-GB",
+    "🇪🇸 Español": "ES",
+}
+
+# Libellés de section fixes — pas besoin d'appel API, ils ne changent jamais.
+LIBELLES = {
+    "FR": {
+        "contact": "Contact", "email": "E-mail", "telephone": "Téléphone", "adresse": "Adresse",
+        "langues": "Langues", "competences": "Compétences", "outils": "Outils informatiques",
+        "langages": "Langages informatiques", "interets": "Centres d'intérêt",
+        "experiences": "Expériences professionnelles", "formation": "Formation",
+        "presentation": "Présentation", "disponibilite": "Disponibilité",
+    },
+    "EN-GB": {
+        "contact": "Contact", "email": "Email", "telephone": "Phone", "adresse": "Address",
+        "langues": "Languages", "competences": "Skills", "outils": "IT Tools",
+        "langages": "Programming Languages", "interets": "Interests",
+        "experiences": "Professional Experience", "formation": "Education",
+        "presentation": "Profile", "disponibilite": "Availability",
+    },
+    "ES": {
+        "contact": "Contacto", "email": "Correo electrónico", "telephone": "Teléfono", "adresse": "Dirección",
+        "langues": "Idiomas", "competences": "Competencias", "outils": "Herramientas informáticas",
+        "langages": "Lenguajes informáticos", "interets": "Intereses",
+        "experiences": "Experiencia profesional", "formation": "Formación",
+        "presentation": "Presentación", "disponibilite": "Disponibilidad",
+    },
+}
+
+
+def _traduire_lot(textes, langue_cible):
+    """
+    Traduit une liste de textes en un seul appel DeepL (économise les appels et
+    la latence). Dégradation silencieuse vers le texte original (français) si la
+    clé API n'est pas configurée ou si l'appel échoue — ne bloque jamais la
+    génération du CV.
+    """
+    if langue_cible == "FR":
+        return textes
+
+    cle_api = os.environ.get("DEEPL_API_KEY")
+    if not cle_api:
+        return textes
+
+    index_non_vides = [i for i, t in enumerate(textes) if t and t.strip()]
+    if not index_non_vides:
+        return textes
+
+    try:
+        url = "https://api-free.deepl.com/v2/translate"
+        headers = {"Authorization": f"DeepL-Auth-Key {cle_api}"}
+        data = [("text", textes[i]) for i in index_non_vides]
+        data += [("target_lang", langue_cible), ("source_lang", "FR")]
+        r = requests.post(url, headers=headers, data=data, timeout=15)
+        if r.status_code != 200:
+            return textes
+        traductions = r.json().get("translations", [])
+        if len(traductions) != len(index_non_vides):
+            return textes
+        resultats = list(textes)
+        for position, index_original in enumerate(index_non_vides):
+            resultats[index_original] = traductions[position]["text"]
+        return resultats
+    except Exception:
+        return textes
+
+
+# ---------------------------------------------------------------------------
+# Drapeaux (facultatif, best-effort — langues reconnues seulement)
+# ---------------------------------------------------------------------------
+DRAPEAUX_LANGUES = {
+    "français": "🇫🇷", "anglais": "🇬🇧", "espagnol": "🇪🇸", "allemand": "🇩🇪",
+    "italien": "🇮🇹", "portugais": "🇵🇹", "arabe": "🇸🇦", "chinois": "🇨🇳",
+    "mandarin": "🇨🇳", "japonais": "🇯🇵", "russe": "🇷🇺", "néerlandais": "🇳🇱",
+    "coréen": "🇰🇷", "turc": "🇹🇷", "polonais": "🇵🇱", "grec": "🇬🇷",
+    "hébreu": "🇮🇱", "hindi": "🇮🇳", "suédois": "🇸🇪", "norvégien": "🇳🇴",
+    "danois": "🇩🇰", "finnois": "🇫🇮", "roumain": "🇷🇴", "ukrainien": "🇺🇦",
+}
+
+
+def _drapeau_pour_langue(texte_ligne):
+    """Retourne un drapeau si le nom de la langue est reconnu, sinon chaîne vide."""
+    debut = texte_ligne.strip().lower()
+    for nom, drapeau in DRAPEAUX_LANGUES.items():
+        if debut.startswith(nom):
+            return drapeau + " "
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Échelle automatique (police / espacement) pour tenir sur une page
+# ---------------------------------------------------------------------------
+def _estimer_volume_contenu(data):
+    volume = len(data.get("profil", ""))
+    for exp in data.get("experiences", []):
+        volume += len(exp.get("description", "")) + 60
+    for form in data.get("formations", []):
+        volume += 40
+    volume += len(data.get("langues", ""))
+    volume += len(data.get("competences", ""))
+    volume += len(data.get("outils", ""))
+    volume += len(data.get("langages_informatiques", ""))
+    volume += len(data.get("interets", ""))
+    return volume
+
+
+def _calculer_echelle(volume):
+    """Plus le contenu est volumineux, plus on réduit polices/espacements."""
+    if volume < 1400:
+        return 1.0
+    elif volume < 2200:
+        return 0.92
+    elif volume < 3000:
+        return 0.85
+    elif volume < 3800:
+        return 0.78
+    elif volume < 4600:
+        return 0.71
+    elif volume < 5500:
+        return 0.65
+    elif volume < 6500:
+        return 0.60
+    else:
+        return 0.55
+
+
+def _calculer_marge_verticale(echelle):
+    """Réduit aussi les marges haut/bas de page pour les contenus très volumineux."""
+    if echelle >= 0.85:
+        return 1.2
+    elif echelle >= 0.65:
+        return 0.9
+    else:
+        return 0.6
+
+
+def _pt(base, echelle):
+    return Pt(round(base * echelle * 2) / 2)
+
+
+# ---------------------------------------------------------------------------
+# Initialisation de l'état
+# ---------------------------------------------------------------------------
+def _init_cv_state():
+    if "cv_experiences" not in st.session_state:
+        st.session_state.cv_experiences = []
+    if "cv_formations" not in st.session_state:
+        st.session_state.cv_formations = []
+
+
+# ---------------------------------------------------------------------------
+# Sections dynamiques (expériences / formations)
+# ---------------------------------------------------------------------------
+def _section_experiences():
+    st.markdown("#### 💼 Expériences professionnelles")
+
+    a_supprimer = None
+    for i, exp in enumerate(st.session_state.cv_experiences):
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            exp["poste"] = c1.text_input("Poste", value=exp.get("poste", ""), key=f"exp_poste_{i}")
+            exp["entreprise"] = c2.text_input("Entreprise", value=exp.get("entreprise", ""), key=f"exp_entreprise_{i}")
+
+            c3, c4, c5, c6 = st.columns(4)
+            exp["ville"] = c3.text_input("Ville", value=exp.get("ville", ""), key=f"exp_ville_{i}")
+            exp["pays"] = c4.text_input("Pays", value=exp.get("pays", ""), key=f"exp_pays_{i}")
+            exp["date_debut"] = c5.text_input("Début (ex: Jan. 2022)", value=exp.get("date_debut", ""), key=f"exp_debut_{i}")
+            exp["date_fin"] = c6.text_input("Fin (ex: Déc. 2023 ou En cours)", value=exp.get("date_fin", ""), key=f"exp_fin_{i}")
+
+            exp["description"] = st.text_area(
+                "Missions / réalisations (une ligne = une puce)",
+                value=exp.get("description", ""),
+                key=f"exp_description_{i}",
+                height=100,
+            )
+
+            if st.button("🗑️ Supprimer cette expérience", key=f"exp_supprimer_{i}"):
+                a_supprimer = i
+
+    if a_supprimer is not None:
+        st.session_state.cv_experiences.pop(a_supprimer)
+        st.rerun()
+
+    if st.button("➕ Ajouter une expérience"):
+        st.session_state.cv_experiences.append({})
+        st.rerun()
+
+
+def _section_formations():
+    st.markdown("#### 🎓 Formation")
+
+    a_supprimer = None
+    for i, form in enumerate(st.session_state.cv_formations):
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            form["diplome"] = c1.text_input("Diplôme", value=form.get("diplome", ""), key=f"form_diplome_{i}")
+            form["etablissement"] = c2.text_input("Établissement", value=form.get("etablissement", ""), key=f"form_etab_{i}")
+
+            c3, c4, c5 = st.columns(3)
+            form["ville"] = c3.text_input("Ville", value=form.get("ville", ""), key=f"form_ville_{i}")
+            form["pays"] = c4.text_input("Pays", value=form.get("pays", ""), key=f"form_pays_{i}")
+            form["annee"] = c5.text_input("Année (ex: sept 2017 / oct 2018)", value=form.get("annee", ""), key=f"form_annee_{i}")
+
+            if st.button("🗑️ Supprimer cette formation", key=f"form_supprimer_{i}"):
+                a_supprimer = i
+
+    if a_supprimer is not None:
+        st.session_state.cv_formations.pop(a_supprimer)
+        st.rerun()
+
+    if st.button("➕ Ajouter une formation"):
+        st.session_state.cv_formations.append({})
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Helpers python-docx bas niveau (ombrage de cellule, bordures de tableau)
+# ---------------------------------------------------------------------------
+def _ombrer_cellule(cell, couleur_hex):
+    """Applique une couleur de fond à une cellule de tableau (non exposé par l'API haut niveau)."""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), couleur_hex)
+    tc_pr.append(shd)
+
+
+def _supprimer_bordures_tableau(table):
+    """Retire toutes les bordures d'un tableau (utilisé comme grille de mise en page invisible)."""
+    tbl = table._tbl
+    tbl_pr = tbl.tblPr
+    borders = OxmlElement("w:tblBorders")
+    for cote in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        elem = OxmlElement(f"w:{cote}")
+        elem.set(qn("w:val"), "nil")
+        borders.append(elem)
+    tbl_pr.append(borders)
+
+
+def _definir_marges_cellule(cell, gauche=0.15, droite=0.15, haut=0.05, bas=0.05):
+    """Définit des marges internes (en cm) pour une cellule."""
+    tc_pr = cell._tc.get_or_add_tcPr()
+    tc_mar = OxmlElement("w:tcMar")
+    for cote, valeur in (("left", gauche), ("right", droite), ("top", haut), ("bottom", bas)):
+        elem = OxmlElement(f"w:{cote}")
+        elem.set(qn("w:w"), str(int(valeur * 567)))  # cm -> twips (1cm ≈ 567 twips)
+        elem.set(qn("w:type"), "dxa")
+        tc_mar.append(elem)
+    tc_pr.append(tc_mar)
+
+
+def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0, espace_avant=12):
+    """Ajoute un titre de section stylé (majuscules, gras, coloré)."""
+    p = cell_ou_doc.add_paragraph()
+    p.paragraph_format.space_before = _pt(espace_avant, echelle)
+    p.paragraph_format.space_after = _pt(4, echelle)
+    run = p.add_run(texte.upper())
+    run.bold = True
+    run.font.size = _pt(taille, echelle)
+    run.font.color.rgb = RGBColor.from_string(couleur_hex)
+    return p
+
+
+_CARACTERES_PUCE_PARASITES = " -•➤▸●○*>·‣¬▪"
+
+
+def _nettoyer_ligne(texte):
+    """Retire les puces/symboles que l'utilisateur a pu coller depuis un autre CV
+    (➤, ▸, -, •...) pour éviter un double affichage avec notre propre puce."""
+    return texte.strip(_CARACTERES_PUCE_PARASITES).strip()
+
+
+def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10, echelle=1.0, caractere="¬"):
+    p = cell_ou_doc.add_paragraph()
+    # Espacement conforme à la valeur mesurée dans le format de référence (~3pt)
+    p.paragraph_format.space_after = _pt(3, echelle)
+    run = p.add_run(f"{caractere} {texte}")
+    run.font.size = _pt(taille, echelle)
+    if couleur_puce:
+        run.font.color.rgb = RGBColor.from_string(couleur_puce)
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Tri automatique par date (expériences / formations, anti-chronologique)
+# ---------------------------------------------------------------------------
+_MOIS_FR_NUM = {
+    "janvier": 1, "jan": 1, "février": 2, "fevrier": 2, "fév": 2, "fev": 2,
+    "mars": 3, "avril": 4, "avr": 4, "mai": 5, "juin": 6, "juillet": 7, "juil": 7,
+    "août": 8, "aout": 8, "septembre": 9, "sept": 9, "sep": 9,
+    "octobre": 10, "oct": 10, "novembre": 11, "nov": 11,
+    "décembre": 12, "decembre": 12, "déc": 12, "dec": 12,
+}
+
+
+def _valeur_tri_date(texte):
+    """
+    Extrait une valeur triable (année x 12 + mois) à partir d'un texte de date
+    libre en français (ex: "Août 2025", "sept 2017 / oct 2018", "En cours").
+    "En cours" est traité comme la date la plus récente possible. Retourne 0
+    si aucune date n'est reconnue (l'élément descend en fin de liste).
+    """
+    if not texte:
+        return 0
+    texte_normalise = texte.lower().strip()
+    if any(mot in texte_normalise for mot in ("en cours", "aujourd'hui", "present", "présent")):
+        return 999999
+
+    annees = [int(a) for a in re.findall(r"(?:19|20)\d{2}", texte_normalise)]
+    if not annees:
+        return 0
+    annee_retenue = max(annees)  # la plus tardive mentionnée (ex: "sept 2017 / oct 2018" -> 2018)
+
+    mois_retenu = 1
+    for nom_mois, num_mois in _MOIS_FR_NUM.items():
+        if nom_mois in texte_normalise:
+            mois_retenu = num_mois
+
+    return annee_retenue * 12 + mois_retenu
+
+
+def _trier_par_date(elements, cle_principale, cle_secondaire=None):
+    """Trie une liste d'expériences/formations du plus récent au plus ancien."""
+
+    def _cle_tri(element):
+        texte = element.get(cle_principale, "")
+        if not texte and cle_secondaire:
+            texte = element.get(cle_secondaire, "")
+        return _valeur_tri_date(texte)
+
+    return sorted(elements, key=_cle_tri, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Majuscule automatique (première lettre uniquement, conventions françaises)
+# ---------------------------------------------------------------------------
+def _majuscule_premiere_lettre(texte):
+    texte = (texte or "").strip()
+    if not texte:
+        return texte
+    return texte[0].upper() + texte[1:]
+
+
+# ---------------------------------------------------------------------------
+# Génération du document Word (mise en page 2 colonnes)
+# ---------------------------------------------------------------------------
+def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, afficher_drapeaux=True, langue="FR"):
+    theme = THEMES.get(theme_nom, THEMES["🔵 Bleu classique"])
+    accent = theme["accent"]
+    bandeau_fond = theme["bandeau_fond"]
+    bandeau_texte = theme["bandeau_texte"]
+    echelle = _calculer_echelle(_estimer_volume_contenu(data))
+    libelles = LIBELLES.get(langue, LIBELLES["FR"])
+
+    # --- Traduction groupée des champs texte libre (un seul appel API DeepL) ---
+    experiences_brutes = data.get("experiences", [])
+    formations_brutes = data.get("formations", [])
+
+    textes_a_traduire = [data.get("profil", ""), data.get("titre_recherche", "")]
+    for exp in experiences_brutes:
+        textes_a_traduire.append(exp.get("poste", ""))
+        textes_a_traduire.append(exp.get("description", ""))
+    for form in formations_brutes:
+        textes_a_traduire.append(form.get("diplome", ""))
+
+    textes_traduits = _traduire_lot(textes_a_traduire, langue)
+
+    experiences_traduites = []
+    formations_traduites = []
+    curseur = 2
+    for exp in experiences_brutes:
+        exp_copie = dict(exp)
+        exp_copie["poste"] = textes_traduits[curseur]
+        exp_copie["description"] = textes_traduits[curseur + 1]
+        curseur += 2
+        experiences_traduites.append(exp_copie)
+    for form in formations_brutes:
+        form_copie = dict(form)
+        form_copie["diplome"] = textes_traduits[curseur]
+        curseur += 1
+        formations_traduites.append(form_copie)
+
+    # On poursuit sur une copie de data avec les champs traduits substitués —
+    # noms, dates, villes, pays, e-mail... restent inchangés (non traduits).
+    data = dict(data)
+    data["profil"] = textes_traduits[0]
+    data["titre_recherche"] = textes_traduits[1]
+    data["experiences"] = experiences_traduites
+    data["formations"] = formations_traduites
+
+    doc = Document()
+    # Interligne compact par défaut (évite l'espacement 1.08/1.15 par défaut de Word,
+    # qui gonfle inutilement la hauteur de chaque ligne de texte).
+    style_normal = doc.styles["Normal"]
+    style_normal.paragraph_format.line_spacing = 1.0
+    style_normal.paragraph_format.space_after = Pt(0)
+
+    for section in doc.sections:
+        section.top_margin = Cm(0.46)
+        section.bottom_margin = Cm(0.46)
+        section.left_margin = Cm(0.46)
+        section.right_margin = Cm(0.46)
+        largeur_utile = section.page_width - section.left_margin - section.right_margin
+
+    largeur_bandeau = Inches(2.3)
+    largeur_principale = largeur_utile - largeur_bandeau
+
+    # --- Tableau de mise en page 1 ligne x 2 colonnes, bordures invisibles ---
+    table = doc.add_table(rows=1, cols=2)
+    table.autofit = False
+    _supprimer_bordures_tableau(table)
+    table.columns[0].width = largeur_bandeau
+    table.columns[1].width = largeur_principale
+
+    cell_bandeau = table.cell(0, 0)
+    cell_principale = table.cell(0, 1)
+    cell_bandeau.width = largeur_bandeau
+    cell_principale.width = largeur_principale
+    _ombrer_cellule(cell_bandeau, bandeau_fond)
+    marge_cellule_haut = 0.15 if echelle < 0.85 else 0.3
+    _definir_marges_cellule(cell_bandeau, gauche=0.35, droite=0.25, haut=marge_cellule_haut, bas=0.15)
+    _definir_marges_cellule(cell_principale, gauche=0.35, droite=0.1, haut=marge_cellule_haut, bas=0.15)
+    cell_bandeau.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+    cell_principale.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+
+    # Suppression réelle (pas juste vidage du texte) du paragraphe auto-créé dans
+    # chaque cellule — sinon il reste une ligne vide qui pousse tout le contenu
+    # vers le bas, y compris le nom en haut de la colonne principale.
+    for cellule in (cell_bandeau, cell_principale):
+        p_vide = cellule.paragraphs[0]
+        p_vide._element.getparent().remove(p_vide._element)
+
+    # =======================================================================
+    # BANDEAU LATÉRAL
+    # =======================================================================
+    # --- Photo (facultative) ---
+    if photo_bytes:
+        p_photo = cell_bandeau.add_paragraph()
+        p_photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_photo.paragraph_format.space_after = _pt(10, echelle)
+        run_photo = p_photo.add_run()
+        run_photo.add_picture(BytesIO(photo_bytes), width=Inches(1.6))
+
+    # --- Contact ---
+    _titre_section(cell_bandeau, libelles["contact"], bandeau_texte, echelle=echelle, espace_avant=0)
+    for icone, label, valeur in [
+        ("📧", libelles["email"], data.get("email")),
+        ("📱", libelles["telephone"], data.get("telephone")),
+        ("🏠", libelles["adresse"], data.get("adresse")),
+    ]:
+        if valeur:
+            p = cell_bandeau.add_paragraph()
+            p.paragraph_format.space_after = _pt(6, echelle)
+            run_label = p.add_run(f"{icone} {label}\n")
+            run_label.bold = True
+            run_label.font.size = _pt(9, echelle)
+            run_label.font.color.rgb = RGBColor.from_string(bandeau_texte)
+            run_val = p.add_run(valeur)
+            run_val.font.size = _pt(10, echelle)
+
+    # --- Langues ---
+    if data.get("langues"):
+        _titre_section(cell_bandeau, libelles["langues"], bandeau_texte, echelle=echelle)
+        for ligne in data["langues"].split("\n"):
+            ligne = _nettoyer_ligne(ligne)
+            if ligne:
+                prefixe = _drapeau_pour_langue(ligne) if afficher_drapeaux else ""
+                _puce(cell_bandeau, f"{prefixe}{ligne}", echelle=echelle, caractere="▪")
+
+    # --- Compétences ---
+    if data.get("competences"):
+        _titre_section(cell_bandeau, libelles["competences"], bandeau_texte, echelle=echelle)
+        for ligne in data["competences"].split("\n"):
+            ligne = _nettoyer_ligne(ligne)
+            if ligne:
+                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+
+    # --- Outils informatiques ---
+    if data.get("outils"):
+        _titre_section(cell_bandeau, libelles["outils"], bandeau_texte, echelle=echelle)
+        for ligne in data["outils"].split("\n"):
+            ligne = _nettoyer_ligne(ligne)
+            if ligne:
+                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+
+    # --- Langages informatiques (facultatif, invisible si vide — profils non-tech) ---
+    if data.get("langages_informatiques"):
+        _titre_section(cell_bandeau, libelles["langages"], bandeau_texte, echelle=echelle)
+        for ligne in data["langages_informatiques"].split("\n"):
+            ligne = _nettoyer_ligne(ligne)
+            if ligne:
+                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+
+    # --- Centres d'intérêt ---
+    if data.get("interets"):
+        _titre_section(cell_bandeau, libelles["interets"], bandeau_texte, echelle=echelle)
+        interets_list = [i.strip() for i in data["interets"].replace("\n", ",").split(",") if i.strip()]
+        for interet in interets_list:
+            _puce(cell_bandeau, interet, echelle=echelle, caractere="▪")
+
+    # =======================================================================
+    # COLONNE PRINCIPALE
+    # =======================================================================
+    # --- En-tête : nom + titre recherché ---
+    p_nom = cell_principale.add_paragraph()
+    p_nom.paragraph_format.space_after = Pt(0)
+    run_nom = p_nom.add_run(f"{data.get('prenom', '')} {data.get('nom', '')}".strip().upper())
+    run_nom.bold = True
+    run_nom.font.size = _pt(28, echelle)
+    run_nom.font.color.rgb = RGBColor.from_string(accent)
+
+    if data.get("titre_recherche"):
+        p_titre = cell_principale.add_paragraph()
+        p_titre.paragraph_format.space_after = _pt(8, echelle)
+        run_titre = p_titre.add_run(data["titre_recherche"])
+        run_titre.italic = True
+        run_titre.font.size = _pt(13, echelle)
+        run_titre.font.color.rgb = RGBColor.from_string(accent)
+
+    # Filet horizontal sous l'en-tête
+    p_filet = cell_principale.add_paragraph()
+    p_filet.paragraph_format.space_after = _pt(8, echelle)
+    pPr = p_filet._p.get_or_add_pPr()
+    bord = OxmlElement("w:pBdr")
+    bas = OxmlElement("w:bottom")
+    bas.set(qn("w:val"), "single")
+    bas.set(qn("w:sz"), "12")
+    bas.set(qn("w:space"), "1")
+    bas.set(qn("w:color"), accent)
+    bord.append(bas)
+    pPr.append(bord)
+
+    # --- Présentation (label en gras intégré au paragraphe, pas de titre de section séparé) ---
+    if data.get("profil"):
+        p = cell_principale.add_paragraph()
+        p.paragraph_format.space_after = _pt(4, echelle)
+        run_label = p.add_run(f"{libelles['presentation']} : ")
+        run_label.bold = True
+        run_label.font.size = _pt(10.5, echelle)
+        run_texte = p.add_run(data["profil"])
+        run_texte.font.size = _pt(10.5, echelle)
+
+    # --- Disponibilité ---
+    if data.get("disponibilite"):
+        p_dispo = cell_principale.add_paragraph()
+        p_dispo.paragraph_format.space_after = _pt(8, echelle)
+        run_dispo_label = p_dispo.add_run(f"{libelles['disponibilite']} : ")
+        run_dispo_label.bold = True
+        run_dispo_label.italic = True
+        run_dispo_label.font.size = _pt(10, echelle)
+        run_dispo_val = p_dispo.add_run(data["disponibilite"])
+        run_dispo_val.italic = True
+        run_dispo_val.font.size = _pt(10, echelle)
+
+    # --- Expériences ---
+    experiences = [e for e in data.get("experiences", []) if e.get("poste") or e.get("entreprise")]
+    experiences = _trier_par_date(experiences, "date_fin", "date_debut")
+    if experiences:
+        _titre_section(cell_principale, libelles["experiences"], accent, taille=16, echelle=echelle)
+        for exp in experiences:
+            p = cell_principale.add_paragraph()
+            p.paragraph_format.space_before = _pt(6, echelle)
+            p.paragraph_format.space_after = Pt(0)
+            poste_maj = _majuscule_premiere_lettre(exp.get("poste", ""))
+            run = p.add_run(poste_maj)
+            run.bold = True
+            run.font.size = _pt(11, echelle)
+
+            dates = f"{exp.get('date_debut', '')} - {exp.get('date_fin', '')}".strip(" -")
+            meta_parties = [x for x in [exp.get("entreprise", ""), dates] if x]
+            meta_texte = " | ".join(meta_parties)
+            lieu_pays = " · ".join(x for x in [exp.get("ville", ""), exp.get("pays", "")] if x)
+            if lieu_pays:
+                meta_texte = f"{meta_texte} · {lieu_pays}" if meta_texte else lieu_pays
+
+            if meta_texte:
+                p_meta = cell_principale.add_paragraph()
+                p_meta.paragraph_format.space_after = _pt(3, echelle)
+                run_meta = p_meta.add_run(meta_texte)
+                run_meta.italic = True
+                run_meta.font.size = _pt(9.5, echelle)
+                run_meta.font.color.rgb = RGBColor.from_string(accent)
+
+            description = exp.get("description", "").strip()
+            if description:
+                for ligne in description.split("\n"):
+                    ligne = _nettoyer_ligne(ligne)
+                    if ligne:
+                        _puce(cell_principale, ligne, taille=10, echelle=echelle)
+
+    # --- Formation ---
+    formations = [f for f in data.get("formations", []) if f.get("diplome") or f.get("etablissement")]
+    formations = _trier_par_date(formations, "annee")
+    if formations:
+        _titre_section(cell_principale, libelles["formation"], accent, taille=16, echelle=echelle)
+        for form in formations:
+            p = cell_principale.add_paragraph()
+            p.paragraph_format.space_before = _pt(4, echelle)
+            p.paragraph_format.space_after = Pt(0)
+            diplome_maj = _majuscule_premiere_lettre(form.get("diplome", ""))
+            run = p.add_run(f"{diplome_maj} — {form.get('etablissement', '')}")
+            run.bold = True
+            run.font.size = _pt(10.5, echelle)
+
+            meta = " · ".join(
+                x for x in [form.get("annee", ""), form.get("ville", ""), form.get("pays", "")] if x
+            )
+            if meta:
+                p_meta = cell_principale.add_paragraph()
+                p_meta.paragraph_format.space_after = _pt(2, echelle)
+                run_meta = p_meta.add_run(meta)
+                run_meta.italic = True
+                run_meta.font.size = _pt(9.5, echelle)
+                run_meta.font.color.rgb = RGBColor.from_string(accent)
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer, echelle
+
+
+
+# ---------------------------------------------------------------------------
+# Suggestions de compétences / outils / langages (basées sur les offres réelles)
+# ---------------------------------------------------------------------------
+def _ajouter_suggestion(cle_session, valeur):
+    """Ajoute une ligne à un textarea (par clé de session_state) si elle n'y est pas déjà."""
+    actuel = st.session_state.get(cle_session, "")
+    lignes = [l.strip() for l in actuel.split("\n") if l.strip()]
+    if valeur not in lignes:
+        lignes.append(valeur)
+        st.session_state[cle_session] = "\n".join(lignes)
+
+
+def _ajouter_suggestion(cle_session, valeur):
+    """Ajoute une valeur à une liste d'options (session_state) si elle n'y est pas déjà."""
+    if cle_session not in st.session_state:
+        st.session_state[cle_session] = []
+    if valeur not in st.session_state[cle_session]:
+        st.session_state[cle_session].append(valeur)
+
+
+# Listes de base toujours proposées, même sans recherche de profil préalable
+# (pour que le champ ne soit jamais "vide" par défaut).
+_DEFAUTS_COMPETENCES = [
+    "Gestion de projet", "Communication", "Travail d'équipe", "Résolution de problèmes",
+    "Organisation", "Leadership", "Analyse", "Négociation", "Gestion du temps", "Esprit critique",
+]
+_DEFAUTS_OUTILS = ["Excel", "Word", "PowerPoint", "Outlook", "Teams"]
+_DEFAUTS_LANGAGES = []  # vide par défaut : pertinent seulement pour les profils tech
+# Top 10 des langues les plus parlées au monde (nombre total de locuteurs, classement
+# usuel type Ethnologue) — liste de départ ; le champ permet aussi d'en ajouter d'autres.
+_DEFAUTS_LANGUES = [
+    "Anglais", "Mandarin", "Hindi", "Espagnol", "Français",
+    "Arabe", "Bengali", "Russe", "Portugais", "Ourdou",
+]
+
+
+def _champ_liste_avec_ajout(titre, cle_base, valeurs_par_defaut, aide=None):
+    """
+    Affiche une liste à choix multiples (options par défaut + suggestions éventuelles)
+    avec possibilité d'ajouter ses propres éléments à la liste. Retourne le résultat
+    au format 'une valeur par ligne' (compatible avec generer_cv_docx).
+    """
+    cle_options = f"{cle_base}_options"
+    if cle_options not in st.session_state:
+        st.session_state[cle_options] = list(valeurs_par_defaut)
+
+    cle_select = f"{cle_base}_select"
+    selection = st.multiselect(titre, options=st.session_state[cle_options], key=cle_select, help=aide)
+
+    col_ajout, col_bouton = st.columns([4, 1])
+    nouvel_element = col_ajout.text_input(
+        f"Ajouter un élément à « {titre} »",
+        key=f"{cle_base}_nouveau",
+        label_visibility="collapsed",
+        placeholder="Ajouter un élément non listé...",
+    )
+    if col_bouton.button("➕ Ajouter", key=f"{cle_base}_bouton_ajout"):
+        valeur = nouvel_element.strip()
+        if valeur:
+            _ajouter_suggestion(cle_options, valeur)
+            if valeur not in st.session_state[cle_select]:
+                st.session_state[cle_select] = st.session_state[cle_select] + [valeur]
+            st.rerun()
+
+    return "\n".join(selection)
+
+
+def _selecteur_poste_recherche(titre_recherche):
+    """
+    Étiquettes cliquables (multi-sélection) parmi les intitulés ROME proches du texte
+    tapé dans "Titre du poste recherché" — un intitulé libre comme "Chef de projet" ne
+    correspond souvent à rien de tel quel dans le référentiel France Travail (qui
+    distingue "Chef de projet informatique", "Chef de projet BTP"...). Ces étiquettes
+    servent à choisir les intitulés réellement interrogés sur la base France Travail,
+    pour "Tendance par profil" et les suggestions de compétences/outils/langages
+    ci-dessous — pas besoin de ressaisir un poste ailleurs dans l'application.
+    """
+    appellations = get_referentiel_appellations()
+    cle_selection = "cv_postes_recherche_selectionnes"
+    cle_terme_precedent = "cv_postes_recherche_terme_precedent"
+    cle_auto = "cv_postes_recherche_auto_pour_terme"
+
+    if cle_selection not in st.session_state:
+        st.session_state[cle_selection] = []
+
+    suggestions = suggerer_postes(titre_recherche) if titre_recherche.strip() else []
+
+    # Un nouveau terme de recherche efface la sélection précédente : sinon les postes
+    # d'une recherche antérieure restent cochés en changeant complètement de sujet.
+    terme_precedent = st.session_state.get(cle_terme_precedent, titre_recherche)
+    if titre_recherche != terme_precedent and st.session_state[cle_selection]:
+        st.session_state[cle_selection] = []
+    st.session_state[cle_terme_precedent] = titre_recherche
+
+    # Auto-sélectionne la meilleure suggestion une fois par terme, pour ne pas dépendre
+    # d'un clic si l'utilisateur ne remarque pas les étiquettes.
+    if suggestions and not st.session_state[cle_selection] and st.session_state.get(cle_auto) != titre_recherche:
+        st.session_state[cle_selection].append(suggestions[0])
+    st.session_state[cle_auto] = titre_recherche
+
+    if suggestions or st.session_state[cle_selection]:
+        st.caption(
+            "💡 Ces intitulés viennent de la nomenclature officielle France Travail (ROME) — un "
+            "intitulé libre comme celui tapé ci-dessus n'existe pas toujours tel quel dans la "
+            "base. Sélectionne un ou plusieurs intitulés proches : ce sont eux qui seront "
+            "utilisés pour interroger France Travail (tendance de marché ci-dessous, et les "
+            "suggestions de compétences plus bas)."
+        )
+        tous_les_tags = list(dict.fromkeys(suggestions + st.session_state[cle_selection]))
+        colonnes_tags = st.columns(2)
+        for i, label in enumerate(tous_les_tags):
+            est_selectionne = label in st.session_state[cle_selection]
+            texte_bouton = f"✅ {label}" if est_selectionne else label
+            col_tag = colonnes_tags[i % 2]
+            if col_tag.button(texte_bouton, key=f"cv_poste_tag_{i}_{label}"):
+                if est_selectionne:
+                    st.session_state[cle_selection].remove(label)
+                else:
+                    st.session_state[cle_selection].append(label)
+                st.rerun()
+    elif titre_recherche.strip():
+        st.caption("Aucune suggestion trouvée pour ce terme — essaie une autre formulation.")
+
+    postes_choisis = st.session_state[cle_selection]
+
+    # Résolution des codes ROME (même mécanisme que dans l'Espace Candidat).
+    codes_par_poste = {}
+    departement_pour_resolution = st.session_state.get("cv_departement") or "13"
+    for label in postes_choisis:
+        item_poste = next((a for a in appellations if a.get("libelle", "").strip() == label), None)
+        code = _extraire_code_rome(item_poste) if item_poste else None
+        if not code:
+            df_resolu = resoudre_codes_rome(mots_cles=label, departement=departement_pour_resolution)
+            code = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
+        codes_par_poste[label] = code
+
+    st.session_state["cv_postes_recherche"] = postes_choisis
+    st.session_state["cv_codes_par_poste"] = codes_par_poste
+
+
+def _section_suggestions_competences(fonction_analyse_competences):
+    """
+    Alimente automatiquement les listes de compétences/outils/langages suggérées à
+    partir des offres correspondant aux postes sélectionnés juste au-dessus (étiquettes
+    ROME) — se déclenche seul, pas besoin de visiter un autre onglet ni de cliquer.
+    """
+    if not fonction_analyse_competences:
+        return
+
+    postes_choisis = st.session_state.get("cv_postes_recherche", [])
+    if not postes_choisis:
+        st.info(
+            "👉 Renseigne un poste ci-dessus et choisis au moins une suggestion pour enrichir "
+            "automatiquement ces listes avec les compétences réellement demandées sur ce métier "
+            "(sinon, une liste générique de base reste disponible ci-dessous)."
+        )
+        return
+
+    departement_cv = st.session_state.get("cv_departement") or "13"
+    cle_signature = "cv_suggestions_signature"
+    signature_actuelle = (tuple(postes_choisis), departement_cv)
+
+    if st.session_state.get(cle_signature) != signature_actuelle:
+        with st.spinner("Analyse des offres en cours..."):
+            mots_cles_larges = " ".join(postes_choisis)
+            df_comp, df_outils, df_langages, nb_total = fonction_analyse_competences(
+                "TOUS", departement_cv, mots_cles=mots_cles_larges,
+            )
+        for cle_options, df in [
+            ("cv_competences_options", df_comp),
+            ("cv_outils_options", df_outils),
+            ("cv_langages_options", df_langages),
+        ]:
+            if cle_options not in st.session_state:
+                st.session_state[cle_options] = []
+            for lib in df["libelle"]:
+                if lib not in st.session_state[cle_options]:
+                    st.session_state[cle_options].append(lib)
+        st.session_state["cv_suggestions_apercu"] = (df_comp, df_outils, df_langages, nb_total)
+        st.session_state[cle_signature] = signature_actuelle
+
+    if "cv_suggestions_apercu" in st.session_state:
+        df_comp, df_outils, df_langages, nb_total = st.session_state["cv_suggestions_apercu"]
+        if nb_total < 10:
+            st.caption(f"⚠️ Échantillon réduit ({nb_total} offre(s)) — indicatif seulement.")
+        else:
+            st.caption(f"✅ Listes enrichies automatiquement à partir de {nb_total} offre(s) trouvée(s).")
+        for titre_apercu, df in [
+            ("Compétences les + demandées", df_comp),
+            ("Outils les + demandés", df_outils),
+            ("Langages les + demandés", df_langages),
+        ]:
+            if not df.empty:
+                apercu = ", ".join(f"{r.libelle} ({r.pourcentage}%)" for _, r in df.head(6).iterrows())
+                st.caption(f"💡 **{titre_apercu}** : {apercu}")
+
+
+# ---------------------------------------------------------------------------
+# Interface Streamlit
+# ---------------------------------------------------------------------------
+def afficher_generateur_cv(fonction_analyse_competences=None):
+    _init_cv_state()
+
+    st.header("🧾 Créez votre CV")
+    st.write("Créez votre CV professionnel, prêt à l'emploi, au format Word.")
+    st.markdown(
+        "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
+        "expériences, formations, compétences...), choisissez un thème de couleur, puis générez "
+        "votre CV en un clic."
+    )
+    st.markdown(
+        "**Le parcours complet de l'application :**\n"
+        "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
+        "que vous visez.\n"
+        "2. 🎯 **Tendance par profil** — se lance automatiquement dès que votre poste est "
+        "renseigné : tension du marché, villes qui recrutent, top recruteurs à démarcher.\n"
+        "3. 🧩 **KPIs avancés** — pour aller plus loin : évolution du marché, salaires, types "
+        "de contrat."
     )
 
-    titre_poste_cv = st.session_state.get("cv_titre", "").strip()
-    postes_cv = st.session_state.get("cv_postes_choisis", [])
-    codes_rome_cv = [c for c in st.session_state.get("cv_codes_rome_choisis", []) if c]
-    departement_cv = st.session_state.get("cv_departement") or "13"
+    theme_choisi = st.radio(
+        "🎨 Thème de couleur",
+        list(THEMES.keys()),
+        horizontal=True,
+        key="cv_theme",
+    )
 
-    if not titre_poste_cv or not codes_rome_cv:
-        st.info(
-            "👉 Sélectionne un poste dans l'onglet **🧾 Créer mon CV** (tags de suggestions "
-            "sous le champ « Poste recherché ») — l'analyse se lance automatiquement dès qu'un "
-            "poste est choisi, pas besoin de le ressaisir ici."
+    langue_choisie_label = st.radio(
+        "🌍 Langue du CV",
+        list(LANGUES_CV.keys()),
+        horizontal=True,
+        key="cv_langue",
+    )
+    langue_choisie = LANGUES_CV[langue_choisie_label]
+    if langue_choisie != "FR" and not os.environ.get("DEEPL_API_KEY"):
+        st.warning(
+            "⚠️ La traduction automatique n'est pas configurée pour l'instant (clé DeepL "
+            "manquante) — le CV sera généré en français malgré la langue choisie."
         )
+
+    photo_uploadee = st.file_uploader(
+        "📷 Photo (facultatif, format carré recommandé)", type=["png", "jpg", "jpeg"], key="cv_photo"
+    )
+    if photo_uploadee:
+        col_apercu, _ = st.columns([1, 4])
+        col_apercu.image(photo_uploadee, width=100)
+
+    afficher_drapeaux = st.checkbox("🏳️ Afficher un drapeau à côté des langues reconnues", value=True, key="cv_drapeaux")
+
+    st.markdown("#### 👤 Informations générales")
+    c1, c2 = st.columns(2)
+    prenom = c1.text_input("Prénom", key="cv_prenom")
+    nom = c2.text_input("Nom", key="cv_nom")
+
+    titre_recherche = st.text_input(
+        "Titre du poste recherché (ex: PMO Finance)",
+        key="cv_titre",
+        help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peut être personnalisé librement.",
+    )
+    st.caption(
+        "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
+        "Finance senior confirmé ») pour de meilleurs résultats. L'onglet **🎯 Tendance par "
+        "profil** analyse automatiquement le marché pour ce poste dès qu'il est renseigné ici."
+    )
+    _selecteur_poste_recherche(titre_recherche)
+
+    c3, c4 = st.columns(2)
+    email = c3.text_input("Email", key="cv_email")
+    telephone = c4.text_input("Téléphone", key="cv_telephone")
+    adresse = st.text_input(
+        "Adresse", key="cv_adresse", placeholder="ex: 6 Calle Cronista Veravens, 3012 Alicante, España"
+    )
+
+    options_departement_cv = ["Non renseigné"] + sorted(
+        f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items()
+    )
+    departement_choisi_cv = st.selectbox(
+        "Département de résidence",
+        options=options_departement_cv,
+        key="cv_departement_label",
+        help=(
+            "N'apparaît pas sur le CV — préremplit automatiquement le département dans "
+            "l'onglet 🎯 Tendance par profil."
+        ),
+    )
+    if departement_choisi_cv != "Non renseigné":
+        st.session_state["cv_departement"] = departement_choisi_cv.split(" - ")[0]
     else:
-        # V4 : la résolution ROME se fait désormais UNE SEULE FOIS, côté "Créer mon CV"
-        # (sélecteur à tags). On reprend ici directement cv_postes_choisis /
-        # cv_codes_rome_choisis plutôt que de re-résoudre silencieusement le texte libre.
-        cle_auto_signature = "profil_auto_analyse_signature"
-        signature_actuelle = (tuple(sorted(codes_rome_cv)), departement_cv)
+        st.session_state.pop("cv_departement", None)
 
-        if st.session_state.get(cle_auto_signature) != signature_actuelle:
-            if len(codes_rome_cv) == 1:
-                st.session_state["df_rome_profil"] = pd.DataFrame(
-                    [{"code_rome": codes_rome_cv[0], "libelle": postes_cv[0], "nb_offres_echantillon": None}]
-                )
-                st.session_state["code_rome_choisi"] = codes_rome_cv[0]
-                st.session_state["codes_rome_choisis"] = codes_rome_cv
-                st.session_state["mots_cles_profil_actif"] = postes_cv[0]
-            else:
-                st.session_state["df_rome_profil"] = pd.DataFrame(
-                    [{"code_rome": "MULTI", "libelle": " / ".join(postes_cv), "nb_offres_echantillon": None}]
-                )
-                st.session_state["code_rome_choisi"] = "MULTI"
-                st.session_state["codes_rome_choisis"] = codes_rome_cv
-                st.session_state["mots_cles_profil_actif"] = " ".join(postes_cv)
+    profil = st.text_area(
+        "Profil / accroche (2-3 phrases qui résument votre parcours et votre projet)",
+        key="cv_profil",
+        height=100,
+    )
+    disponibilite = st.text_input(
+        "Disponibilité", key="cv_disponibilite", placeholder="ex: immédiate, sous 1 mois..."
+    )
 
-            st.session_state["departement_profil_actif"] = departement_cv
-            st.session_state[cle_auto_signature] = signature_actuelle
+    st.divider()
+    _section_experiences()
 
-    if "df_rome_profil" in st.session_state:
-        df_rome = st.session_state["df_rome_profil"]
-        departement_actif = st.session_state["departement_profil_actif"]
-        mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
-        code_rome_choisi = st.session_state.get("code_rome_choisi")
-        codes_rome_choisis = st.session_state.get("codes_rome_choisis", [])
-        postes_choisis_profil = st.session_state.get("cv_postes_choisis", [])
-        recherche_multi = code_rome_choisi == "MULTI"
+    st.divider()
+    _section_formations()
 
-        if df_rome.empty:
-            st.error("Aucune offre trouvée pour ce département. Essaie d'élargir les critères.")
+    st.divider()
+    st.markdown("#### 🌍 Langues")
+    langues = _champ_liste_avec_ajout(
+        "Sélectionne ou ajoute tes langues (précise le niveau via « Ajouter », ex: « Anglais - Courant »)",
+        "cv_langues_choix", _DEFAUTS_LANGUES,
+    )
+
+    st.divider()
+    st.markdown("#### 💡 Compétences, outils & langages")
+    st.caption("ℹ️ Ces éléments apparaîtront sur votre CV, dans le bandeau latéral.")
+    _section_suggestions_competences(fonction_analyse_competences)
+
+    st.markdown("###### 🧠 Compétences")
+    competences = _champ_liste_avec_ajout(
+        "Sélectionne ou ajoute tes compétences", "cv_competences", _DEFAUTS_COMPETENCES
+    )
+
+    st.markdown("###### 🛠️ Outils informatiques")
+    outils = _champ_liste_avec_ajout(
+        "Sélectionne ou ajoute tes outils", "cv_outils", _DEFAUTS_OUTILS
+    )
+
+    st.markdown("###### 💻 Langages informatiques")
+    st.caption("Facultatif — pertinent surtout pour les profils tech/data.")
+    langages_informatiques = _champ_liste_avec_ajout(
+        "Sélectionne ou ajoute tes langages", "cv_langages", _DEFAUTS_LANGAGES
+    )
+
+    st.markdown("#### 🎯 Centres d'intérêt")
+    interets = st.text_area(
+        "Séparés par une virgule ou une ligne (ex: Kayak, Dessin, Voyages)",
+        key="cv_interets",
+        height=60,
+    )
+
+    st.divider()
+
+    if st.button("📄 Générer mon CV", type="primary"):
+        if not nom or not prenom:
+            st.error("Merci de renseigner au minimum votre nom et prénom.")
         else:
-            # Tous les indicateurs de cet onglet (tension, top recruteurs, top villes)
-            # partagent désormais la même base de temps : depuis le 1er janvier de l'année
-            # en cours. Poste et secteur restent les mêmes filtres que partout ailleurs.
-            aujourdhui = datetime.now()
-            debut_annee = datetime(aujourdhui.year, 1, 1)
-            libelle_periode_offres = f"depuis janvier {aujourdhui.year}"
-            jours_max_periode_offres = (aujourdhui - debut_annee).days
-
-            st.markdown("#### ⚖️ Tension du marché")
-            if code_rome_choisi == "TOUS":
-                st.info(
-                    "⚖️ La tension du marché nécessite un ou plusieurs postes précis (l'indicateur "
-                    "officiel raisonne par métier). Sélectionne au moins un poste ci-dessus pour "
-                    "voir ce calcul."
-                )
-            elif departement_est_multiple(departement_actif):
-                st.info(
-                    "⚖️ La tension du marché nécessite un seul département sélectionné (statistique "
-                    "officielle trimestrielle, un appel par territoire) — indisponible pour « Toute "
-                    "la France » ou une sélection de plusieurs départements. Choisis un seul "
-                    "département ci-dessus pour voir ce calcul."
-                )
-            else:
-                st.caption(
-                    f"ℹ️ Le nombre d'offres porte sur le {libelle_periode_offres} (même base que "
-                    "le top recruteurs et le top villes plus bas) ; les demandeurs d'emploi "
-                    "restent une statistique officielle trimestrielle (non filtrable par date)."
-                    + (
-                        " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
-                        "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
-                        "indicateur officiel par métier unique."
-                        if recherche_multi else ""
-                    )
-                )
-                if recherche_multi:
-                    with st.spinner("Récupération des demandeurs d'emploi..."):
-                        total_dep_offres = volumes_departement_offres_multi(
-                            codes_rome_choisis, departement_actif, jours_max=jours_max_periode_offres,
-                        )
-                        total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = (
-                            demandeurs_emploi_departement_multi(codes_rome_choisis, departement_actif)
-                        )
-                else:
-                    with st.spinner("Récupération des demandeurs d'emploi..."):
-                        total_dep_offres = volumes_departement_offres(
-                            code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
-                        )
-                        total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
-                            code_rome_choisi, departement_actif
-                        )
-
-                if erreur_demandeurs:
-                    st.warning(
-                        f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
-                        "Saisis une valeur manuelle en attendant."
-                    )
-                    total_dep_demandeurs = st.number_input(
-                        "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
-                    )
-                else:
-                    c1, c2 = st.columns(2)
-                    c1.metric(f"Offres — {libelle_periode_offres}", total_dep_offres)
-                    c2.metric(
-                        f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
-                        total_dep_demandeurs,
-                    )
-
-                tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
-                if tension is not None:
-                    st.metric("Indice de tension (offres / demandeurs)", tension)
-                    st.info(interpreter_tension(tension))
-                    conseils = conseils_tension(tension)
-                    if conseils:
-                        with st.expander("💡 Conseils pour ce niveau de tension"):
-                            for conseil in conseils:
-                                st.markdown(f"- {conseil}")
-                else:
-                    st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
-
-            st.divider()
-
-            mots_cles_recherche_large = (
-                "" if postes_choisis_profil == ["🌐 Tous les postes"] else " ".join(postes_choisis_profil)
+            data = {
+                "nom": nom,
+                "prenom": prenom,
+                "titre_recherche": titre_recherche,
+                "email": email,
+                "telephone": telephone,
+                "adresse": adresse,
+                "profil": profil,
+                "disponibilite": disponibilite,
+                "experiences": st.session_state.cv_experiences,
+                "formations": st.session_state.cv_formations,
+                "langues": langues,
+                "competences": competences,
+                "langages_informatiques": langages_informatiques,
+                "outils": outils,
+                "interets": interets,
+            }
+            photo_bytes = photo_uploadee.getvalue() if photo_uploadee else None
+            message_attente = (
+                "Traduction et génération en cours..." if langue_choisie != "FR" else "Génération en cours..."
             )
-
-            with st.spinner("Récupération des recruteurs actifs..."):
-                _, _, _, _, df_entreprises, _ = offres_par_ville(
-                    "TOUS", departement_actif,
-                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
+            with st.spinner(message_attente):
+                buffer, echelle = generer_cv_docx(
+                    data,
+                    theme_nom=theme_choisi,
+                    photo_bytes=photo_bytes,
+                    afficher_drapeaux=afficher_drapeaux,
+                    langue=langue_choisie,
                 )
-
-            st.markdown("#### 🏢 Top recruteurs")
-            st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
-            if df_entreprises.empty:
-                st.info(
-                    "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
-                    "les offres sont diffusées de façon anonyme."
+            st.success("Votre CV est prêt !")
+            if echelle < 0.85:
+                st.warning(
+                    "⚠️ Contenu assez volumineux : la police et les espacements ont été "
+                    "automatiquement réduits pour essayer de tenir sur une page. Si le rendu "
+                    "final dépasse quand même une page, pense à raccourcir certaines descriptions "
+                    "d'expérience."
                 )
-            else:
-                st.caption(
-                    "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
-                    "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
-                    "peuvent valoir une candidature directe."
-                )
-                st.dataframe(
-                    df_entreprises.rename(
-                        columns={
-                            "entreprise": "Entreprise",
-                            "nombre_offres": "Nombre d'offres",
-                        }
-                    ).drop(columns=["villes"]),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            st.divider()
-
-            st.markdown("#### 📍 Villes qui recrutent")
-            st.caption(f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top recruteurs).")
-            with st.spinner("Récupération des offres par ville..."):
-                df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
-                    "TOUS", departement_actif,
-                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
-                )
-            st.metric("Total offres dans la région", total_region)
-            # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
-            # donnent la plage de publication réelle des offres renvoyées par l'API —
-            # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
-            # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
-            # offres sont simplement celles encore actives aujourd'hui.
-            if not df_villes.empty:
-                df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
-                nb_offres_approx = int(df_carte.loc[df_carte["approximatif"], "nombre_offres"].sum()) if not df_carte.empty else 0
-                if nb_offres_approx > 0:
-                    st.caption(
-                        f"📍 {nb_offres_approx} offre(s) sur {total_region} n'ont pas de coordonnées GPS "
-                        "précises côté France Travail (lieu renseigné au niveau département seulement, ou "
-                        "télétravail) — elles sont positionnées sur la plus grande ville du département "
-                        "(marqueurs oranges ci-dessous), à titre indicatif."
-                    )
-                ville_cliquee = None
-                if not df_carte.empty:
-                    df_carte["latitude"] = df_carte["latitude"].astype(float)
-                    df_carte["longitude"] = df_carte["longitude"].astype(float)
-
-                    etendue_lat = df_carte["latitude"].max() - df_carte["latitude"].min()
-                    etendue_lon = df_carte["longitude"].max() - df_carte["longitude"].min()
-                    etendue = max(etendue_lat, etendue_lon)
-                    if etendue < 0.03:
-                        zoom_auto = 12
-                    elif etendue < 0.1:
-                        zoom_auto = 11
-                    elif etendue < 0.3:
-                        zoom_auto = 10
-                    elif etendue < 0.8:
-                        zoom_auto = 9
-                    else:
-                        zoom_auto = 8
-
-                    carte = folium.Map(
-                        location=[df_carte["latitude"].mean(), df_carte["longitude"].mean()],
-                        zoom_start=zoom_auto,
-                        # CartoDB dark_matter exige désormais une clé API (changement récent
-                        # de Carto) — OpenStreetMap reste gratuit et sans clé, en thème clair.
-                        tiles="OpenStreetMap",
-                    )
-                    cluster = MarkerCluster(
-                        options={"maxClusterRadius": 60, "disableClusteringAtZoom": 15}
-                    ).add_to(carte)
-
-                    for _, row in df_carte.iterrows():
-                        couleur = "#e67e22" if row["approximatif"] else "#0066cc"
-                        tooltip_texte = f"{row['ville']} : {int(row['nombre_offres'])} offre(s)"
-                        if row["approximatif"]:
-                            tooltip_texte += " (position approximative)"
-                        for _ in range(int(row["nombre_offres"])):
-                            folium.CircleMarker(
-                                location=[row["latitude"], row["longitude"]],
-                                radius=8,
-                                tooltip=tooltip_texte,
-                                color=couleur,
-                                fill=True,
-                                fill_color=couleur,
-                                fill_opacity=0.8,
-                                weight=1,
-                            ).add_to(cluster)
-
-                    # Carte purement visuelle (tendance) : pas de listing d'offres cliquables —
-                    # l'app ne cherche plus à concurrencer les plateformes de recrutement dédiées,
-                    # seule la lecture de marché (villes qui recrutent) est montrée ici.
-                    # returned_objects=[] évite les allers-retours serveur au zoom/déplacement
-                    # (meilleure stabilité, notamment sur mobile).
-                    st_folium(
-                        carte,
-                        use_container_width=True,
-                        height=500,
-                        key="carte_offres_ville",
-                        returned_objects=[],
-                    )
-                else:
-                    st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
-
-            st.divider()
-            st.info(
-                "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
-                "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
-                "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
-                "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
-                "avec prudence si tu cherches un point de comparaison sur ce type de poste."
-            )
-
-# ---------------------------------------------------------------------------
-# Onglet "KPIs avancés"
-# ---------------------------------------------------------------------------
-with tab_avance:
-    if "code_rome_choisi" not in st.session_state:
-        st.info(
-            "👉 Sélectionne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
-            "s'appuient sur l'analyse automatique de l'onglet Tendance par profil."
-        )
-    else:
-        code_rome_actif = st.session_state["code_rome_choisi"]
-        codes_rome_choisis_avance = st.session_state.get("codes_rome_choisis", [])
-        departement_actif = st.session_state["departement_profil_actif"]
-        mots_cles_actifs_avance = st.session_state.get("mots_cles_profil_actif", "")
-        recherche_multi_avance = code_rome_actif == "MULTI"
-
-        # Auto-déclenchement : se relance seul dès que le poste/département actif change
-        # (mis à jour automatiquement par "Tendance par profil"), résultats conservés en
-        # session pour rester affichés en revenant sur cet onglet.
-        cle_signature_avance = "avance_auto_signature"
-        signature_avance_actuelle = (code_rome_actif, tuple(codes_rome_choisis_avance), departement_actif)
-
-        if st.session_state.get(cle_signature_avance) != signature_avance_actuelle:
-            with st.spinner("Analyse en cours (évolution, contrats, salaires, expérience)..."):
-                if recherche_multi_avance:
-                    df_evolution = evolution_offres_annuelle_multi(codes_rome_choisis_avance, departement_actif)
-                    df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
-                        repartition_contrats_et_salaires_multi(codes_rome_choisis_avance, departement_actif)
-                    )
-                else:
-                    df_evolution = evolution_offres_annuelle(
-                        code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
-                    )
-                    df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
-                        repartition_contrats_et_salaires(
-                            code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
-                        )
-                    )
-            st.session_state["avance_resultats"] = (
-                df_evolution, df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience,
-            )
-            st.session_state[cle_signature_avance] = signature_avance_actuelle
-
-        if "avance_resultats" in st.session_state:
-            df_evolution, df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
-                st.session_state["avance_resultats"]
-            )
-
-            st.divider()
-            annee_courante = datetime.now().year
-            st.markdown(f"#### 📈 Nombre d'offres d'emploi - {annee_courante}")
-            if df_evolution.empty or df_evolution["nombre_offres"].sum() == 0:
-                st.info("Aucune donnée d'évolution disponible pour ces critères.")
-            else:
-                df_evolution_affiche = df_evolution.copy()
-                df_evolution_affiche["mois_label"] = df_evolution_affiche["mois"].apply(_formater_mois_fr)
-                ordre_mois = list(df_evolution_affiche["mois_label"])
-
-
-                base_evolution = alt.Chart(df_evolution_affiche).encode(
-                    x=alt.X(
-                        "mois_label:N",
-                        sort=ordre_mois,
-                        title=None,
-                        axis=alt.Axis(labelAngle=-45),
-                    ),
-                    y=alt.Y("nombre_offres:Q", title="Nombre d'offres"),
-                )
-                courbe = base_evolution.mark_line(point=True, color="#0066cc")
-                etiquettes = base_evolution.mark_text(dy=-12, fontSize=12).encode(text="nombre_offres:Q")
-                st.altair_chart((courbe + etiquettes).properties(height=350), use_container_width=True)
-
-            st.divider()
-            st.markdown("#### 📋 Répartition par type de contrat")
-            if df_contrats.empty:
-                st.info("Aucune donnée de type de contrat disponible pour ces critères.")
-            else:
-                df_contrats_tri = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
-                fig_contrats = go.Figure(
-                    go.Scatter(
-                        x=list(range(len(df_contrats_tri))),
-                        y=[0] * len(df_contrats_tri),
-                        mode="markers+text",
-                        marker=dict(
-                            # sizemode="area" + cette formule standard Plotly rend l'AIRE du
-                            # cercle proportionnelle à nombre_offres (pas le diamètre, qui
-                            # exagérerait visuellement les écarts entre types de contrat).
-                            size=df_contrats_tri["nombre_offres"],
-                            sizemode="area",
-                            sizeref=2.0 * df_contrats_tri["nombre_offres"].max() / (110.0 ** 2),
-                            sizemin=18,
-                            color=df_contrats_tri["nombre_offres"],
-                            colorscale="Blues",
-                            line=dict(width=2, color="white"),
-                        ),
-                        text=[
-                            f"{row.type_contrat}<br>{row.nombre_offres}"
-                            for row in df_contrats_tri.itertuples()
-                        ],
-                        textposition="middle center",
-                        textfont=dict(size=13, color="white"),
-                        hoverinfo="skip",
-                    )
-                )
-                fig_contrats.update_xaxes(visible=False, range=[-1, len(df_contrats_tri)])
-                fig_contrats.update_yaxes(visible=False, range=[-1.2, 1.2])
-                fig_contrats.update_layout(
-                    height=280, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig_contrats, use_container_width=True)
-
-                st.dataframe(
-                    df_contrats.rename(columns={"type_contrat": "Type de contrat", "nombre_offres": "Nombre d'offres"}),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            st.divider()
-            st.markdown("#### 💰 Fourchette de salaire proposée")
-            if nb_total_offres == 0:
-                st.info("Aucune offre trouvée pour ces critères.")
-            elif nb_avec_salaire == 0:
-                st.info("Aucune des offres trouvées n'indique de salaire.")
-            else:
-                pct = round(100 * nb_avec_salaire / nb_total_offres)
-                st.metric("Offres indiquant un salaire (tous contrats)", f"{nb_avec_salaire} / {nb_total_offres} ({pct}%)")
-
-                df_salaires_cdi = (
-                    df_salaires[df_salaires["Type de contrat"] == "CDI"]
-                    if "Type de contrat" in df_salaires.columns
-                    else df_salaires.iloc[0:0]
-                )
-                if df_salaires_cdi.empty:
-                    st.info("Aucune offre en CDI avec salaire indiqué pour ces critères.")
-                else:
-                    groupement_choisi = st.radio(
-                        "Regrouper les salaires (CDI uniquement) par",
-                        ["Poste", "Entreprise"],
-                        horizontal=True,
-                        key="salaire_groupement",
-                    )
-                    df_salaires_groupes = (
-                        df_salaires_cdi.groupby(groupement_choisi, as_index=False)
-                        .agg(
-                            nombre_offres=(groupement_choisi, "count"),
-                            salaires=("Salaire indiqué", lambda s: " · ".join(sorted(set(s)))),
-                        )
-                        .sort_values("nombre_offres", ascending=False)
-                        .reset_index(drop=True)
-                    )
-                    st.dataframe(
-                        df_salaires_groupes.rename(
-                            columns={"nombre_offres": "Nombre d'offres CDI", "salaires": "Salaires indiqués"}
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-            st.divider()
-            st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
-            if df_experience.empty:
-                st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
-            else:
-                base_experience = alt.Chart(df_experience).encode(
-                    x=alt.X("nombre_offres:Q", title="Nombre d'offres"),
-                    y=alt.Y("experience:N", title=None, sort="-x"),
-                )
-                barres_experience = base_experience.mark_bar(color="#0066cc")
-                etiquettes_experience = base_experience.mark_text(
-                    align="left", dx=4, fontSize=11
-                ).encode(text="nombre_offres:Q")
-                st.altair_chart(
-                    (barres_experience + etiquettes_experience).properties(height=140),
-                    use_container_width=True,
-                )
-
-            st.divider()
-            st.markdown("#### 🎯 Difficulté de recrutement (BMO)")
-            st.info(
-                "⚠️ Pas encore branché — c'est un indicateur annuel et déclaratif (enquête "
-                "employeurs), différent des données d'offres réelles utilisées ailleurs dans "
-                "l'app. Dis-moi si tu veux qu'on l'ajoute."
+            st.download_button(
+                label="⬇️ Télécharger mon CV (.docx)",
+                data=buffer,
+                file_name=f"CV_{prenom}_{nom}{'' if langue_choisie == 'FR' else '_' + langue_choisie}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
