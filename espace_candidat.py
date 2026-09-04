@@ -279,13 +279,18 @@ with tab_profil:
                                 "approximative sur le nom (à vérifier via le lien ci-dessous), "
                                 "surtout pour un nom court ou courant."
                             )
-                            c1, c2, c3 = st.columns(3)
-                            c1.metric("Effectif", fiche["tranche_effectif_libelle"])
-                            c2.metric("Catégorie", fiche["categorie_entreprise"] or "N/C")
-                            c3.metric(
-                                "Présence géographique",
-                                f"{fiche['nombre_etablissements_ouverts']} établissement(s)"
-                                if fiche["nombre_etablissements_ouverts"] else "N/C",
+                            if fiche["secteur_libelle"]:
+                                st.markdown(f"**Secteur :** {fiche['secteur_libelle']} ({fiche['naf']})")
+                            elif fiche["naf"]:
+                                st.markdown(f"**Secteur (code NAF) :** {fiche['naf']}")
+                            st.markdown(f"**Effectif :** {fiche['tranche_effectif_libelle']}")
+                            st.markdown(f"**Catégorie :** {fiche['categorie_entreprise'] or 'Non renseignée'}")
+                            st.markdown(
+                                "**Présence géographique :** "
+                                + (
+                                    f"{fiche['nombre_etablissements_ouverts']} établissement(s) ouvert(s)"
+                                    if fiche["nombre_etablissements_ouverts"] else "Non renseignée"
+                                )
                             )
                             if fiche["adresse"]:
                                 st.markdown(f"📍 Siège : {fiche['adresse']}")
@@ -440,13 +445,18 @@ with tab_entreprises:
                         "sur le nom (à vérifier via le lien ci-dessous), surtout pour un nom court "
                         "ou courant."
                     )
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Effectif", fiche["tranche_effectif_libelle"])
-                    c2.metric("Catégorie", fiche["categorie_entreprise"] or "N/C")
-                    c3.metric(
-                        "Présence géographique",
-                        f"{fiche['nombre_etablissements_ouverts']} établissement(s)"
-                        if fiche["nombre_etablissements_ouverts"] else "N/C",
+                    if fiche["secteur_libelle"]:
+                        st.markdown(f"**Secteur :** {fiche['secteur_libelle']} ({fiche['naf']})")
+                    elif fiche["naf"]:
+                        st.markdown(f"**Secteur (code NAF) :** {fiche['naf']}")
+                    st.markdown(f"**Effectif :** {fiche['tranche_effectif_libelle']}")
+                    st.markdown(f"**Catégorie :** {fiche['categorie_entreprise'] or 'Non renseignée'}")
+                    st.markdown(
+                        "**Présence géographique :** "
+                        + (
+                            f"{fiche['nombre_etablissements_ouverts']} établissement(s) ouvert(s)"
+                            if fiche["nombre_etablissements_ouverts"] else "Non renseignée"
+                        )
                     )
                     if fiche["adresse"]:
                         st.markdown(f"📍 Siège : {fiche['adresse']}")
