@@ -93,10 +93,33 @@ _REF_OUTILS_INFORMATIQUES = {
     "outlook", "access", "visio", "adobe", "canva", "wix", "shopify",
 }
 
+# France Travail n'a PAS de champ API dédié "certifications" (confirmé : le schéma
+# d'offre expose "formations" — niveau/domaine d'études requis, pas des certifications
+# nommées — et "competences", une liste libre où des certifications apparaissent parfois
+# mélangées aux autres compétences). Cette liste sert donc à les repérer par mot-clé dans
+# ce même champ libre, comme pour les outils/langages — couverture partielle par nature,
+# à enrichir si des cas manquants remontent en usage réel.
+_REF_CERTIFICATIONS = {
+    "pmp", "prince2", "prince 2", "itil", "cobit", "six sigma", "lean six sigma",
+    "scrum master", "psm", "csm", "safe agilist", "safe",
+    "cissp", "cism", "cisa", "ceh", "comptia", "ccna", "ccnp",
+    "aws certified", "azure certified", "google cloud certified", "gcp certified",
+    "iso 27001", "iso 9001", "iso 14001",
+    "toeic", "toefl", "ielts", "bulats", "linguaskill",
+    "caces", "habilitation électrique", "habilitation electrique", "sst", "bafa", "bafd",
+    "permis b", "permis c", "permis poids lourd", "adr",
+    "amf", "ifop", "haccp", "qualiopi",
+}
+
 
 def _classifier_competence(libelle):
-    """Classe un libellé de compétence en 'langage', 'outil' ou 'competence' (générique)."""
+    """Classe un libellé de compétence en 'langage', 'outil', 'certification' ou
+    'competence' (générique). Certification vérifiée en premier : certains sigles
+    (ex: "AWS Certified...") contiennent aussi un nom d'outil ("aws")."""
     l = f" {libelle.lower().strip()} "
+    for certif in _REF_CERTIFICATIONS:
+        if certif in l:
+            return "certification"
     for lang in _REF_LANGAGES_INFORMATIQUES:
         if f" {lang.strip()} " in l:
             return "langage"
@@ -214,9 +237,14 @@ def calculer_correspondance_recruteur(
 def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
     """
     Récupère les offres (même logique de filtrage que le reste de l'app) et
-    extrait leur champ 'competences' pour bâtir 3 listes de suggestions
-    (compétences génériques / outils informatiques / langages informatiques),
-    chacune avec un % d'offres qui la mentionnent.
+    extrait leur champ 'competences' pour bâtir 4 listes de suggestions
+    (compétences génériques / outils informatiques / langages informatiques /
+    certifications), chacune avec un % d'offres qui la mentionne.
+
+    NB certifications : France Travail n'a pas de champ API dédié aux certifications
+    (le schéma expose "formations" pour le niveau/domaine d'études requis, pas des
+    certifications nommées) — repérées ici par mot-clé dans le champ libre "competences",
+    comme les outils/langages. Couverture partielle par construction.
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -244,7 +272,7 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
             break
 
     nb_total_offres = len(toutes_offres)
-    compteurs = {"competence": Counter(), "outil": Counter(), "langage": Counter()}
+    compteurs = {"competence": Counter(), "outil": Counter(), "langage": Counter(), "certification": Counter()}
 
     for offre in toutes_offres:
         competences_offre = offre.get("competences", [])
@@ -276,6 +304,7 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
         _construire_df(compteurs["competence"]),
         _construire_df(compteurs["outil"]),
         _construire_df(compteurs["langage"]),
+        _construire_df(compteurs["certification"]),
         nb_total_offres,
     )
 
