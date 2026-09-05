@@ -254,9 +254,10 @@ def calculer_correspondance_recruteur(
 def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
     """
     Récupère les offres (même logique de filtrage que le reste de l'app) et
-    extrait leur champ 'competences' pour bâtir 4 listes de suggestions
-    (compétences génériques / outils informatiques / langages informatiques /
-    certifications), chacune avec un % d'offres qui la mentionne.
+    extrait leurs champs 'competences' et 'qualitesProfessionnelles' pour bâtir
+    5 listes de suggestions (compétences génériques / outils informatiques /
+    langages informatiques / certifications / savoir-être), chacune avec un %
+    d'offres qui la mentionne.
 
     NB certifications : France Travail n'a pas de champ API dédié aux certifications
     (le schéma expose "formations" pour le niveau/domaine d'études requis, pas des
@@ -264,6 +265,10 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
     structuré "competences" ET dans le texte complet de la fiche de poste (intitulé +
     description), une certification étant souvent mentionnée en phrase libre plutôt
     que comme un tag structuré. Couverture partielle par construction.
+
+    Le savoir-être (qualitesProfessionnelles), lui, EST un champ structuré dédié de
+    l'API Offres d'emploi — pas de repérage par mot-clé nécessaire, contrairement
+    aux certifications.
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -291,7 +296,10 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
             break
 
     nb_total_offres = len(toutes_offres)
-    compteurs = {"competence": Counter(), "outil": Counter(), "langage": Counter(), "certification": Counter()}
+    compteurs = {
+        "competence": Counter(), "outil": Counter(), "langage": Counter(),
+        "certification": Counter(), "savoir_etre": Counter(),
+    }
 
     for offre in toutes_offres:
         competences_offre = offre.get("competences", [])
@@ -316,6 +324,12 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
                     libelle_certif = terme_certif.upper() if (" " not in terme_certif and len(terme_certif) <= 6) else terme_certif.title()
                     compteurs["certification"][libelle_certif] += 1
 
+        # Savoir-être : champ structuré dédié, contrairement aux certifications.
+        for qualite in offre.get("qualitesProfessionnelles", []):
+            libelle_qualite = (qualite.get("libelle") or "").strip()
+            if libelle_qualite:
+                compteurs["savoir_etre"][libelle_qualite] += 1
+
     def _construire_df(compteur):
         if nb_total_offres == 0:
             return pd.DataFrame(columns=["libelle", "nombre_offres", "pourcentage"])
@@ -334,6 +348,7 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
         _construire_df(compteurs["outil"]),
         _construire_df(compteurs["langage"]),
         _construire_df(compteurs["certification"]),
+        _construire_df(compteurs["savoir_etre"]),
         nb_total_offres,
     )
 
@@ -477,23 +492,29 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
     pas résoudre par nature (ex: "Responsable de projet" -> "Chef de projet",
     vrais synonymes métier sans aucune ressemblance textuelle).
 
-    ATTENTION — expérimental : le scope OAuth ('api_romeov2') est confirmé via une
-    source tierce documentée, mais ni le chemin exact de l'endpoint ni le format du
-    corps de requête n'ont pu être vérifiés via une documentation officielle
-    publique au moment de l'écriture. Cette fonction teste plusieurs combinaisons
-    plausibles (et mémorise en session celle qui fonctionne), et se dégrade
-    silencieusement (renvoie None) si aucune ne répond correctement — jamais
-    d'erreur remontée à l'utilisateur, mais peut très bien ne renvoyer rien tant
-    que la vraie combinaison n'a pas été confirmée en conditions réelles.
+    Format confirmé via la documentation Swagger officielle (ressource
+    predictionMetiers, schéma de réponse PredictionAppellation) : la requête est
+    une LISTE d'objets {"identifiant":..., "intitule":..., "contexte":...} (jusqu'à
+    20 par appel, un seul ici), la réponse une liste de prédictions contenant
+    "metiersRome" (liste de {libelleAppellation, codeAppellation, libelleRome,
+    codeRome, scorePrediction}).
 
-    Retourne une liste de {"code_rome":..., "libelle":..., "score":...} triée par
-    score décroissant, ou None si rien n'a fonctionné (dans ce cas, le reste de
-    l'app continue de fonctionner exactement comme avant — intégration purement
-    additive, jamais un point de blocage).
+    Se dégrade silencieusement (renvoie None) en cas d'erreur — scope non
+    souscrit, panne réseau, ou si le format réel diverge malgré tout de la doc —
+    jamais un point de blocage pour le reste de l'app (intégration purement
+    additive dans suggerer_postes()).
+
+    Retourne une liste de {"libelle":..., "code_rome":..., "code_appellation":...,
+    "score":...} triée par score décroissant, ou None.
     """
+    cle_indisponible = "romeo_indisponible"
+    if st.session_state.get(cle_indisponible):
+        return None
+
     try:
         token = get_token(ROMEO_SCOPE)
     except Exception:
+        st.session_state[cle_indisponible] = True
         return None
 
     headers = {
@@ -501,67 +522,47 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    payload = [{"identifiant": "1", "intitule": intitule, "contexte": ""}]
 
-    cle_endpoint = "romeo_endpoint_valide"
-    cle_champ = "romeo_champ_intitule_valide"
-    cle_indisponible = "romeo_indisponible"
-
-    # Coupe-circuit : si aucune combinaison endpoint/champ n'a fonctionné une
-    # première fois dans cette session, on ne retente plus à chaque frappe (ça
-    # ferait jusqu'à 12 requêtes réseau par suggestion pour rien) — seul un
-    # rechargement complet de l'app retente une découverte fraîche.
-    if st.session_state.get(cle_indisponible):
+    try:
+        r = requests.post(
+            "https://api.francetravail.io/partenaire/romeo/v2/predictionMetiers",
+            headers=headers, json=payload, timeout=8,
+        )
+    except requests.RequestException:
+        return None
+    if r.status_code not in (200, 206):
+        st.session_state[cle_indisponible] = True
+        return None
+    try:
+        data = r.json()
+    except ValueError:
         return None
 
-    endpoint_connu = st.session_state.get(cle_endpoint)
-    champ_connu = st.session_state.get(cle_champ)
-    endpoints_a_essayer = (
-        [endpoint_connu] + [e for e in _CANDIDATS_ENDPOINT_ROMEO if e != endpoint_connu]
-        if endpoint_connu else _CANDIDATS_ENDPOINT_ROMEO
-    )
-    champs_a_essayer = (
-        [champ_connu] + [c for c in _CANDIDATS_CHAMP_INTITULE_ROMEO if c != champ_connu]
-        if champ_connu else _CANDIDATS_CHAMP_INTITULE_ROMEO
-    )
+    # La doc montre un objet unique par intitulé soumis ; on gère aussi le cas
+    # où l'API renvoie directement une liste (un élément par identifiant envoyé).
+    predictions_reponse = data if isinstance(data, list) else [data]
 
-    for endpoint in endpoints_a_essayer:
-        for champ in champs_a_essayer:
-            try:
-                r = requests.post(endpoint, headers=headers, json={champ: [intitule]}, timeout=8)
-            except requests.RequestException:
+    resultats = []
+    for reponse_intitule in predictions_reponse:
+        if not isinstance(reponse_intitule, dict):
+            continue
+        for pred in reponse_intitule.get("metiersRome", []):
+            code_rome = pred.get("codeRome")
+            libelle = pred.get("libelleAppellation")
+            score = pred.get("scorePrediction")
+            if not code_rome or not libelle:
                 continue
-            if r.status_code not in (200, 206):
-                continue
-            try:
-                data = r.json()
-            except ValueError:
-                continue
-            # Formats de réponse possibles selon la vraie structure (liste plate,
-            # ou liste de listes une par intitulé soumis) — on prend ce qui existe.
-            predictions_brutes = data[0] if data and isinstance(data, list) and isinstance(data[0], list) else data
-            if not isinstance(predictions_brutes, list) or not predictions_brutes:
-                continue
+            resultats.append(
+                {"libelle": libelle, "code_rome": code_rome, "code_appellation": pred.get("codeAppellation"), "score": score}
+            )
 
-            resultats = []
-            for pred in predictions_brutes:
-                if not isinstance(pred, dict):
-                    continue
-                score = pred.get("score") or pred.get("scorePrediction")
-                code_rome = pred.get("codeRome") or pred.get("codeMetier")
-                libelle = pred.get("libelleRome") or pred.get("libelleAppellation") or pred.get("libelle")
-                if code_rome is None:
-                    continue
-                resultats.append({"code_rome": code_rome, "libelle": libelle, "score": score})
+    if not resultats:
+        return None
 
-            if resultats:
-                st.session_state[cle_endpoint] = endpoint
-                st.session_state[cle_champ] = champ
-                resultats = [r for r in resultats if r["score"] is None or r["score"] >= seuil_score]
-                resultats.sort(key=lambda r: r["score"] or 0, reverse=True)
-                return resultats[:nb_resultats]
-
-    st.session_state[cle_indisponible] = True
-    return None
+    resultats = [r for r in resultats if r["score"] is None or r["score"] >= seuil_score]
+    resultats.sort(key=lambda r: r["score"] or 0, reverse=True)
+    return resultats[:nb_resultats] or None
 
 
 def diagnostiquer_romeo(intitule="chef de projet"):
@@ -578,7 +579,24 @@ def diagnostiquer_romeo(intitule="chef de projet"):
     try:
         token = get_token(ROMEO_SCOPE)
     except Exception as e:
-        return [{"etape": "obtention du token (scope api_romeov2)", "erreur": str(e)}]
+        # get_token() utilise raise_for_status(), qui perd le corps de la réponse —
+        # on refait l'appel token nous-mêmes ici pour voir le VRAI motif du refus
+        # (ex: "invalid_scope" si l'API n'est pas souscrite sur ce compte), plutôt
+        # que le message générique "400 Client Error" qui ne dit rien d'exploitable.
+        detail_erreur = str(e)
+        try:
+            r_token = requests.post(
+                "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire",
+                data={
+                    "grant_type": "client_credentials", "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET, "scope": ROMEO_SCOPE,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            detail_erreur = f"{r_token.status_code} — {r_token.text[:500]}"
+        except requests.RequestException:
+            pass
+        return [{"etape": "obtention du token (scope api_romeov2)", "erreur": detail_erreur}]
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -595,6 +613,200 @@ def diagnostiquer_romeo(intitule="chef de projet"):
                 )
             except requests.RequestException as e:
                 resultats_diagnostic.append({"endpoint": endpoint, "champ": champ, "erreur": str(e)})
+    return resultats_diagnostic
+
+
+# ---------------------------------------------------------------------------
+# La Bonne Boîte — entreprises à fort potentiel d'embauche (candidature
+# spontanée). Existait publiquement avant le rebranding France Travail (ex
+# Pôle Emploi), avec une API connue en GET (commune_id, distance, rome_codes) —
+# on part de cette base plutôt que de deviner à l'aveugle comme pour ROMEO,
+# mais SANS garantie que l'URL/les noms de paramètres n'aient pas changé lors
+# du passage à francetravail.io. Diagnostic d'abord, intégration ensuite.
+# ---------------------------------------------------------------------------
+LA_BONNE_BOITE_SCOPE = "api_labonneboitev2"  # confirmé via le nom du produit souscrit
+
+_CANDIDATS_ENDPOINT_LBB = [
+    "https://api.francetravail.io/partenaire/labonneboite/v2/entreprises",
+    "https://api.francetravail.io/partenaire/labonneboite/v1/entreprises",
+    "https://api.francetravail.io/partenaire/la-bonne-boite/v2/entreprises",
+]
+
+
+def diagnostiquer_la_bonne_boite(code_rome="M1805", commune_insee="13001", distance=30):
+    """
+    Outil de DIAGNOSTIC pour La Bonne Boîte — même principe que
+    diagnostiquer_romeo() : teste plusieurs endpoints candidats en GET avec les
+    paramètres historiquement connus de cette API (commune_id, distance,
+    rome_codes), et renvoie le détail brut de chaque tentative. Pas utilisé par
+    le flux normal de l'app.
+    """
+    try:
+        token = get_token(LA_BONNE_BOITE_SCOPE)
+    except Exception as e:
+        detail_erreur = str(e)
+        try:
+            r_token = requests.post(
+                "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire",
+                data={
+                    "grant_type": "client_credentials", "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET, "scope": LA_BONNE_BOITE_SCOPE,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            detail_erreur = f"{r_token.status_code} — {r_token.text[:500]}"
+        except requests.RequestException:
+            pass
+        return [{"etape": "obtention du token (scope api_labonneboitev2)", "erreur": detail_erreur}]
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    params = {"commune_id": commune_insee, "distance": distance, "rome_codes": code_rome}
+
+    resultats_diagnostic = []
+    for endpoint in _CANDIDATS_ENDPOINT_LBB:
+        try:
+            r = requests.get(endpoint, headers=headers, params=params, timeout=8)
+            resultats_diagnostic.append(
+                {"endpoint": endpoint, "status": r.status_code, "reponse": r.text[:500]}
+            )
+        except requests.RequestException as e:
+            resultats_diagnostic.append({"endpoint": endpoint, "erreur": str(e)})
+    return resultats_diagnostic
+
+
+# ---------------------------------------------------------------------------
+# Marché du travail — plateforme "Data Emploi" : difficulté de recrutement en
+# 5 paliers (ROME, pas FAP comme le BMO), salaire proposé, dynamisme du
+# territoire. Complète notre tension maison (offres/demandeurs) par un
+# indicateur officiel qualitatif. Nom de scope et endpoint non confirmés par
+# une doc publique — même approche de diagnostic que les précédentes.
+# ---------------------------------------------------------------------------
+_CANDIDATS_SCOPE_MARCHE_TRAVAIL = [
+    "api_marchedutravailv1",
+    "api_marche-travailv1",
+    "api_stats-marche-travailv1",
+]
+_CANDIDATS_ENDPOINT_MARCHE_TRAVAIL = [
+    "https://api.francetravail.io/partenaire/marchedutravail/v1/indicateur/tension",
+    "https://api.francetravail.io/partenaire/marche-travail/v1/indicateur",
+    "https://api.francetravail.io/partenaire/donnees-marche-travail/v1/tension",
+]
+
+
+def diagnostiquer_marche_travail(code_rome="M1805", departement="13"):
+    """
+    Outil de DIAGNOSTIC pour l'API "Marché du travail" — même principe que les
+    autres diagnostics : teste plusieurs scopes ET endpoints candidats (rien de
+    confirmé par une doc publique ici, contrairement à ROMEO où le scope au
+    moins était connu), renvoie le détail brut de chaque tentative. Pas utilisé
+    par le flux normal de l'app.
+    """
+    resultats_diagnostic = []
+    token = None
+    scope_qui_marche = None
+    for scope in _CANDIDATS_SCOPE_MARCHE_TRAVAIL:
+        try:
+            token = get_token(scope)
+            scope_qui_marche = scope
+            break
+        except Exception as e:
+            detail_erreur = str(e)
+            try:
+                r_token = requests.post(
+                    "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire",
+                    data={
+                        "grant_type": "client_credentials", "client_id": CLIENT_ID,
+                        "client_secret": CLIENT_SECRET, "scope": scope,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                detail_erreur = f"{r_token.status_code} — {r_token.text[:500]}"
+            except requests.RequestException:
+                pass
+            resultats_diagnostic.append({"etape": f"obtention du token (scope {scope})", "erreur": detail_erreur})
+
+    if not token:
+        return resultats_diagnostic
+
+    resultats_diagnostic.append({"etape": "token obtenu", "scope_valide": scope_qui_marche})
+    headers = {
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json",
+    }
+    payload = {
+        "codeTypeTerritoire": "DEP", "codeTerritoire": departement,
+        "codeTypeActivite": "ROME", "codeActivite": code_rome,
+    }
+    for endpoint in _CANDIDATS_ENDPOINT_MARCHE_TRAVAIL:
+        try:
+            r_get = requests.get(endpoint, headers=headers, params=payload, timeout=8)
+            resultats_diagnostic.append(
+                {"endpoint": endpoint, "methode": "GET", "status": r_get.status_code, "reponse": r_get.text[:400]}
+            )
+        except requests.RequestException as e:
+            resultats_diagnostic.append({"endpoint": endpoint, "methode": "GET", "erreur": str(e)})
+        try:
+            r_post = requests.post(endpoint, headers=headers, json=payload, timeout=8)
+            resultats_diagnostic.append(
+                {"endpoint": endpoint, "methode": "POST", "status": r_post.status_code, "reponse": r_post.text[:400]}
+            )
+        except requests.RequestException as e:
+            resultats_diagnostic.append({"endpoint": endpoint, "methode": "POST", "erreur": str(e)})
+    return resultats_diagnostic
+
+
+# ---------------------------------------------------------------------------
+# ROME 4.0 – Fiches métiers : compétences détaillées, macro savoir-faire,
+# macro savoir-être, savoirs — pour donner au candidat un référentiel officiel
+# du métier (par poste, pas fusionné en multi-poste). URL de base confirmée,
+# scope confirmé via la même source tierce que ROMEO ; chemin exact de
+# l'endpoint et forme précise de la réponse (les 4 types mélangés dans
+# "competences") pas confirmés — diagnostic d'abord.
+# ---------------------------------------------------------------------------
+FICHES_METIERS_SCOPE = "api_rome-fiches-metiersv1 nomenclatureRome"  # confirmé via la même source que ROMEO
+
+_CANDIDATS_ENDPOINT_FICHE_METIER = [
+    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiches-metiers/{code}",
+    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiche-metier/{code}",
+    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/metiers/{code}/fiche",
+]
+
+
+def diagnostiquer_fiche_metier(code_rome="M1805"):
+    """
+    Outil de DIAGNOSTIC pour "ROME 4.0 - Fiches métiers" — même principe que les
+    autres diagnostics : teste plusieurs chemins d'endpoint candidats avec un
+    code ROME réel, renvoie le détail brut de chaque tentative. Pas utilisé par
+    le flux normal de l'app.
+    """
+    try:
+        token = get_token(FICHES_METIERS_SCOPE)
+    except Exception as e:
+        detail_erreur = str(e)
+        try:
+            r_token = requests.post(
+                "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire",
+                data={
+                    "grant_type": "client_credentials", "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET, "scope": FICHES_METIERS_SCOPE,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            detail_erreur = f"{r_token.status_code} — {r_token.text[:500]}"
+        except requests.RequestException:
+            pass
+        return [{"etape": "obtention du token (scope fiches-metiersv1)", "erreur": detail_erreur}]
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    resultats_diagnostic = [{"etape": "token obtenu"}]
+    for endpoint_gabarit in _CANDIDATS_ENDPOINT_FICHE_METIER:
+        endpoint = endpoint_gabarit.format(code=code_rome)
+        try:
+            r = requests.get(endpoint, headers=headers, timeout=8)
+            resultats_diagnostic.append(
+                {"endpoint": endpoint, "status": r.status_code, "reponse": r.text[:500]}
+            )
+        except requests.RequestException as e:
+            resultats_diagnostic.append({"endpoint": endpoint, "erreur": str(e)})
     return resultats_diagnostic
 
 
@@ -638,16 +850,9 @@ def suggerer_postes(saisie, max_resultats=8):
     # avec les étapes suivantes exactement comme avant, sans rien perdre.
     predictions_romeo = predire_rome_romeo(saisie)
     if predictions_romeo:
-        labels_par_code_rome = {}
-        for a in appellations:
-            code = _extraire_code_rome(a)
-            if code and code not in labels_par_code_rome:
-                labels_par_code_rome[code] = a.get("libelle", "").strip()
         for pred in predictions_romeo:
-            label_predit = labels_par_code_rome.get(pred["code_rome"])
-            if label_predit:
-                score_romeo = round((pred["score"] or 0.5) * 100)
-                candidats[label_predit] = max(candidats.get(label_predit, 0), score_romeo)
+            score_romeo = round((pred["score"] or 0.5) * 100)
+            candidats[pred["libelle"]] = max(candidats.get(pred["libelle"], 0), score_romeo)
 
     # 1) Dictionnaire : si un terme connu est contenu dans la saisie, on cherche
     # les appellations officielles correspondant aux mots-clés français associés.
@@ -693,7 +898,7 @@ def suggerer_postes(saisie, max_resultats=8):
     mots_saisie = len(saisie_normalisee.split())
     candidats_ajustes = {}
     for label, score in candidats.items():
-        mots_label = len(labels_normalises[label].split())
+        mots_label = len(labels_normalises.get(label, _normaliser_texte(label)).split())
         mots_en_trop = max(0, mots_label - mots_saisie)
         candidats_ajustes[label] = score - (mots_en_trop * 3)
 
@@ -1651,19 +1856,31 @@ def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
     Repère, parmi une liste d'offres déjà récupérées, une offre de cette
     entreprise et en extrait le nécessaire pour préparer un entretien : le
     domaine d'activité TEL QUE DÉCRIT par France Travail (secteurActiviteLibelle,
-    un libellé humain — plus parlant qu'un code NAF brut) et la description
-    d'entreprise rédigée par l'employeur lui-même (entreprise.description),
-    jamais affichée jusqu'ici dans l'app alors qu'elle est déjà présente dans
-    les données qu'on récupère. Renvoie un dict (potentiellement partiel si
-    l'information manque) ou None si aucune offre de cette entreprise trouvée.
+    un libellé humain — plus parlant qu'un code NAF brut), la description
+    d'entreprise rédigée par l'employeur lui-même (entreprise.description), la
+    tranche d'effectif TELLE QUE DÉCLARÉE SUR L'OFFRE (trancheEffectifEtab —
+    présente sur ~20% des offres seulement, mais directe, sans les faux positifs
+    de correspondance par nom qu'implique SIRENE), et deux badges d'inclusion
+    (entrepriseAdaptee, employeurHandiEngage). Renvoie un dict (potentiellement
+    partiel si l'information manque) ou None si aucune offre de cette entreprise
+    trouvée.
     """
     for offre in offres_disponibles:
         if _nom_entreprise_normalise(offre).strip().lower() != nom_entreprise.strip().lower():
             continue
         description = (offre.get("entreprise", {}) or {}).get("description")
         secteur_libelle = offre.get("secteurActiviteLibelle")
-        if description or secteur_libelle:
-            return {"description": description, "secteur_libelle": secteur_libelle}
+        tranche_effectif = offre.get("trancheEffectifEtab")
+        entreprise_adaptee = (offre.get("entreprise", {}) or {}).get("entrepriseAdaptee") or offre.get("entrepriseAdaptee")
+        employeur_handi_engage = offre.get("employeurHandiEngage")
+        if description or secteur_libelle or tranche_effectif:
+            return {
+                "description": description,
+                "secteur_libelle": secteur_libelle,
+                "tranche_effectif": tranche_effectif,
+                "entreprise_adaptee": bool(entreprise_adaptee),
+                "employeur_handi_engage": bool(employeur_handi_engage),
+            }
     return None
 
 
@@ -2260,6 +2477,11 @@ __all__ = [
     "ROMEO_SCOPE",
     "predire_rome_romeo",
     "diagnostiquer_romeo",
+    "LA_BONNE_BOITE_SCOPE",
+    "diagnostiquer_la_bonne_boite",
+    "diagnostiquer_marche_travail",
+    "FICHES_METIERS_SCOPE",
+    "diagnostiquer_fiche_metier",
     "suggerer_postes",
     "chercher_offres",
     "resoudre_codes_rome",
