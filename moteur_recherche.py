@@ -1504,35 +1504,14 @@ def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
     return None
 
 
-@st.cache_data(ttl=1800)
-def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-    toutes_offres = []
-    taille_page = 150
-    for page in range(max_pages):
-        debut = page * taille_page
-        fin = debut + taille_page - 1
-        params = {"range": f"{debut}-{fin}"}
-        if departement:
-            params["departement"] = departement
-        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
-        if jours_max:
-            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
-            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        r = requests.get(url, headers=headers, params=params)
-        if r.status_code not in (200, 206):
-            break
-        resultats = r.json().get("resultats", [])
-        toutes_offres.extend(resultats)
-        if len(resultats) < taille_page:
-            break
-
-    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
-
+def _agreger_offres_par_ville_et_entreprise(toutes_offres, departement):
+    """
+    Agrège une liste d'offres déjà récupérées par ville et par entreprise —
+    logique extraite de offres_par_ville() pour être réutilisable sur une liste
+    d'offres obtenue autrement (ex: fusion code ROME + mots-clés dans
+    rechercher_offres_completes_elargi()), sans refaire un appel API dédié.
+    Retourne (df_villes, df_entreprises, nb_offres_approximatives, dates_creation).
+    """
     lieux = {}
     entreprises = {}  # cle_normalisee -> {"nom_affiche":..., "nombre_offres":..., "villes": set()}
     dates_creation = []
@@ -1549,10 +1528,6 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
             elif (chef_lieu := DEPARTEMENTS_CHEF_LIEU.get(
                 str(_deviner_departement_offre(ville, departement) or "").strip().upper()
             )):
-                # Pas de coordonnées précises pour cette offre (lieu renseigné seulement au
-                # niveau département, ou télétravail) : on positionne sur la plus grande
-                # ville DU DÉPARTEMENT DE L'OFFRE (déduit du libellé, fiable même en
-                # recherche multi-département ou nationale) plutôt que d'exclure l'offre.
                 _, lat_repli, lon_repli = chef_lieu
                 lieux[ville] = {
                     "nombre_offres": 0, "latitude": lat_repli, "longitude": lon_repli, "approximatif": True,
@@ -1560,9 +1535,6 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
             else:
                 lieux[ville] = {"nombre_offres": 0, "latitude": None, "longitude": None, "approximatif": True}
         elif lieux[ville]["approximatif"] and lat_brute is not None:
-            # Une offre précédente pour ce même libellé de lieu était retombée sur le
-            # repli chef-lieu : si une offre ultérieure a bien des coordonnées précises,
-            # on les adopte.
             lieux[ville]["latitude"] = lat_brute
             lieux[ville]["longitude"] = lon_brute
             lieux[ville]["approximatif"] = False
@@ -1597,11 +1569,90 @@ def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_c
     if not df_entreprises.empty:
         df_entreprises = df_entreprises.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
 
-    # Nombre d'offres positionnées par repli sur le chef-lieu du département plutôt
-    # qu'avec des coordonnées précises (renommé nb_offres_anonymes -> nb_offres_approximatives
-    # côté sémantique, la position dans le tuple de retour reste inchangée pour compatibilité).
     nb_offres_approximatives = int(df.loc[df["approximatif"], "nombre_offres"].sum()) if not df.empty else 0
 
+    return df, df_entreprises, nb_offres_approximatives, dates_creation
+
+
+@st.cache_data(ttl=1800)
+def offres_par_ville(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    toutes_offres = []
+    taille_page = 150
+    for page in range(max_pages):
+        debut = page * taille_page
+        fin = debut + taille_page - 1
+        params = {"range": f"{debut}-{fin}"}
+        if departement:
+            params["departement"] = departement
+        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
+        if jours_max:
+            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
+            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = requests.get(url, headers=headers, params=params)
+        if r.status_code not in (200, 206):
+            break
+        resultats = r.json().get("resultats", [])
+        toutes_offres.extend(resultats)
+        if len(resultats) < taille_page:
+            break
+
+    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
+
+    df, df_entreprises, nb_offres_approximatives, dates_creation = _agreger_offres_par_ville_et_entreprise(
+        toutes_offres, departement
+    )
+    date_min_pub = min(dates_creation) if dates_creation else None
+    date_max_pub = max(dates_creation) if dates_creation else None
+    return df, len(toutes_offres), date_min_pub, date_max_pub, df_entreprises, nb_offres_approximatives
+
+
+def rechercher_offres_completes_elargi(codes_rome, mots_cles_libres, departement, max_pages=3, jours_max=None):
+    """
+    Récupère les offres en combinant DEUX stratégies, fusionnées et dédupliquées :
+    la correspondance exacte par code(s) ROME résolu(s), ET une recherche libre
+    par mots-clés sur l'intitulé tel que tapé par l'utilisateur (motsCles, mode
+    "TOUS").
+
+    Nécessaire car une offre peut être classée par France Travail sous un code
+    ROME légèrement différent de celui résolu par notre suggestion — une
+    recherche par code(s) seul(s) peut donc sous-compter fortement par rapport à
+    ce qu'un candidat trouve en tapant le même intitulé directement sur
+    francetravail.fr (constaté en pratique : 12 offres via codes ROME contre 53
+    en recherche libre pour "Chef de projet informatique" dans le 13, un même
+    mois). La recherche libre comble cet écart sans perdre la précision des
+    codes ROME résolus (les deux résultats sont fusionnés, pas remplacés).
+    """
+    codes_valides = [c for c in codes_rome if c] if codes_rome else []
+    offres_par_code = []
+    for code in codes_valides:
+        offres_par_code.extend(
+            rechercher_offres_completes(code, departement, max_pages=max_pages, jours_max=jours_max)
+        )
+    offres_mots_cles = []
+    if mots_cles_libres and mots_cles_libres.strip():
+        offres_mots_cles = rechercher_offres_completes(
+            "TOUS", departement, max_pages=max_pages, mots_cles=mots_cles_libres.strip(), jours_max=jours_max
+        )
+    return fusionner_offres(offres_par_code, offres_mots_cles)
+
+
+def offres_par_ville_elargi(codes_rome, mots_cles_libres, departement, jours_max=None, max_pages=3):
+    """Version "élargie" (code(s) ROME + mots-clés fusionnés) de offres_par_ville(),
+    pour un ou plusieurs postes indifféremment — remplace offres_par_ville/_multi
+    dans "Tendance par profil" pour ne plus sous-compter par rapport à une
+    recherche libre équivalente sur France Travail. Même forme de retour que
+    offres_par_ville()."""
+    toutes_offres = rechercher_offres_completes_elargi(
+        codes_rome, mots_cles_libres, departement, max_pages=max_pages, jours_max=jours_max
+    )
+    df, df_entreprises, nb_offres_approximatives, dates_creation = _agreger_offres_par_ville_et_entreprise(
+        toutes_offres, departement
+    )
     date_min_pub = min(dates_creation) if dates_creation else None
     date_max_pub = max(dates_creation) if dates_creation else None
     return df, len(toutes_offres), date_min_pub, date_max_pub, df_entreprises, nb_offres_approximatives
@@ -2059,6 +2110,9 @@ __all__ = [
     "rechercher_wikidata_entreprise",
     "infos_entretien_entreprise",
     "offres_par_ville",
+    "_agreger_offres_par_ville_et_entreprise",
+    "rechercher_offres_completes_elargi",
+    "offres_par_ville_elargi",
     "volumes_departement_offres",
     "_CANDIDATS_SCOPE_STATS_MARCHE",
     "BASE_STATS_MARCHE",
