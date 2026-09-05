@@ -6,12 +6,6 @@ Recruteur. Aucune interface ici — uniquement des fonctions réutilisables
 (appels API France Travail, appels API Adzuna, résolution ROME, scoring de
 correspondance...). Objectif : éviter toute duplication du moteur de calcul
 entre les deux espaces (cf. synthèse technique, section "Architecture retenue").
-
-V4 : ajout de deux fonctions PARTAGÉES entre "Créer mon CV" et "Tendance par
-profil" (auparavant dupliquées / privées à espace_candidat.py) :
-  - selecteur_poste_tags() : sélecteur de poste par tags cliquables
-  - analyser_competences_multi() : suggestions de compétences pour une
-    sélection de plusieurs postes (fusion des résultats mono-poste)
 """
 
 import streamlit as st
@@ -99,10 +93,50 @@ _REF_OUTILS_INFORMATIQUES = {
     "outlook", "access", "visio", "adobe", "canva", "wix", "shopify",
 }
 
+# France Travail n'a PAS de champ API dédié "certifications" (confirmé : le schéma
+# d'offre expose "formations" — niveau/domaine d'études requis, pas des certifications
+# nommées — et "competences", une liste libre où des certifications apparaissent parfois
+# mélangées aux autres compétences). Cette liste sert donc à les repérer par mot-clé dans
+# ce même champ libre, comme pour les outils/langages — couverture partielle par nature,
+# à enrichir si des cas manquants remontent en usage réel.
+_REF_CERTIFICATIONS = {
+    # Gestion de projet / méthodes
+    "pmp", "prince2", "prince 2", "capm", "itil", "cobit", "six sigma", "lean six sigma",
+    "lean management", "scrum master", "psm", "csm", "safe agilist", "safe", "product owner certifié",
+    "pspo",
+    # Cybersécurité / IT
+    "cissp", "cism", "cisa", "ceh", "oscp", "comptia", "security+", "network+",
+    "ccna", "ccnp", "ccie", "mcsa", "mcse", "rhce", "lpic",
+    # Cloud
+    "aws certified", "aws solutions architect", "azure certified", "microsoft certified",
+    "google cloud certified", "gcp certified", "terraform associate", "kubernetes certified", "ckad", "cka",
+    # Data / IA
+    "tensorflow developer certificate", "databricks certified", "sas certified",
+    # Qualité / normes
+    "iso 27001", "iso 9001", "iso 14001", "iso 45001", "haccp", "qualiopi",
+    # Langues
+    "toeic", "toefl", "ielts", "bulats", "linguaskill", "delf", "dalf", "goethe zertifikat", "dele",
+    # Finance / comptabilité / droit
+    "amf", "dscg", "dec", "cfa", "cfa level", "frm",
+    # Marketing / vente
+    "google ads", "google analytics certified", "hubspot certified", "meta blueprint",
+    # Sécurité / logistique / terrain
+    "caces", "habilitation électrique", "habilitation electrique", "sst", "hacces",
+    "bafa", "bafd", "permis b", "permis c", "permis ce", "permis poids lourd", "fimo", "fco", "adr",
+    "ifop", "ifsi", "diplôme d'état", "diplome d'etat",
+    # RH / immobilier
+    "carte professionnelle", "carte t", "certification voltaire", "tosa",
+}
+
 
 def _classifier_competence(libelle):
-    """Classe un libellé de compétence en 'langage', 'outil' ou 'competence' (générique)."""
+    """Classe un libellé de compétence en 'langage', 'outil', 'certification' ou
+    'competence' (générique). Certification vérifiée en premier : certains sigles
+    (ex: "AWS Certified...") contiennent aussi un nom d'outil ("aws")."""
     l = f" {libelle.lower().strip()} "
+    for certif in _REF_CERTIFICATIONS:
+        if certif in l:
+            return "certification"
     for lang in _REF_LANGAGES_INFORMATIQUES:
         if f" {lang.strip()} " in l:
             return "langage"
@@ -220,9 +254,14 @@ def calculer_correspondance_recruteur(
 def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
     """
     Récupère les offres (même logique de filtrage que le reste de l'app) et
-    extrait leur champ 'competences' pour bâtir 3 listes de suggestions
-    (compétences génériques / outils informatiques / langages informatiques),
-    chacune avec un % d'offres qui la mentionnent.
+    extrait leur champ 'competences' pour bâtir 4 listes de suggestions
+    (compétences génériques / outils informatiques / langages informatiques /
+    certifications), chacune avec un % d'offres qui la mentionne.
+
+    NB certifications : France Travail n'a pas de champ API dédié aux certifications
+    (le schéma expose "formations" pour le niveau/domaine d'études requis, pas des
+    certifications nommées) — repérées ici par mot-clé dans le champ libre "competences",
+    comme les outils/langages. Couverture partielle par construction.
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -250,7 +289,7 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
             break
 
     nb_total_offres = len(toutes_offres)
-    compteurs = {"competence": Counter(), "outil": Counter(), "langage": Counter()}
+    compteurs = {"competence": Counter(), "outil": Counter(), "langage": Counter(), "certification": Counter()}
 
     for offre in toutes_offres:
         competences_offre = offre.get("competences", [])
@@ -272,49 +311,19 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
             {"libelle": lib, "nombre_offres": n, "pourcentage": round(100 * n / nb_total_offres)}
             for lib, n in compteur.most_common(15)
         ]
-        return pd.DataFrame(lignes)
+        # Colonnes explicites : pd.DataFrame([]) sans "columns=" ne crée AUCUNE colonne
+        # quand lignes est vide (ex: des offres ont été trouvées mais aucune ne mentionne
+        # de compétence dans cette catégorie précise) — provoquait un KeyError("libelle")
+        # plus loin sur df["libelle"] au lieu d'un DataFrame vide exploitable normalement.
+        return pd.DataFrame(lignes, columns=["libelle", "nombre_offres", "pourcentage"])
 
     return (
         _construire_df(compteurs["competence"]),
         _construire_df(compteurs["outil"]),
         _construire_df(compteurs["langage"]),
+        _construire_df(compteurs["certification"]),
         nb_total_offres,
     )
-
-
-@st.cache_data(ttl=1800)
-def analyser_competences_multi(codes_rome, departement, jours_max=None, max_pages=5):
-    """
-    V4 — Fusionne les suggestions de compétences/outils/langages de plusieurs codes
-    ROME (sélection multi-poste dès l'onglet "Créer mon CV"). Réutilise
-    analyser_competences() une fois par code (pas de logique d'appel API dupliquée),
-    puis regroupe les compteurs et recalcule un pourcentage sur le total d'offres
-    cumulé — même principe que les autres fonctions "_multi" du module.
-    """
-    codes_valides = [c for c in codes_rome if c]
-    if not codes_valides:
-        vide = pd.DataFrame(columns=["libelle", "nombre_offres", "pourcentage"])
-        return vide, vide, vide, 0
-
-    resultats = [
-        analyser_competences(code, departement, jours_max=jours_max, max_pages=max_pages)
-        for code in codes_valides
-    ]
-    nb_total = sum(r[3] for r in resultats)
-
-    def _fusionner(index):
-        dfs = [r[index] for r in resultats if not r[index].empty]
-        if not dfs:
-            return pd.DataFrame(columns=["libelle", "nombre_offres", "pourcentage"])
-        df = (
-            pd.concat(dfs, ignore_index=True)
-            .groupby("libelle", as_index=False)["nombre_offres"]
-            .sum()
-        )
-        df["pourcentage"] = (100 * df["nombre_offres"] / nb_total).round().astype(int) if nb_total else 0
-        return df.sort_values("nombre_offres", ascending=False).head(15).reset_index(drop=True)
-
-    return _fusionner(0), _fusionner(1), _fusionner(2), nb_total
 
 
 @st.cache_data(ttl=3600)
@@ -448,142 +457,37 @@ def suggerer_postes(saisie, max_resultats=8):
                     if mot_cle_normalise in _normaliser_texte(label):
                         candidats[label] = max(candidats.get(label, 0), 100)  # priorité maximale
 
-    # 2) Recherche floue directe sur la saisie brute, en complément.
-    resultats_flous = process.extract(saisie, labels, scorer=fuzz.WRatio, limit=max_resultats * 2)
-    for label, score, _ in resultats_flous:
+    # 2) Recherche floue, en complément — sur la saisie ET le référentiel EXPLICITEMENT
+    # normalisés des deux côtés (au lieu de compter sur le traitement interne de
+    # fuzz.WRatio, qui a produit des résultats différents entre "PMO" et "pmo" en
+    # pratique — la casse ne doit jamais changer les suggestions).
+    labels_normalises = {label: _normaliser_texte(label) for label in labels}
+    norm_vers_label = {}
+    for label, norm in labels_normalises.items():
+        norm_vers_label.setdefault(norm, label)
+    resultats_flous = process.extract(
+        saisie_normalisee, list(norm_vers_label.keys()), scorer=fuzz.WRatio, limit=max_resultats * 2
+    )
+    for label_normalise, score, _ in resultats_flous:
         if score >= 55:  # seuil pour écarter le bruit non pertinent
+            label = norm_vers_label[label_normalise]
             candidats[label] = max(candidats.get(label, 0), score)
 
-    resultats_tries = sorted(candidats.items(), key=lambda x: x[1], reverse=True)
+    # Pénalité par mot supplémentaire : fuzz.WRatio traite volontiers la saisie comme un
+    # SOUS-TEXTE de l'appellation et lui donne un score élevé, même quand l'appellation
+    # ajoute un mot qui change complètement le métier (ex: "chef de projet" saisi ->
+    # "Assistant chef de projet" bien noté alors que ce n'est pas le même métier). On
+    # pénalise chaque mot en trop par rapport à la saisie pour repousser ces faux amis
+    # derrière les correspondances de longueur équivalente.
+    mots_saisie = len(saisie_normalisee.split())
+    candidats_ajustes = {}
+    for label, score in candidats.items():
+        mots_label = len(_normaliser_texte(label).split())
+        mots_en_trop = max(0, mots_label - mots_saisie)
+        candidats_ajustes[label] = score - (mots_en_trop * 8)
+
+    resultats_tries = sorted(candidats_ajustes.items(), key=lambda x: x[1], reverse=True)
     return [label for label, _ in resultats_tries[:max_resultats]]
-
-
-def selecteur_poste_tags(cle_prefixe, valeur_initiale="", departement_pour_resolution=None,
-                          autoriser_tous_les_postes=True):
-    """
-    V4 — Sélecteur de poste par tags cliquables (référentiel ROME + recherche
-    floue), FACTORISÉ pour être appelé aussi bien depuis "Créer mon CV" que
-    depuis "Tendance par profil" (auparavant dupliqué / privé à
-    espace_candidat.py sous le nom _selecteur_poste).
-
-    Un intitulé libre (ex: "Chef de projet") n'existe généralement pas tel
-    quel dans la nomenclature ROME : ce sélecteur propose les appellations
-    officielles les plus proches sous forme de tags cliquables, pour que
-    l'utilisateur choisisse lui-même le ou les postes pertinents à
-    interroger sur la base France Travail.
-
-    Retourne (postes_choisis: list[str], codes_par_poste: dict[str, str|None]).
-    """
-    appellations = get_referentiel_appellations()
-    labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
-
-    cle_checkbox = f"{cle_prefixe}_checkbox_tous_postes"
-    cle_texte = f"{cle_prefixe}_poste_texte_libre"
-    cle_selection = f"{cle_prefixe}_postes_selectionnes"
-
-    if not labels_appellations:
-        st.caption("⚠️ Référentiel des postes indisponible pour le moment — recherche par mot-clé en secours.")
-        poste_texte_secours = st.text_input("Poste recherché (mot-clé)", key=f"{cle_prefixe}_poste_texte_secours")
-        poste_choisi = poste_texte_secours.strip() if poste_texte_secours.strip() else ""
-        return ([poste_choisi] if poste_choisi else []), {}
-
-    if cle_texte not in st.session_state:
-        st.session_state[cle_texte] = valeur_initiale
-    if cle_selection not in st.session_state:
-        st.session_state[cle_selection] = []
-
-    if autoriser_tous_les_postes:
-        col_texte, col_checkbox = st.columns([3, 1])
-        recherche_tous_postes = col_checkbox.checkbox(
-            "🌐 Tous les postes (analyse globale, sans poste précis)",
-            key=cle_checkbox,
-        )
-    else:
-        col_texte = st
-        recherche_tous_postes = False
-
-    poste_texte_libre = col_texte.text_input(
-        "Poste recherché (tape même un intitulé moderne ou en anglais : "
-        "'Chef de projet', 'Data Analyst', 'Product Owner'...)",
-        key=cle_texte,
-        disabled=recherche_tous_postes,
-        help=(
-            "Un intitulé comme 'Chef de projet' n'existe pas toujours tel quel dans la base "
-            "France Travail : sélectionne ci-dessous les appellations officielles les plus "
-            "proches pour lancer la recherche."
-        ),
-    )
-
-    # Un nouveau terme de recherche efface la sélection précédente : sans ça, les
-    # postes choisis lors d'une recherche antérieure (ex: "big data") continuaient
-    # à apparaître cochés en changeant complètement de sujet (ex: "réceptionniste"),
-    # ce qui prêtait à confusion sur ce qui allait réellement être recherché.
-    cle_terme_precedent = f"{cle_prefixe}_poste_terme_precedent"
-    terme_precedent = st.session_state.get(cle_terme_precedent, poste_texte_libre)
-    if poste_texte_libre != terme_precedent and st.session_state[cle_selection]:
-        st.session_state[cle_selection] = []
-    st.session_state[cle_terme_precedent] = poste_texte_libre
-
-    if recherche_tous_postes:
-        st.success("Poste sélectionné : **🌐 Tous les postes**")
-        return ["🌐 Tous les postes"], {}
-
-    suggestions = suggerer_postes(poste_texte_libre) if poste_texte_libre.strip() else []
-
-    # Auto-sélectionne la meilleure suggestion pour ce terme, une seule fois. Ne
-    # se redéclenche pas si l'utilisateur retire ensuite volontairement ce choix.
-    cle_auto_poste_pour_terme = f"{cle_prefixe}_auto_poste_pour_terme"
-    if (
-        suggestions
-        and not st.session_state[cle_selection]
-        and st.session_state.get(cle_auto_poste_pour_terme) != poste_texte_libre
-    ):
-        st.session_state[cle_selection].append(suggestions[0])
-    st.session_state[cle_auto_poste_pour_terme] = poste_texte_libre
-
-    tous_les_tags = list(dict.fromkeys(suggestions + st.session_state[cle_selection]))
-
-    if tous_les_tags:
-        st.caption("💡 Suggestions — clique pour ajouter/retirer de ta sélection :")
-        colonnes_tags = st.columns(2)
-        for i, label in enumerate(tous_les_tags):
-            est_selectionne = label in st.session_state[cle_selection]
-            texte_bouton = f"✅ {label}" if est_selectionne else label
-            col_tag = colonnes_tags[i % 2]
-            if col_tag.button(texte_bouton, key=f"{cle_prefixe}_tag_{i}_{label}"):
-                if est_selectionne:
-                    st.session_state[cle_selection].remove(label)
-                else:
-                    st.session_state[cle_selection].append(label)
-                st.rerun()
-    elif poste_texte_libre.strip():
-        st.caption("Aucune suggestion trouvée pour ce terme — essaie une autre formulation.")
-
-    postes_choisis = st.session_state[cle_selection]
-
-    if not postes_choisis:
-        st.info("Sélectionne au moins un poste ci-dessus (ou coche « Tous les postes »).")
-        return [], {}
-
-    codes_par_poste = {}
-    for label in postes_choisis:
-        item_poste = next((a for a in appellations if a.get("libelle", "").strip() == label), None)
-        code = _extraire_code_rome(item_poste) if item_poste else None
-        if not code:
-            with st.spinner(f"Résolution de « {label} »..."):
-                df_resolu = resoudre_codes_rome(mots_cles=label, departement=departement_pour_resolution)
-            code = df_resolu.iloc[0]["code_rome"] if not df_resolu.empty else None
-        codes_par_poste[label] = code
-
-    postes_non_resolus = [label for label, code in codes_par_poste.items() if not code]
-    if postes_non_resolus:
-        st.warning(
-            "⚠️ Impossible de résoudre pour l'instant : " + ", ".join(postes_non_resolus) +
-            " — ce(s) poste(s) seront ignorés dans la recherche."
-        )
-
-    st.success("Poste(s) sélectionné(s) : **" + " · ".join(postes_choisis) + "**")
-    return postes_choisis, codes_par_poste
 
 
 def chercher_offres(code_rome, departement, secteur_naf=None, jours_max=None, mots_cles=None, range_str="0-149"):
@@ -1267,87 +1171,125 @@ def repartition_contrats_et_salaires_multi(codes_rome, departement, jours_max=No
 LABEL_ENTREPRISE_ANONYME = "Entreprise non communiquée"
 
 
-# ---------------------------------------------------------------------------
-# V4.1 — Fiches entreprises via Wikipédia
-#
-# Objectif : pour une entreprise repérée dans "Top recruteurs" (nom brut issu
-# de France Travail / Adzuna, souvent bruyant), aller chercher une mini-fiche
-# de présentation sur Wikipédia (secteur, historique, taille...) sans avoir à
-# maintenir de base de données propre. Dégradation silencieuse (retourne
-# None) si rien de pertinent n'est trouvé — même logique de repli que pour
-# Adzuna/DeepL ailleurs dans ce module : une fonctionnalité en bonus ne doit
-# jamais faire planter le reste de l'app.
-# ---------------------------------------------------------------------------
-@st.cache_data(ttl=86400)
-def recuperer_fiche_entreprise_wikipedia(nom_entreprise, langue="fr"):
-    """
-    Recherche une fiche Wikipédia pour une entreprise à partir de son nom brut
-    (ex: "SIGNE +", "SARL Dupont Frères SAV"...).
-
-    Étape 1 — API "opensearch" de Wikipédia : trouve le titre de page le plus
-    proche du nom fourni (tolère les variantes de casse/ponctuation).
-    Étape 2 — API REST "page/summary" : récupère l'extrait, l'image et l'URL
-    de cette page.
-
-    Écarte les pages d'homonymie et les résultats sans extrait exploitable.
-    Retourne un dict {titre, extrait, url, image_url} ou None si aucune fiche
-    pertinente n'est trouvée (nom trop générique, entreprise non notable...).
-    """
-    nom_nettoye = (nom_entreprise or "").strip()
-    if not nom_nettoye or nom_nettoye == LABEL_ENTREPRISE_ANONYME:
-        return None
-
-    try:
-        url_recherche = f"https://{langue}.wikipedia.org/w/api.php"
-        params_recherche = {
-            "action": "opensearch",
-            "search": nom_nettoye,
-            "limit": 1,
-            "namespace": 0,
-            "format": "json",
-        }
-        r = requests.get(url_recherche, params=params_recherche, timeout=8)
-        r.raise_for_status()
-        resultats = r.json()
-        titres_trouves = resultats[1] if isinstance(resultats, list) and len(resultats) > 1 else []
-        if not titres_trouves:
-            return None
-        titre_page = titres_trouves[0]
-
-        url_resume = (
-            f"https://{langue}.wikipedia.org/api/rest_v1/page/summary/"
-            f"{requests.utils.quote(titre_page, safe='')}"
-        )
-        r2 = requests.get(url_resume, timeout=8, headers={"Accept": "application/json"})
-        if r2.status_code != 200:
-            return None
-        data = r2.json()
-
-        # Écarte les pages d'homonymie (peu utile tel quel) et les résultats sans
-        # extrait exploitable (page trop courte / redirection bancale).
-        if data.get("type") == "disambiguation" or not data.get("extract"):
-            return None
-
-        url_page = (
-            (data.get("content_urls") or {}).get("desktop", {}).get("page")
-            or f"https://{langue}.wikipedia.org/wiki/{requests.utils.quote(titre_page, safe='')}"
-        )
-
-        return {
-            "titre": data.get("title", titre_page),
-            "extrait": data.get("extract", ""),
-            "url": url_page,
-            "image_url": (data.get("thumbnail") or {}).get("source"),
-        }
-    except requests.RequestException:
-        return None
-
-
 def _nom_entreprise_normalise(offre):
     """Nom d'entreprise d'une offre, ou LABEL_ENTREPRISE_ANONYME si l'offre est diffusée
     sans nom d'entreprise visible (recrutement anonyme) — regroupe ces offres sous une
     même étiquette au lieu de les exclure du tableau des recruteurs."""
     return offre.get("entreprise", {}).get("nom") or LABEL_ENTREPRISE_ANONYME
+
+
+# ---------------------------------------------------------------------------
+# Fiche entreprise — API "Recherche d'entreprises" (data.gouv.fr / DINUM), publique
+# et gratuite, SANS clé ni compte à créer (contrairement à ROMEO/RNCP/Data Emploi,
+# qui restent à intégrer une fois les accès confirmés). Synthèse des données SIRENE
+# (INSEE) et du Registre National des Entreprises — utile pour préparer une
+# candidature spontanée (candidat) ou un argumentaire de prospection (agence).
+# ---------------------------------------------------------------------------
+RECHERCHE_ENTREPRISES_URL = "https://recherche-entreprises.api.gouv.fr/search"
+
+# Codes INSEE "tranche d'effectif salarié" -> libellé lisible.
+TRANCHE_EFFECTIF_LABELS = {
+    "NN": "Effectif non renseigné", "00": "0 salarié", "01": "1 à 2 salariés",
+    "02": "3 à 5 salariés", "03": "6 à 9 salariés", "11": "10 à 19 salariés",
+    "12": "20 à 49 salariés", "21": "50 à 99 salariés", "22": "100 à 199 salariés",
+    "31": "200 à 249 salariés", "32": "250 à 499 salariés", "41": "500 à 999 salariés",
+    "42": "1 000 à 1 999 salariés", "51": "2 000 à 4 999 salariés",
+    "52": "5 000 à 9 999 salariés", "53": "10 000 salariés et plus",
+}
+
+
+@st.cache_data(ttl=86400)
+def rechercher_entreprise_siren(nom_entreprise):
+    """
+    Cherche une entreprise par nom sur l'API "Recherche d'entreprises" (DINUM,
+    gratuite, sans clé) et renvoie une fiche synthétique, ou None si rien trouvé.
+
+    Récupère plusieurs candidats (pas juste le premier) et préfère celui qui a un
+    effectif renseigné : pour un grand groupe, le tout premier résultat est souvent
+    la holding de tête (ex: "Capgemini SE"), qui n'emploie souvent personne en
+    propre et n'a qu'un seul établissement déclaré — l'entité opérationnelle réelle
+    (qui a un vrai effectif) est presque toujours plus informative pour un candidat
+    ou un recruteur.
+
+    La recherche par nom reste approximative — le résultat doit être présenté
+    comme une correspondance probable à vérifier, pas une certitude, surtout pour
+    des noms d'entreprise courts ou très courants.
+    """
+    if not nom_entreprise or nom_entreprise == LABEL_ENTREPRISE_ANONYME:
+        return None
+    try:
+        r = requests.get(
+            RECHERCHE_ENTREPRISES_URL, params={"q": nom_entreprise, "per_page": 5}, timeout=8
+        )
+        r.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    resultats = r.json().get("results", [])
+    if not resultats:
+        return None
+
+    res = next((c for c in resultats if c.get("tranche_effectif_salarie")), resultats[0])
+    siege = res.get("siege", {}) or {}
+    tranche = res.get("tranche_effectif_salarie")
+
+    return {
+        "nom": res.get("nom_complet") or res.get("nom_raison_sociale"),
+        "siren": res.get("siren"),
+        "siret_siege": siege.get("siret"),
+        "naf": res.get("activite_principale"),
+        "secteur_libelle": naf_vers_libelle(res.get("activite_principale")),
+        "categorie_entreprise": res.get("categorie_entreprise"),  # TPE/PME/ETI/GE
+        "tranche_effectif_libelle": TRANCHE_EFFECTIF_LABELS.get(tranche, "Non renseigné"),
+        "adresse": siege.get("adresse"),
+        "date_creation": res.get("date_creation"),
+        "forme_juridique": res.get("nature_juridique"),
+        "est_qualiopi": (res.get("complements") or {}).get("est_qualiopi"),
+        # Proxy de présence géographique : nombre d'établissements ouverts sur le
+        # territoire. Ne dit pas OÙ (ça demanderait un appel supplémentaire par
+        # établissement), juste une idée de l'étendue — présenté comme tel.
+        "nombre_etablissements_ouverts": res.get("nombre_etablissements_ouverts"),
+        "url_annuaire": f"https://annuaire-entreprises.data.gouv.fr/entreprise/{res.get('siren')}" if res.get("siren") else None,
+    }
+
+
+@st.cache_data(ttl=3600)
+def _referentiel_naf_vers_libelle():
+    """Dict code NAF -> libellé, construit une seule fois à partir du référentiel
+    secteurs d'activité France Travail (mêmes codes que le paramètre secteurActivite
+    de l'API Offres d'emploi — à vérifier si jamais les codes SIRENE s'avèrent dans
+    un format légèrement différent en pratique)."""
+    return {s.get("code"): s.get("libelle") for s in get_secteurs_activite() if s.get("code")}
+
+
+def naf_vers_libelle(code_naf):
+    """Libellé humain d'un code NAF (ex: '84.11Z' -> 'Administration publique
+    générale'), ou None si le code est absent du référentiel — mieux vaut ne rien
+    afficher qu'un mauvais libellé deviné."""
+    if not code_naf:
+        return None
+    return _referentiel_naf_vers_libelle().get(code_naf)
+
+
+def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
+    """
+    Repère, parmi une liste d'offres déjà récupérées, une offre de cette
+    entreprise et en extrait le nécessaire pour préparer un entretien : le
+    domaine d'activité TEL QUE DÉCRIT par France Travail (secteurActiviteLibelle,
+    un libellé humain — plus parlant qu'un code NAF brut) et la description
+    d'entreprise rédigée par l'employeur lui-même (entreprise.description),
+    jamais affichée jusqu'ici dans l'app alors qu'elle est déjà présente dans
+    les données qu'on récupère. Renvoie un dict (potentiellement partiel si
+    l'information manque) ou None si aucune offre de cette entreprise trouvée.
+    """
+    for offre in offres_disponibles:
+        if _nom_entreprise_normalise(offre).strip().lower() != nom_entreprise.strip().lower():
+            continue
+        description = (offre.get("entreprise", {}) or {}).get("description")
+        secteur_libelle = offre.get("secteurActiviteLibelle")
+        if description or secteur_libelle:
+            return {"description": description, "secteur_libelle": secteur_libelle}
+    return None
 
 
 @st.cache_data(ttl=1800)
@@ -1861,14 +1803,12 @@ __all__ = [
     "calculer_correspondance_offre",
     "calculer_correspondance_recruteur",
     "analyser_competences",
-    "analyser_competences_multi",
     "get_secteurs_activite",
     "get_referentiel_appellations",
     "_extraire_code_rome",
     "DICTIONNAIRE_INTITULES_MODERNES",
     "_normaliser_texte",
     "suggerer_postes",
-    "selecteur_poste_tags",
     "chercher_offres",
     "resoudre_codes_rome",
     "secteurs_pour_poste",
@@ -1896,7 +1836,12 @@ __all__ = [
     "repartition_contrats_et_salaires_multi",
     "LABEL_ENTREPRISE_ANONYME",
     "_nom_entreprise_normalise",
-    "recuperer_fiche_entreprise_wikipedia",
+    "RECHERCHE_ENTREPRISES_URL",
+    "TRANCHE_EFFECTIF_LABELS",
+    "rechercher_entreprise_siren",
+    "_referentiel_naf_vers_libelle",
+    "naf_vers_libelle",
+    "infos_entretien_entreprise",
     "offres_par_ville",
     "volumes_departement_offres",
     "_CANDIDATS_SCOPE_STATS_MARCHE",
