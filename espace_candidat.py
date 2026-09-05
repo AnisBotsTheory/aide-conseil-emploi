@@ -84,6 +84,15 @@ def _afficher_fiche_entreprise(nom_entreprise):
                 st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
             if infos_entretien["description"]:
                 st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
+            if infos_entretien.get("tranche_effectif"):
+                st.markdown(
+                    f"**Effectif (déclaré sur l'offre) :** {infos_entretien['tranche_effectif']} "
+                    "— déclaratif, présent sur ~20% des offres seulement."
+                )
+            if infos_entretien.get("entreprise_adaptee"):
+                st.markdown("♿ Entreprise adaptée")
+            if infos_entretien.get("employeur_handi_engage"):
+                st.markdown("🏅 Employeur reconnu \"Handi-engagé\"")
         sources_utilisees.append("France Travail (offre publiée par l'entreprise)")
 
     if fiche:
@@ -236,11 +245,14 @@ with tab_profil:
                         )
                     )
                     with st.spinner("Récupération des offres et demandeurs d'emploi..."):
-                        total_dep_offres = len(
-                            rechercher_offres_completes_elargi(
-                                codes_resolus_cv, titre_libre_cv, departement_actif,
-                                jours_max=jours_max_periode_offres,
-                            )
+                        offres_pour_tension = rechercher_offres_completes_elargi(
+                            codes_resolus_cv, titre_libre_cv, departement_actif,
+                            jours_max=jours_max_periode_offres,
+                        )
+                        total_dep_offres = len(offres_pour_tension)
+                        nb_postes_ouverts = sum(o.get("nombrePostes") or 1 for o in offres_pour_tension)
+                        nb_offres_manque_candidats = sum(
+                            1 for o in offres_pour_tension if o.get("offresManqueCandidats")
                         )
                         detail_par_poste = []
                         for label, code in codes_par_poste_cv.items():
@@ -290,6 +302,23 @@ with tab_profil:
                     else:
                         st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
 
+                    if total_dep_offres:
+                        c3, c4 = st.columns(2)
+                        c3.metric(
+                            "Postes ouverts (cumulé)", nb_postes_ouverts,
+                            help="Une offre peut proposer plusieurs postes — total réel de postes à pourvoir.",
+                        )
+                        pct_manque_candidats = round(100 * nb_offres_manque_candidats / total_dep_offres)
+                        c4.metric(
+                            "Offres signalées difficiles à pourvoir", f"{pct_manque_candidats}%",
+                            help=(
+                                f"{nb_offres_manque_candidats} offre(s) sur {total_dep_offres} signalée(s) "
+                                "par France Travail comme manquant de candidats (champ officiel "
+                                "'offresManqueCandidats') — indicateur de tension directement sur ces "
+                                "offres, sans dépendre d'une nomenclature différente (contrairement au BMO)."
+                            ),
+                        )
+
             with sous_tab_recruteurs:
                 with st.spinner("Récupération des recruteurs actifs..."):
                     _, _, _, _, df_entreprises, _ = offres_par_ville_elargi(
@@ -311,13 +340,15 @@ with tab_profil:
                         "entreprise (secteur, effectif, présentation...), direction l'onglet "
                         "**📇 Fiches entreprises**."
                     )
+                    df_entreprises_affiche = df_entreprises.copy()
+                    total_offres_entreprises = df_entreprises_affiche["nombre_offres"].sum()
+                    df_entreprises_affiche["% des offres"] = (
+                        (100 * df_entreprises_affiche["nombre_offres"] / total_offres_entreprises).round(1)
+                        if total_offres_entreprises else 0
+                    )
                     st.dataframe(
-                        df_entreprises.rename(
-                            columns={
-                                "entreprise": "Entreprise",
-                                "nombre_offres": "Nombre d'offres",
-                            }
-                        ).drop(columns=["villes"]),
+                        df_entreprises_affiche.rename(columns={"entreprise": "Entreprise"})
+                        .drop(columns=["villes", "nombre_offres"]),
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -326,7 +357,7 @@ with tab_profil:
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
                 else:
-                    _, _, _, df_certifs, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
+                    _, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
                     st.caption(
                         "ℹ️ France Travail n'a pas de champ dédié aux certifications — repérées par "
                         "mot-clé dans les offres réelles (même échantillon que les suggestions de "
@@ -338,6 +369,23 @@ with tab_profil:
                         st.dataframe(
                             df_certifs.rename(
                                 columns={"libelle": "Certification", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                    st.divider()
+                    st.markdown("##### 🤝 Savoir-être les plus demandés")
+                    st.caption(
+                        "ℹ️ Champ structuré dédié de l'API Offres d'emploi (qualitesProfessionnelles) — "
+                        "pas un repérage par mot-clé, contrairement aux certifications."
+                    )
+                    if df_savoir_etre.empty:
+                        st.info("Aucun savoir-être identifié dans les offres de cet échantillon.")
+                    else:
+                        st.dataframe(
+                            df_savoir_etre.rename(
+                                columns={"libelle": "Savoir-être", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
                             ),
                             use_container_width=True,
                             hide_index=True,
@@ -379,10 +427,32 @@ with tab_profil:
                             )
                         df_carte["latitude"] = df_carte["latitude"].astype(float)
                         df_carte["longitude"] = df_carte["longitude"].astype(float)
-                        st.map(
-                            df_carte, latitude="latitude", longitude="longitude",
-                            size="nombre_offres", color="#0066cc",
+                        df_carte["pourcentage"] = (
+                            (100 * df_carte["nombre_offres"] / total_region).round(1) if total_region else 0
                         )
+                        fig_carte = px.scatter_mapbox(
+                            df_carte,
+                            lat="latitude", lon="longitude",
+                            size="nombre_offres", size_max=30,
+                            color="approximatif",
+                            color_discrete_map={False: "#0066cc", True: "#e67e22"},
+                            hover_name="ville",
+                            hover_data={
+                                "nombre_offres": True, "pourcentage": ":.1f",
+                                "latitude": False, "longitude": False, "approximatif": False,
+                            },
+                            labels={
+                                "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres",
+                                "approximatif": "Position approximative",
+                            },
+                            zoom=8, height=450,
+                        )
+                        fig_carte.update_layout(
+                            mapbox_style="carto-darkmatter",
+                            margin=dict(t=0, l=0, r=0, b=0),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig_carte, use_container_width=True)
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
 
@@ -432,8 +502,7 @@ with tab_avance:
         code_rome_actif = st.session_state["code_rome_choisi"]
         codes_rome_choisis_avance = st.session_state.get("codes_rome_choisis", [])
         departement_actif = st.session_state["departement_profil_actif"]
-        mots_cles_actifs_avance = st.session_state.get("mots_cles_profil_actif", "")
-        recherche_multi_avance = code_rome_actif == "MULTI"
+        titre_libre_cv_avance = st.session_state.get("cv_titre", "").strip()
 
         # Auto-déclenchement : se relance seul dès que le poste/département actif change
         # (mis à jour automatiquement par "Tendance par profil"), résultats conservés en
@@ -443,16 +512,11 @@ with tab_avance:
 
         if st.session_state.get(cle_signature_avance) != signature_avance_actuelle:
             with st.spinner("Analyse en cours (contrats, salaires, expérience)..."):
-                if recherche_multi_avance:
-                    df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
-                        repartition_contrats_et_salaires_multi(codes_rome_choisis_avance, departement_actif)
+                df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
+                    repartition_contrats_et_salaires_elargi(
+                        codes_rome_choisis_avance, titre_libre_cv_avance, departement_actif,
                     )
-                else:
-                    df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
-                        repartition_contrats_et_salaires(
-                            code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
-                        )
-                    )
+                )
             st.session_state["avance_resultats"] = (
                 df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience,
             )
