@@ -260,8 +260,10 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
 
     NB certifications : France Travail n'a pas de champ API dédié aux certifications
     (le schéma expose "formations" pour le niveau/domaine d'études requis, pas des
-    certifications nommées) — repérées ici par mot-clé dans le champ libre "competences",
-    comme les outils/langages. Couverture partielle par construction.
+    certifications nommées) — repérées ici par mot-clé à la fois dans le champ
+    structuré "competences" ET dans le texte complet de la fiche de poste (intitulé +
+    description), une certification étant souvent mentionnée en phrase libre plutôt
+    que comme un tag structuré. Couverture partielle par construction.
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -293,8 +295,6 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
 
     for offre in toutes_offres:
         competences_offre = offre.get("competences", [])
-        if not competences_offre:
-            continue
         libelles_vus = set()  # évite un double comptage si dupliqué dans la même offre
         for comp in competences_offre:
             libelle = (comp.get("libelle") or "").strip()
@@ -303,6 +303,18 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
             libelles_vus.add(libelle)
             categorie = _classifier_competence(libelle)
             compteurs[categorie][libelle] += 1
+
+        # Certifications aussi repérées dans le texte complet de la fiche de poste
+        # (intitulé + description rédigée par le recruteur), pas seulement dans le
+        # champ structuré "competences" — une certification est souvent mentionnée
+        # en phrase libre ("Certification PMP appréciée", "CACES R489 requis")
+        # plutôt que comme un tag structuré.
+        texte_fiche_poste = f"{offre.get('intitule', '')} {offre.get('description', '')}".lower()
+        if texte_fiche_poste.strip():
+            for terme_certif in _REF_CERTIFICATIONS:
+                if terme_certif in texte_fiche_poste:
+                    libelle_certif = terme_certif.upper() if (" " not in terme_certif and len(terme_certif) <= 6) else terme_certif.title()
+                    compteurs["certification"][libelle_certif] += 1
 
     def _construire_df(compteur):
         if nb_total_offres == 0:
