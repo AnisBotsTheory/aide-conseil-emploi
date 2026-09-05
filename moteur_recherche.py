@@ -1271,6 +1271,78 @@ def naf_vers_libelle(code_naf):
     return _referentiel_naf_vers_libelle().get(code_naf)
 
 
+def rechercher_offres_entreprise(nom_entreprise, max_pages=1):
+    """
+    Recherche LARGE (nationale, tous postes confondus, motsCles=nom d'entreprise)
+    pour maximiser les chances de trouver une offre exploitable — donc une
+    description d'entreprise — même si celle-ci ne recrute pas actuellement sur
+    le poste précis ciblé par l'utilisateur. Remplace une recherche restreinte au
+    seul poste résolu, qui ratait des entreprises pourtant en train de recruter,
+    juste pas sur ce poste-là.
+    """
+    if not nom_entreprise or nom_entreprise == LABEL_ENTREPRISE_ANONYME:
+        return []
+    return rechercher_offres_completes("TOUS", None, max_pages=max_pages, mots_cles=nom_entreprise)
+
+
+WIKIPEDIA_HEADERS = {"User-Agent": "AideConseilEmploi/1.0 (outil d'aide à la recherche d'emploi)"}
+
+
+@st.cache_data(ttl=86400)
+def rechercher_wikipedia_entreprise(nom_entreprise):
+    """
+    Cherche un article Wikipédia (français) correspondant à l'entreprise et en
+    renvoie un résumé synthétique — souvent plus riche et plus lisible que le code
+    NAF de la fiche SIRENE pour comprendre le VRAI domaine d'expertise d'une
+    entreprise (positionnement, histoire, activités). Ne couvre par nature que les
+    entreprises suffisamment connues pour avoir un article — inutile pour la
+    plupart des PME/TPE, où rien ne sera trouvé.
+
+    Deux appels : 1) recherche du titre d'article le plus pertinent (l'entreprise
+    n'a pas toujours un article au nom exact tapé), 2) résumé de cet article via
+    l'API REST officielle de Wikipédia (gratuite, sans clé). Renvoie None si aucun
+    article trouvé, si la page est une homonymie, ou en cas d'erreur réseau.
+    """
+    if not nom_entreprise:
+        return None
+    try:
+        r_recherche = requests.get(
+            "https://fr.wikipedia.org/w/api.php",
+            params={
+                "action": "query", "list": "search", "srsearch": nom_entreprise,
+                "format": "json", "srlimit": 1,
+            },
+            headers=WIKIPEDIA_HEADERS, timeout=8,
+        )
+        r_recherche.raise_for_status()
+        resultats_recherche = r_recherche.json().get("query", {}).get("search", [])
+        if not resultats_recherche:
+            return None
+        titre = resultats_recherche[0]["title"]
+
+        r_resume = requests.get(
+            f"https://fr.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(titre)}",
+            headers=WIKIPEDIA_HEADERS, timeout=8,
+        )
+        r_resume.raise_for_status()
+        resume = r_resume.json()
+    except requests.RequestException:
+        return None
+
+    if resume.get("type") == "disambiguation":  # page d'homonymie, pas exploitable telle quelle
+        return None
+
+    extrait = resume.get("extract")
+    if not extrait:
+        return None
+
+    return {
+        "titre": resume.get("title", titre),
+        "extrait": extrait,
+        "url": (resume.get("content_urls", {}).get("desktop", {}) or {}).get("page"),
+    }
+
+
 def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
     """
     Repère, parmi une liste d'offres déjà récupérées, une offre de cette
@@ -1841,6 +1913,9 @@ __all__ = [
     "rechercher_entreprise_siren",
     "_referentiel_naf_vers_libelle",
     "naf_vers_libelle",
+    "rechercher_offres_entreprise",
+    "WIKIPEDIA_HEADERS",
+    "rechercher_wikipedia_entreprise",
     "infos_entretien_entreprise",
     "offres_par_ville",
     "volumes_departement_offres",
