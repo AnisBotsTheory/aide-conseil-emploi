@@ -18,7 +18,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
-import altair as alt
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -280,14 +279,6 @@ with tab_profil:
                             total_dep_demandeurs,
                         )
 
-                    if recherche_multi and detail_par_poste:
-                        with st.expander("🔎 Détail par poste (pour repérer un éventuel poste hors-sujet)"):
-                            for label, offres_i, demandeurs_i, erreur_i in detail_par_poste:
-                                if erreur_i:
-                                    st.caption(f"**{label}** — demandeurs indisponibles ({erreur_i})")
-                                else:
-                                    st.caption(f"**{label}** — {offres_i} offre(s), {demandeurs_i} demandeur(s)")
-
                     tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
                     if tension is not None:
                         st.metric("Indice de tension (offres / demandeurs)", tension)
@@ -361,8 +352,8 @@ with tab_profil:
                 st.caption(
                     f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top "
                     "recruteurs). Basée sur le lieu tel qu'indiqué par l'offre — la plupart n'ont pas "
-                    "de géolocalisation précise côté France Travail, donc pas de carte ici : un simple "
-                    "classement, plus honnête qu'une carte gonflée artificiellement sur une seule ville."
+                    "de géolocalisation précise côté France Travail, les positions approximatives "
+                    "sont signalées séparément ci-dessous."
                 )
                 with st.spinner("Récupération des offres par ville..."):
                     if recherche_multi:
@@ -382,6 +373,28 @@ with tab_profil:
                 if df_villes.empty:
                     st.info("Aucune offre trouvée pour ces critères.")
                 else:
+                    df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
+                    nb_offres_approx = (
+                        int(df_carte.loc[df_carte["approximatif"], "nombre_offres"].sum())
+                        if not df_carte.empty else 0
+                    )
+                    if not df_carte.empty:
+                        if nb_offres_approx > 0:
+                            st.caption(
+                                f"📍 {nb_offres_approx} offre(s) sur {total_region} n'ont pas de "
+                                "coordonnées GPS précises côté France Travail (lieu renseigné au niveau "
+                                "département seulement, ou télétravail) — positionnées sur la plus "
+                                "grande ville du département, à titre indicatif."
+                            )
+                        df_carte["latitude"] = df_carte["latitude"].astype(float)
+                        df_carte["longitude"] = df_carte["longitude"].astype(float)
+                        st.map(
+                            df_carte, latitude="latitude", longitude="longitude",
+                            size="nombre_offres", color="#0066cc",
+                        )
+                    else:
+                        st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
+
                     df_villes_top = df_villes[["ville", "nombre_offres"]].head(15)
                     st.bar_chart(df_villes_top.set_index("ville"))
                     st.dataframe(
@@ -448,54 +461,26 @@ with tab_avance:
         signature_avance_actuelle = (code_rome_actif, tuple(codes_rome_choisis_avance), departement_actif)
 
         if st.session_state.get(cle_signature_avance) != signature_avance_actuelle:
-            with st.spinner("Analyse en cours (évolution, contrats, salaires, expérience)..."):
+            with st.spinner("Analyse en cours (contrats, salaires, expérience)..."):
                 if recherche_multi_avance:
-                    df_evolution = evolution_offres_annuelle_multi(codes_rome_choisis_avance, departement_actif)
                     df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                         repartition_contrats_et_salaires_multi(codes_rome_choisis_avance, departement_actif)
                     )
                 else:
-                    df_evolution = evolution_offres_annuelle(
-                        code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
-                    )
                     df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                         repartition_contrats_et_salaires(
                             code_rome_actif, departement_actif, mots_cles=mots_cles_actifs_avance,
                         )
                     )
             st.session_state["avance_resultats"] = (
-                df_evolution, df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience,
+                df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience,
             )
             st.session_state[cle_signature_avance] = signature_avance_actuelle
 
         if "avance_resultats" in st.session_state:
-            df_evolution, df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
+            df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                 st.session_state["avance_resultats"]
             )
-
-            st.divider()
-            annee_courante = datetime.now().year
-            st.markdown(f"#### 📈 Nombre d'offres d'emploi - {annee_courante}")
-            if df_evolution.empty or df_evolution["nombre_offres"].sum() == 0:
-                st.info("Aucune donnée d'évolution disponible pour ces critères.")
-            else:
-                df_evolution_affiche = df_evolution.copy()
-                df_evolution_affiche["mois_label"] = df_evolution_affiche["mois"].apply(_formater_mois_fr)
-                ordre_mois = list(df_evolution_affiche["mois_label"])
-
-
-                base_evolution = alt.Chart(df_evolution_affiche).encode(
-                    x=alt.X(
-                        "mois_label:N",
-                        sort=ordre_mois,
-                        title=None,
-                        axis=alt.Axis(labelAngle=-45),
-                    ),
-                    y=alt.Y("nombre_offres:Q", title="Nombre d'offres"),
-                )
-                courbe = base_evolution.mark_line(point=True, color="#0066cc")
-                etiquettes = base_evolution.mark_text(dy=-12, fontSize=12).encode(text="nombre_offres:Q")
-                st.altair_chart((courbe + etiquettes).properties(height=350), use_container_width=True)
 
             st.divider()
             st.markdown("#### 📋 Répartition par type de contrat")
@@ -503,6 +488,13 @@ with tab_avance:
                 st.info("Aucune donnée de type de contrat disponible pour ces critères.")
             else:
                 df_contrats_tri = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+                # Palette distincte par type de contrat (au lieu d'un dégradé de bleu par
+                # volume, qui rendait les petites sphères ternes/grises) — une couleur vive
+                # propre à chaque type, cycle si plus de types que de couleurs prévues.
+                palette_contrats = ["#2E86DE", "#EE5A6F", "#10AC84", "#F9A826", "#8854D0", "#01A3A4"]
+                couleurs_contrats = [
+                    palette_contrats[i % len(palette_contrats)] for i in range(len(df_contrats_tri))
+                ]
                 fig_contrats = go.Figure(
                     go.Scatter(
                         x=list(range(len(df_contrats_tri))),
@@ -516,8 +508,7 @@ with tab_avance:
                             sizemode="area",
                             sizeref=2.0 * df_contrats_tri["nombre_offres"].max() / (110.0 ** 2),
                             sizemin=18,
-                            color=df_contrats_tri["nombre_offres"],
-                            colorscale="Blues",
+                            color=couleurs_contrats,
                             line=dict(width=2, color="white"),
                         ),
                         text=[
@@ -536,12 +527,6 @@ with tab_avance:
                     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 )
                 st.plotly_chart(fig_contrats, use_container_width=True)
-
-                st.dataframe(
-                    df_contrats.rename(columns={"type_contrat": "Type de contrat", "nombre_offres": "Nombre d'offres"}),
-                    use_container_width=True,
-                    hide_index=True,
-                )
 
             st.divider()
             st.markdown("#### 💰 Fourchette de salaire proposée")
@@ -589,18 +574,23 @@ with tab_avance:
             if df_experience.empty:
                 st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
             else:
-                base_experience = alt.Chart(df_experience).encode(
-                    x=alt.X("nombre_offres:Q", title="Nombre d'offres"),
-                    y=alt.Y("experience:N", title=None, sort="-x"),
+                df_experience_tri = df_experience.sort_values("nombre_offres", ascending=False)
+                fig_experience = px.treemap(
+                    df_experience_tri,
+                    path=[px.Constant(""), "experience"],
+                    values="nombre_offres",
+                    color="nombre_offres",
+                    color_continuous_scale="Tealgrn",
                 )
-                barres_experience = base_experience.mark_bar(color="#0066cc")
-                etiquettes_experience = base_experience.mark_text(
-                    align="left", dx=4, fontSize=11
-                ).encode(text="nombre_offres:Q")
-                st.altair_chart(
-                    (barres_experience + etiquettes_experience).properties(height=140),
-                    use_container_width=True,
+                fig_experience.update_traces(
+                    textinfo="label+value", texttemplate="%{label}<br>%{value}",
+                    marker=dict(line=dict(width=2, color="#0e1117")),
                 )
+                fig_experience.update_layout(
+                    height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_experience, use_container_width=True)
 
             st.divider()
             st.markdown("#### 🎯 Difficulté de recrutement (BMO)")
