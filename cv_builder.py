@@ -28,6 +28,7 @@ from moteur_recherche import (
     get_referentiel_appellations,
     _extraire_code_rome,
     resoudre_codes_rome,
+    diagnostiquer_romeo,
 )
 from io import BytesIO
 
@@ -953,6 +954,16 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             "l'onglet **🎯 Tendance par profil** et les suggestions de compétences plus bas."
         )
         _selecteur_poste_recherche(titre_recherche)
+
+        with st.expander("🔧 Diagnostic technique ROMEO 2 (temporaire)"):
+            st.caption(
+                "Outil de mise au point — teste chaque combinaison endpoint/champ candidate "
+                "et affiche la vraie réponse de l'API, pour identifier la bonne configuration."
+            )
+            if st.button("Lancer le diagnostic", key="btn_diagnostic_romeo"):
+                with st.spinner("Test des combinaisons ROMEO en cours..."):
+                    resultats_diag = diagnostiquer_romeo(titre_recherche.strip() or "chef de projet")
+                st.json(resultats_diag)
 
         c3, c4 = st.columns(2)
         email = c3.text_input("Email", key="cv_email")
