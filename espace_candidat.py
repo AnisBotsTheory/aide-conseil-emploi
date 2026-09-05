@@ -38,18 +38,19 @@ tab_cv, tab_profil, tab_entreprises, tab_avance = st.tabs(
 
 def _afficher_fiche_entreprise(nom_entreprise):
     """
-    Affiche la fiche complète d'une entreprise : synthèse (Wikipédia + description
-    France Travail — recherche large, tous postes, pour maximiser les chances d'en
-    trouver une), puis informations administratives (SIRENE via Recherche
-    d'entreprises), puis la liste des sources réellement utilisées. Appelée à la
-    fois depuis "Tendance par profil" (clic sur un recruteur) et depuis l'onglet
-    "Fiches entreprises" (recherche libre) — une seule version à tenir à jour.
+    Affiche la fiche complète d'une entreprise, un accordéon par source (repliés
+    par défaut — le libellé de chaque accordéon sert de résumé visible sans tout
+    dérouler), puis la liste des sources réellement utilisées. Structure pensée
+    pour rester lisible même si d'autres sources s'ajoutent plus tard (Pappers,
+    INPI...). Appelée à la fois depuis "Tendance par profil" (onglet Recruteurs)
+    et depuis l'onglet "Fiches entreprises" (recherche libre).
     """
     with st.spinner(f"Récupération des informations sur {nom_entreprise}..."):
         fiche = rechercher_entreprise_siren(nom_entreprise)
         offres_entreprise = rechercher_offres_entreprise(nom_entreprise)
         infos_entretien = infos_entretien_entreprise(nom_entreprise, offres_entreprise)
         wikipedia = rechercher_wikipedia_entreprise(nom_entreprise)
+        wikidata = rechercher_wikidata_entreprise(wikipedia["wikidata_id"]) if wikipedia else None
 
     if not fiche and not infos_entretien and not wikipedia:
         st.info(
@@ -61,50 +62,60 @@ def _afficher_fiche_entreprise(nom_entreprise):
     st.markdown(f"**{nom_entreprise}**")
     sources_utilisees = []
 
-    contenu_synthese = wikipedia or (
-        infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"])
-    )
-    if contenu_synthese:
-        st.caption("💡 À retenir pour un entretien ou une candidature spontanée :")
-        if wikipedia:
+    if wikipedia:
+        with st.expander(f"📖 Wikipédia — {wikipedia['titre']}"):
             st.markdown(wikipedia["extrait"])
-            sources_utilisees.append(f"Wikipédia (article « {wikipedia['titre']} »)")
-        if infos_entretien and infos_entretien["secteur_libelle"]:
-            st.markdown(f"**Domaine d'activité (France Travail) :** {infos_entretien['secteur_libelle']}")
-        if infos_entretien and infos_entretien["description"]:
-            st.markdown(f"**Présentation par l'entreprise elle-même :** {infos_entretien['description']}")
-        if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
-            sources_utilisees.append("France Travail (offre publiée par l'entreprise)")
+            if wikipedia["url"]:
+                st.markdown(f"[Lire l'article complet]({wikipedia['url']})")
+        sources_utilisees.append(f"Wikipédia (article « {wikipedia['titre']} »)")
+
+    if wikidata:
+        with st.expander("📊 Wikidata — secteurs, effectif, filiales"):
+            if wikidata["secteurs"]:
+                st.markdown(f"**Secteurs d'intervention :** {', '.join(wikidata['secteurs'])}")
+            if wikidata["effectif"]:
+                st.markdown(f"**Effectif :** {wikidata['effectif']:,}".replace(",", " ") + " salarié(s)")
+            if wikidata["filiales"]:
+                st.markdown(f"**Filiales :** {', '.join(wikidata['filiales'])}")
+        sources_utilisees.append("Wikidata")
+
+    if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
+        with st.expander("💼 France Travail — présentation par l'entreprise"):
+            if infos_entretien["secteur_libelle"]:
+                st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
+            if infos_entretien["description"]:
+                st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
+        sources_utilisees.append("France Travail (offre publiée par l'entreprise)")
 
     if fiche:
-        st.caption(
-            "⚠️ Informations administratives ci-dessous : correspondance approximative "
-            "sur le nom (à vérifier via le lien ci-dessous), surtout pour un nom court "
-            "ou courant."
-        )
-        if fiche["secteur_libelle"]:
-            st.markdown(f"**Secteur (NAF) :** {fiche['secteur_libelle']} ({fiche['naf']})")
-        elif fiche["naf"]:
-            st.markdown(f"**Secteur (code NAF) :** {fiche['naf']}")
-        st.markdown(f"**Effectif :** {fiche['tranche_effectif_libelle']}")
-        st.markdown(f"**Catégorie :** {fiche['categorie_entreprise'] or 'Non renseignée'}")
-        st.markdown(
-            "**Présence géographique :** "
-            + (
-                f"{fiche['nombre_etablissements_ouverts']} établissement(s) ouvert(s)"
-                if fiche["nombre_etablissements_ouverts"] else "Non renseignée"
+        with st.expander("🏛️ Informations administratives (SIRENE)"):
+            st.caption(
+                "⚠️ Correspondance approximative sur le nom (à vérifier via le lien "
+                "ci-dessous), surtout pour un nom court ou courant."
             )
-        )
-        if fiche["adresse"]:
-            st.markdown(f"📍 Siège : {fiche['adresse']}")
-        if fiche["date_creation"]:
-            st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
-        if fiche["siret_siege"]:
-            st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
-        if fiche["est_qualiopi"]:
-            st.markdown("🏅 Organisme certifié Qualiopi")
-        if fiche["url_annuaire"]:
-            st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
+            if fiche["secteur_libelle"]:
+                st.markdown(f"**Secteur (NAF) :** {fiche['secteur_libelle']} ({fiche['naf']})")
+            elif fiche["naf"]:
+                st.markdown(f"**Secteur (code NAF) :** {fiche['naf']}")
+            st.markdown(f"**Effectif :** {fiche['tranche_effectif_libelle']}")
+            st.markdown(f"**Catégorie :** {fiche['categorie_entreprise'] or 'Non renseignée'}")
+            st.markdown(
+                "**Présence géographique :** "
+                + (
+                    f"{fiche['nombre_etablissements_ouverts']} établissement(s) ouvert(s)"
+                    if fiche["nombre_etablissements_ouverts"] else "Non renseignée"
+                )
+            )
+            if fiche["adresse"]:
+                st.markdown(f"📍 Siège : {fiche['adresse']}")
+            if fiche["date_creation"]:
+                st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
+            if fiche["siret_siege"]:
+                st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
+            if fiche["est_qualiopi"]:
+                st.markdown("🏅 Organisme certifié Qualiopi")
+            if fiche["url_annuaire"]:
+                st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
         sources_utilisees.append("Recherche d'entreprises (DINUM — données SIRENE/INSEE)")
     else:
         st.caption(
@@ -194,199 +205,192 @@ with tab_profil:
                 libelle_periode_offres = f"2e semestre {aujourdhui.year}"
             jours_max_periode_offres = (aujourdhui - debut_periode).days
 
-            st.markdown("#### ⚖️ Tension du marché")
-            if code_rome_choisi == "TOUS":
-                st.info(
-                    "⚖️ La tension du marché nécessite un ou plusieurs postes précis (l'indicateur "
-                    "officiel raisonne par métier). Sélectionne au moins un poste ci-dessus pour "
-                    "voir ce calcul."
-                )
-            elif departement_est_multiple(departement_actif):
-                st.info(
-                    "⚖️ La tension du marché nécessite un seul département sélectionné (statistique "
-                    "officielle trimestrielle, un appel par territoire) — indisponible pour « Toute "
-                    "la France » ou une sélection de plusieurs départements. Choisis un seul "
-                    "département ci-dessus pour voir ce calcul."
-                )
-            else:
-                st.caption(
-                    f"ℹ️ Les offres comptent depuis le début du semestre en cours (actuellement le "
-                    f"{libelle_periode_offres}) ; les demandeurs d'emploi restent une statistique "
-                    "officielle trimestrielle (non filtrable par date)."
-                    + (
-                        " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
-                        "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
-                        "indicateur officiel par métier unique — détail par poste ci-dessous."
-                        if recherche_multi else ""
+            sous_tab_tension, sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
+                ["⚖️ Tension", "🏢 Recruteurs", "🎓 Certifications", "📍 Répartition géographique"]
+            )
+
+            with sous_tab_tension:
+                if code_rome_choisi == "TOUS":
+                    st.info(
+                        "⚖️ La tension du marché nécessite un ou plusieurs postes précis (l'indicateur "
+                        "officiel raisonne par métier). Sélectionne au moins un poste ci-dessus pour "
+                        "voir ce calcul."
                     )
-                )
-                detail_par_poste = []
-                if recherche_multi:
-                    with st.spinner("Récupération des demandeurs d'emploi..."):
-                        for label, code in codes_par_poste_cv.items():
-                            if not code:
-                                continue
-                            offres_i = volumes_departement_offres(
-                                code, departement_actif, jours_max=jours_max_periode_offres
-                            )
-                            demandeurs_i, periode_i, erreur_i = demandeurs_emploi_departement(
-                                code, departement_actif
-                            )
-                            detail_par_poste.append((label, offres_i, demandeurs_i, erreur_i))
-                    total_dep_offres = sum(o for _, o, _, _ in detail_par_poste)
-                    demandeurs_valides = [d for _, _, d, e in detail_par_poste if not e]
-                    total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
-                    periode_demandeurs = None  # non affiché en multi (périodes potentiellement différentes par poste)
-                    erreur_demandeurs = (
-                        None if demandeurs_valides else "toutes les requêtes demandeurs ont échoué"
+                elif departement_est_multiple(departement_actif):
+                    st.info(
+                        "⚖️ La tension du marché nécessite un seul département sélectionné (statistique "
+                        "officielle trimestrielle, un appel par territoire) — indisponible pour « Toute "
+                        "la France » ou une sélection de plusieurs départements. Choisis un seul "
+                        "département ci-dessus pour voir ce calcul."
                     )
                 else:
-                    with st.spinner("Récupération des demandeurs d'emploi..."):
-                        total_dep_offres = volumes_departement_offres(
+                    st.caption(
+                        f"ℹ️ Les offres comptent depuis le début du semestre en cours (actuellement le "
+                        f"{libelle_periode_offres}) ; les demandeurs d'emploi restent une statistique "
+                        "officielle trimestrielle (non filtrable par date)."
+                        + (
+                            " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
+                            "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
+                            "indicateur officiel par métier unique — détail par poste ci-dessous."
+                            if recherche_multi else ""
+                        )
+                    )
+                    detail_par_poste = []
+                    if recherche_multi:
+                        with st.spinner("Récupération des demandeurs d'emploi..."):
+                            for label, code in codes_par_poste_cv.items():
+                                if not code:
+                                    continue
+                                offres_i = volumes_departement_offres(
+                                    code, departement_actif, jours_max=jours_max_periode_offres
+                                )
+                                demandeurs_i, periode_i, erreur_i = demandeurs_emploi_departement(
+                                    code, departement_actif
+                                )
+                                detail_par_poste.append((label, offres_i, demandeurs_i, erreur_i))
+                        total_dep_offres = sum(o for _, o, _, _ in detail_par_poste)
+                        demandeurs_valides = [d for _, _, d, e in detail_par_poste if not e]
+                        total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
+                        periode_demandeurs = None  # non affiché en multi (périodes potentiellement différentes par poste)
+                        erreur_demandeurs = (
+                            None if demandeurs_valides else "toutes les requêtes demandeurs ont échoué"
+                        )
+                    else:
+                        with st.spinner("Récupération des demandeurs d'emploi..."):
+                            total_dep_offres = volumes_departement_offres(
+                                code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
+                            )
+                            total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
+                                code_rome_choisi, departement_actif
+                            )
+
+                    if erreur_demandeurs:
+                        st.warning(
+                            f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
+                            "Saisis une valeur manuelle en attendant."
+                        )
+                        total_dep_demandeurs = st.number_input(
+                            "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
+                        )
+                    else:
+                        c1, c2 = st.columns(2)
+                        c1.metric("Offres", total_dep_offres)
+                        c2.metric(
+                            f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
+                            total_dep_demandeurs,
+                        )
+
+                    if recherche_multi and detail_par_poste:
+                        with st.expander("🔎 Détail par poste (pour repérer un éventuel poste hors-sujet)"):
+                            for label, offres_i, demandeurs_i, erreur_i in detail_par_poste:
+                                if erreur_i:
+                                    st.caption(f"**{label}** — demandeurs indisponibles ({erreur_i})")
+                                else:
+                                    st.caption(f"**{label}** — {offres_i} offre(s), {demandeurs_i} demandeur(s)")
+
+                    tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
+                    if tension is not None:
+                        st.metric("Indice de tension (offres / demandeurs)", tension)
+                        st.info(interpreter_tension(tension))
+                        conseils = conseils_tension(tension)
+                        if conseils:
+                            with st.expander("💡 Conseils pour ce niveau de tension"):
+                                for conseil in conseils:
+                                    st.markdown(f"- {conseil}")
+                    else:
+                        st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
+
+            with sous_tab_recruteurs:
+                with st.spinner("Récupération des recruteurs actifs..."):
+                    if recherche_multi:
+                        _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
+                            codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
+                        )
+                    else:
+                        _, _, _, _, df_entreprises, _ = offres_par_ville(
                             code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
                         )
-                        total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
-                            code_rome_choisi, departement_actif
-                        )
 
-                if erreur_demandeurs:
-                    st.warning(
-                        f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
-                        "Saisis une valeur manuelle en attendant."
-                    )
-                    total_dep_demandeurs = st.number_input(
-                        "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
+                st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
+                if df_entreprises.empty:
+                    st.info(
+                        "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
+                        "les offres sont diffusées de façon anonyme."
                     )
                 else:
-                    c1, c2 = st.columns(2)
-                    c1.metric("Offres", total_dep_offres)
-                    c2.metric(
-                        f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
-                        total_dep_demandeurs,
+                    st.caption(
+                        "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
+                        "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
+                        "peuvent valoir une candidature directe. Pour la fiche complète d'une "
+                        "entreprise (secteur, effectif, présentation...), direction l'onglet "
+                        "**📇 Fiches entreprises**."
                     )
-
-                if recherche_multi and detail_par_poste:
-                    with st.expander("🔎 Détail par poste (pour repérer un éventuel poste hors-sujet)"):
-                        for label, offres_i, demandeurs_i, erreur_i in detail_par_poste:
-                            if erreur_i:
-                                st.caption(f"**{label}** — demandeurs indisponibles ({erreur_i})")
-                            else:
-                                st.caption(f"**{label}** — {offres_i} offre(s), {demandeurs_i} demandeur(s)")
-
-                tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
-                if tension is not None:
-                    st.metric("Indice de tension (offres / demandeurs)", tension)
-                    st.info(interpreter_tension(tension))
-                    conseils = conseils_tension(tension)
-                    if conseils:
-                        with st.expander("💡 Conseils pour ce niveau de tension"):
-                            for conseil in conseils:
-                                st.markdown(f"- {conseil}")
-                else:
-                    st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
-
-            st.divider()
-
-            with st.spinner("Récupération des recruteurs actifs..."):
-                if recherche_multi:
-                    _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
-                        codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
-                    )
-                else:
-                    _, _, _, _, df_entreprises, _ = offres_par_ville(
-                        code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
-                    )
-
-            st.markdown("#### 🏢 Top recruteurs")
-            st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
-            if df_entreprises.empty:
-                st.info(
-                    "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
-                    "les offres sont diffusées de façon anonyme."
-                )
-            else:
-                st.caption(
-                    "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
-                    "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
-                    "peuvent valoir une candidature directe. Clique sur une ligne pour voir sa fiche "
-                    "entreprise (SIRET, secteur, taille, adresse — source : Recherche d'entreprises, DINUM)."
-                )
-                selection_recruteur = st.dataframe(
-                    df_entreprises.rename(
-                        columns={
-                            "entreprise": "Entreprise",
-                            "nombre_offres": "Nombre d'offres",
-                        }
-                    ).drop(columns=["villes"]),
-                    use_container_width=True,
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="table_top_recruteurs",
-                )
-
-                lignes_selectionnees = selection_recruteur["selection"]["rows"]
-                if lignes_selectionnees:
-                    nom_choisi = df_entreprises.iloc[lignes_selectionnees[0]]["entreprise"]
-                    _afficher_fiche_entreprise(nom_choisi)
-
-            st.divider()
-
-            if "cv_suggestions_apercu" in st.session_state:
-                _, _, _, df_certifs, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
-                st.markdown("#### 🎓 Certifications les plus demandées")
-                st.caption(
-                    "ℹ️ France Travail n'a pas de champ dédié aux certifications — repérées par "
-                    "mot-clé dans les offres réelles (même échantillon que les suggestions de "
-                    "compétences de « Créer mon CV »), couverture partielle par construction."
-                )
-                if df_certifs.empty:
-                    st.info("Aucune certification identifiée dans les offres de cet échantillon.")
-                else:
                     st.dataframe(
-                        df_certifs.rename(
-                            columns={"libelle": "Certification", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
-                        ),
+                        df_entreprises.rename(
+                            columns={
+                                "entreprise": "Entreprise",
+                                "nombre_offres": "Nombre d'offres",
+                            }
+                        ).drop(columns=["villes"]),
                         use_container_width=True,
                         hide_index=True,
                     )
 
-                st.divider()
-
-            st.markdown("#### 📍 Villes qui recrutent")
-            st.caption(
-                f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top "
-                "recruteurs). Basée sur le lieu tel qu'indiqué par l'offre — la plupart n'ont pas "
-                "de géolocalisation précise côté France Travail, donc pas de carte ici : un simple "
-                "classement, plus honnête qu'une carte gonflée artificiellement sur une seule ville."
-            )
-            with st.spinner("Récupération des offres par ville..."):
-                if recherche_multi:
-                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_multi(
-                        codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
-                    )
+            with sous_tab_certifs:
+                if "cv_suggestions_apercu" not in st.session_state:
+                    st.info("Aucune suggestion disponible pour l'instant.")
                 else:
-                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
-                        code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
+                    _, _, _, df_certifs, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
+                    st.caption(
+                        "ℹ️ France Travail n'a pas de champ dédié aux certifications — repérées par "
+                        "mot-clé dans les offres réelles (même échantillon que les suggestions de "
+                        "compétences de « Créer mon CV »), couverture partielle par construction."
                     )
-            st.metric("Total offres dans la région", total_region)
-            # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
-            # donnent la plage de publication réelle des offres renvoyées par l'API —
-            # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
-            # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
-            # offres sont simplement celles encore actives aujourd'hui.
-            if df_villes.empty:
-                st.info("Aucune offre trouvée pour ces critères.")
-            else:
-                df_villes_top = df_villes[["ville", "nombre_offres"]].head(15)
-                st.bar_chart(df_villes_top.set_index("ville"))
-                st.dataframe(
-                    df_villes_top.rename(
-                        columns={"ville": "Lieu (tel qu'indiqué par l'offre)", "nombre_offres": "Nombre d'offres"}
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
+                    if df_certifs.empty:
+                        st.info("Aucune certification identifiée dans les offres de cet échantillon.")
+                    else:
+                        st.dataframe(
+                            df_certifs.rename(
+                                columns={"libelle": "Certification", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+            with sous_tab_villes:
+                st.caption(
+                    f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top "
+                    "recruteurs). Basée sur le lieu tel qu'indiqué par l'offre — la plupart n'ont pas "
+                    "de géolocalisation précise côté France Travail, donc pas de carte ici : un simple "
+                    "classement, plus honnête qu'une carte gonflée artificiellement sur une seule ville."
                 )
+                with st.spinner("Récupération des offres par ville..."):
+                    if recherche_multi:
+                        df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_multi(
+                            codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
+                        )
+                    else:
+                        df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
+                            code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
+                        )
+                st.metric("Total offres dans la région", total_region)
+                # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
+                # donnent la plage de publication réelle des offres renvoyées par l'API —
+                # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
+                # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
+                # offres sont simplement celles encore actives aujourd'hui.
+                if df_villes.empty:
+                    st.info("Aucune offre trouvée pour ces critères.")
+                else:
+                    df_villes_top = df_villes[["ville", "nombre_offres"]].head(15)
+                    st.bar_chart(df_villes_top.set_index("ville"))
+                    st.dataframe(
+                        df_villes_top.rename(
+                            columns={"ville": "Lieu (tel qu'indiqué par l'offre)", "nombre_offres": "Nombre d'offres"}
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
             st.divider()
             st.info(
