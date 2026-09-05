@@ -453,6 +453,117 @@ def _normaliser_texte(texte):
     return texte
 
 
+ROMEO_SCOPE = "api_romeov2"  # confirmé via un serveur MCP tiers documentant ce scope exact
+
+# Chemins d'endpoint candidats : aucune documentation publique officielle trouvée en
+# clair pour ROMEO 2 (contrairement au scope, confirmé) — on suit la convention
+# observée sur le reste de francetravail.io (api.francetravail.io/partenaire/
+# <produit>/v<version>/<ressource>) et on teste plusieurs variantes plausibles.
+_CANDIDATS_ENDPOINT_ROMEO = [
+    "https://api.francetravail.io/partenaire/romeo/v2/predictionMetiers",
+    "https://api.francetravail.io/partenaire/romeo/v1/predictionMetiers",
+    "https://api.francetravail.io/partenaire/romeo/v2/predictionMetier",
+    "https://api.francetravail.io/partenaire/rome-romeo/v2/predictionMetiers",
+]
+# Idem pour le nom du champ portant l'intitulé dans le corps de la requête POST.
+_CANDIDATS_CHAMP_INTITULE_ROMEO = ["intitulesPostes", "libellesAppellation", "intitules"]
+
+
+def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
+    """
+    Utilise ROMEO 2 (modèle d'IA de France Travail) pour rapprocher un intitulé de
+    poste en texte libre des appellations ROME les plus probables, avec un score
+    de confiance — robuste sur des cas que notre recherche floue maison ne peut
+    pas résoudre par nature (ex: "Responsable de projet" -> "Chef de projet",
+    vrais synonymes métier sans aucune ressemblance textuelle).
+
+    ATTENTION — expérimental : le scope OAuth ('api_romeov2') est confirmé via une
+    source tierce documentée, mais ni le chemin exact de l'endpoint ni le format du
+    corps de requête n'ont pu être vérifiés via une documentation officielle
+    publique au moment de l'écriture. Cette fonction teste plusieurs combinaisons
+    plausibles (et mémorise en session celle qui fonctionne), et se dégrade
+    silencieusement (renvoie None) si aucune ne répond correctement — jamais
+    d'erreur remontée à l'utilisateur, mais peut très bien ne renvoyer rien tant
+    que la vraie combinaison n'a pas été confirmée en conditions réelles.
+
+    Retourne une liste de {"code_rome":..., "libelle":..., "score":...} triée par
+    score décroissant, ou None si rien n'a fonctionné (dans ce cas, le reste de
+    l'app continue de fonctionner exactement comme avant — intégration purement
+    additive, jamais un point de blocage).
+    """
+    try:
+        token = get_token(ROMEO_SCOPE)
+    except Exception:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    cle_endpoint = "romeo_endpoint_valide"
+    cle_champ = "romeo_champ_intitule_valide"
+    cle_indisponible = "romeo_indisponible"
+
+    # Coupe-circuit : si aucune combinaison endpoint/champ n'a fonctionné une
+    # première fois dans cette session, on ne retente plus à chaque frappe (ça
+    # ferait jusqu'à 12 requêtes réseau par suggestion pour rien) — seul un
+    # rechargement complet de l'app retente une découverte fraîche.
+    if st.session_state.get(cle_indisponible):
+        return None
+
+    endpoint_connu = st.session_state.get(cle_endpoint)
+    champ_connu = st.session_state.get(cle_champ)
+    endpoints_a_essayer = (
+        [endpoint_connu] + [e for e in _CANDIDATS_ENDPOINT_ROMEO if e != endpoint_connu]
+        if endpoint_connu else _CANDIDATS_ENDPOINT_ROMEO
+    )
+    champs_a_essayer = (
+        [champ_connu] + [c for c in _CANDIDATS_CHAMP_INTITULE_ROMEO if c != champ_connu]
+        if champ_connu else _CANDIDATS_CHAMP_INTITULE_ROMEO
+    )
+
+    for endpoint in endpoints_a_essayer:
+        for champ in champs_a_essayer:
+            try:
+                r = requests.post(endpoint, headers=headers, json={champ: [intitule]}, timeout=8)
+            except requests.RequestException:
+                continue
+            if r.status_code not in (200, 206):
+                continue
+            try:
+                data = r.json()
+            except ValueError:
+                continue
+            # Formats de réponse possibles selon la vraie structure (liste plate,
+            # ou liste de listes une par intitulé soumis) — on prend ce qui existe.
+            predictions_brutes = data[0] if data and isinstance(data, list) and isinstance(data[0], list) else data
+            if not isinstance(predictions_brutes, list) or not predictions_brutes:
+                continue
+
+            resultats = []
+            for pred in predictions_brutes:
+                if not isinstance(pred, dict):
+                    continue
+                score = pred.get("score") or pred.get("scorePrediction")
+                code_rome = pred.get("codeRome") or pred.get("codeMetier")
+                libelle = pred.get("libelleRome") or pred.get("libelleAppellation") or pred.get("libelle")
+                if code_rome is None:
+                    continue
+                resultats.append({"code_rome": code_rome, "libelle": libelle, "score": score})
+
+            if resultats:
+                st.session_state[cle_endpoint] = endpoint
+                st.session_state[cle_champ] = champ
+                resultats = [r for r in resultats if r["score"] is None or r["score"] >= seuil_score]
+                resultats.sort(key=lambda r: r["score"] or 0, reverse=True)
+                return resultats[:nb_resultats]
+
+    st.session_state[cle_indisponible] = True
+    return None
+
+
 @st.cache_data(ttl=1800)
 def suggerer_postes(saisie, max_resultats=8):
     """
@@ -485,6 +596,24 @@ def suggerer_postes(saisie, max_resultats=8):
 
     candidats = {}  # libelle -> meilleur score
     labels_normalises = {label: _normaliser_texte(label) for label in labels}
+
+    # 0) ROMEO 2 (IA), en complément — capte les vrais synonymes métier qu'aucune
+    # comparaison textuelle (exacte, préfixe, ou floue) ne peut deviner par nature
+    # (ex: "Responsable de projet" -> "Chef de projet"). Purement additif : si
+    # l'appel échoue (endpoint expérimental, cf. predire_rome_romeo), on continue
+    # avec les étapes suivantes exactement comme avant, sans rien perdre.
+    predictions_romeo = predire_rome_romeo(saisie)
+    if predictions_romeo:
+        labels_par_code_rome = {}
+        for a in appellations:
+            code = _extraire_code_rome(a)
+            if code and code not in labels_par_code_rome:
+                labels_par_code_rome[code] = a.get("libelle", "").strip()
+        for pred in predictions_romeo:
+            label_predit = labels_par_code_rome.get(pred["code_rome"])
+            if label_predit:
+                score_romeo = round((pred["score"] or 0.5) * 100)
+                candidats[label_predit] = max(candidats.get(label_predit, 0), score_romeo)
 
     # 1) Dictionnaire : si un terme connu est contenu dans la saisie, on cherche
     # les appellations officielles correspondant aux mots-clés français associés.
@@ -1878,38 +2007,13 @@ def evolution_offres_annuelle(code_rome, departement, mots_cles=None, secteur_ac
 
 
 @st.cache_data(ttl=1800)
-def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
+def _agreger_contrats_et_salaires(toutes_offres):
     """
-    Récupère les offres (ROME ou tous via mots-clés, + département, filtre de
-    fraîcheur optionnel) et calcule la répartition par type de contrat + salaires.
+    Agrège une liste d'offres déjà récupérées en répartition par type de
+    contrat, par niveau d'expérience, et par salaire — logique réutilisable sur
+    une liste d'offres obtenue autrement (ex: fusion code ROME + mots-clés dans
+    repartition_contrats_et_salaires_elargi()).
     """
-    token = get_token(SCOPE_OFFRES)
-    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-    toutes_offres = []
-    taille_page = 150
-    for page in range(max_pages):
-        debut = page * taille_page
-        fin = debut + taille_page - 1
-        params = {"range": f"{debut}-{fin}"}
-        if departement:
-            params["departement"] = departement
-        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
-        if jours_max:
-            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
-            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        r = requests.get(url, headers=headers, params=params)
-        if r.status_code not in (200, 206):
-            break
-        resultats = r.json().get("resultats", [])
-        toutes_offres.extend(resultats)
-        if len(resultats) < taille_page:
-            break
-
-    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
-
     compteur_contrats = Counter()
     compteur_experience = Counter()
     lignes_salaires = []
@@ -1947,6 +2051,54 @@ def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max
     nb_avec_salaire = len(lignes_salaires)
 
     return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_experience
+
+
+def repartition_contrats_et_salaires(code_rome, departement, jours_max=None, max_pages=5, mots_cles=None, secteur_activite=None):
+    """
+    Récupère les offres (ROME ou tous via mots-clés, + département, filtre de
+    fraîcheur optionnel) et calcule la répartition par type de contrat + salaires.
+    """
+    token = get_token(SCOPE_OFFRES)
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    toutes_offres = []
+    taille_page = 150
+    for page in range(max_pages):
+        debut = page * taille_page
+        fin = debut + taille_page - 1
+        params = {"range": f"{debut}-{fin}"}
+        if departement:
+            params["departement"] = departement
+        params.update(_params_filtre_poste(code_rome, mots_cles, secteur_activite))
+        if jours_max:
+            date_min = datetime.now(timezone.utc) - timedelta(days=jours_max)
+            params["minCreationDate"] = date_min.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["maxCreationDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = requests.get(url, headers=headers, params=params)
+        if r.status_code not in (200, 206):
+            break
+        resultats = r.json().get("resultats", [])
+        toutes_offres.extend(resultats)
+        if len(resultats) < taille_page:
+            break
+
+    toutes_offres = filtrer_offres_par_secteurs(toutes_offres, secteur_activite)
+    return _agreger_contrats_et_salaires(toutes_offres)
+
+
+def repartition_contrats_et_salaires_elargi(codes_rome, mots_cles_libres, departement, jours_max=None, max_pages=3):
+    """
+    Version "élargie" (code(s) ROME + mots-clés fusionnés, cf.
+    rechercher_offres_completes_elargi) de repartition_contrats_et_salaires() —
+    remplace la version mono/multi-poste dans KPIs avancés pour rester cohérente
+    avec les totaux de "Tendance par profil", qui utilisent déjà cette même
+    fusion depuis la correction du sous-comptage par code ROME exact seul.
+    """
+    toutes_offres = rechercher_offres_completes_elargi(
+        codes_rome, mots_cles_libres, departement, max_pages=max_pages, jours_max=jours_max
+    )
+    return _agreger_contrats_et_salaires(toutes_offres)
 
 
 def calculer_tension(nb_offres, nb_demandeurs):
@@ -2071,6 +2223,8 @@ __all__ = [
     "_extraire_code_rome",
     "DICTIONNAIRE_INTITULES_MODERNES",
     "_normaliser_texte",
+    "ROMEO_SCOPE",
+    "predire_rome_romeo",
     "suggerer_postes",
     "chercher_offres",
     "resoudre_codes_rome",
@@ -2123,7 +2277,9 @@ __all__ = [
     "_MOIS_FR",
     "_formater_mois_fr",
     "evolution_offres_annuelle",
+    "_agreger_contrats_et_salaires",
     "repartition_contrats_et_salaires",
+    "repartition_contrats_et_salaires_elargi",
     "calculer_tension",
     "interpreter_tension",
     "conseils_tension",
