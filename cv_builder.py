@@ -29,6 +29,9 @@ from moteur_recherche import (
     _extraire_code_rome,
     resoudre_codes_rome,
     diagnostiquer_romeo,
+    diagnostiquer_la_bonne_boite,
+    diagnostiquer_marche_travail,
+    diagnostiquer_fiche_metier,
 )
 from io import BytesIO
 
@@ -851,7 +854,7 @@ def _section_suggestions_competences(fonction_analyse_competences):
     if st.session_state.get(cle_signature) != signature_actuelle:
         with st.spinner("Analyse des offres en cours..."):
             mots_cles_larges = " ".join(postes_choisis)
-            df_comp, df_outils, df_langages, df_certifs, nb_total = fonction_analyse_competences(
+            df_comp, df_outils, df_langages, df_certifs, df_savoir_etre, nb_total = fonction_analyse_competences(
                 "TOUS", departement_cv, mots_cles=mots_cles_larges,
             )
         for cle_options, df in [
@@ -865,11 +868,11 @@ def _section_suggestions_competences(fonction_analyse_competences):
             for lib in df["libelle"]:
                 if lib not in st.session_state[cle_options]:
                     st.session_state[cle_options].append(lib)
-        st.session_state["cv_suggestions_apercu"] = (df_comp, df_outils, df_langages, df_certifs, nb_total)
+        st.session_state["cv_suggestions_apercu"] = (df_comp, df_outils, df_langages, df_certifs, df_savoir_etre, nb_total)
         st.session_state[cle_signature] = signature_actuelle
 
     if "cv_suggestions_apercu" in st.session_state:
-        df_comp, df_outils, df_langages, df_certifs, nb_total = st.session_state["cv_suggestions_apercu"]
+        df_comp, df_outils, df_langages, df_certifs, df_savoir_etre, nb_total = st.session_state["cv_suggestions_apercu"]
         if nb_total < 10:
             st.caption(f"⚠️ Échantillon réduit ({nb_total} offre(s)) — indicatif seulement.")
         else:
@@ -879,6 +882,7 @@ def _section_suggestions_competences(fonction_analyse_competences):
             ("Outils les + demandés", df_outils),
             ("Langages les + demandés", df_langages),
             ("Certifications les + demandées", df_certifs),
+            ("Savoir-être les + demandés", df_savoir_etre),
         ]:
             if not df.empty:
                 apercu = ", ".join(f"{r.libelle} ({r.pourcentage}%)" for _, r in df.head(6).iterrows())
@@ -964,6 +968,37 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 with st.spinner("Test des combinaisons ROMEO en cours..."):
                     resultats_diag = diagnostiquer_romeo(titre_recherche.strip() or "chef de projet")
                 st.json(resultats_diag)
+
+        with st.expander("🔧 Diagnostic technique La Bonne Boîte (temporaire)"):
+            st.caption(
+                "Outil de mise au point — teste plusieurs endpoints candidats (l'API était "
+                "publique avant le passage à France Travail, mais l'URL a pu changer) et "
+                "affiche la vraie réponse, pour identifier la bonne configuration."
+            )
+            if st.button("Lancer le diagnostic", key="btn_diagnostic_lbb"):
+                with st.spinner("Test des endpoints La Bonne Boîte en cours..."):
+                    resultats_diag_lbb = diagnostiquer_la_bonne_boite()
+                st.json(resultats_diag_lbb)
+
+        with st.expander("🔧 Diagnostic technique Marché du travail (temporaire)"):
+            st.caption(
+                "Outil de mise au point — aucun scope ni endpoint confirmé par une doc "
+                "publique ici, teste plusieurs combinaisons et affiche la vraie réponse."
+            )
+            if st.button("Lancer le diagnostic", key="btn_diagnostic_marche"):
+                with st.spinner("Test des combinaisons Marché du travail en cours..."):
+                    resultats_diag_marche = diagnostiquer_marche_travail()
+                st.json(resultats_diag_marche)
+
+        with st.expander("🔧 Diagnostic technique Fiches métiers (temporaire)"):
+            st.caption(
+                "Outil de mise au point — URL de base et scope probables, mais chemin exact "
+                "de l'endpoint non confirmé : teste plusieurs variantes et affiche la vraie réponse."
+            )
+            if st.button("Lancer le diagnostic", key="btn_diagnostic_fiche_metier"):
+                with st.spinner("Test des endpoints Fiches métiers en cours..."):
+                    resultats_diag_fiche = diagnostiquer_fiche_metier()
+                st.json(resultats_diag_fiche)
 
         c3, c4 = st.columns(2)
         email = c3.text_input("Email", key="cv_email")
