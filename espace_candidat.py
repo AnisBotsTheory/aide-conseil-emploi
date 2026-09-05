@@ -395,16 +395,6 @@ with tab_profil:
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
 
-                    df_villes_top = df_villes[["ville", "nombre_offres"]].head(15)
-                    st.bar_chart(df_villes_top.set_index("ville"))
-                    st.dataframe(
-                        df_villes_top.rename(
-                            columns={"ville": "Lieu (tel qu'indiqué par l'offre)", "nombre_offres": "Nombre d'offres"}
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
             st.divider()
             st.info(
                 "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
