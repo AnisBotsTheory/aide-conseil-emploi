@@ -255,6 +255,9 @@ with tab_profil:
                             1 for o in offres_pour_tension if o.get("offresManqueCandidats")
                         )
                         detail_par_poste = []
+                        total_offres_officielles = 0
+                        periode_offres_officielles = None
+                        erreur_offres_officielles = None
                         for label, code in codes_par_poste_cv.items():
                             if not code:
                                 continue
@@ -262,6 +265,32 @@ with tab_profil:
                                 code, departement_actif
                             )
                             detail_par_poste.append((label, demandeurs_i, periode_i, erreur_i))
+                            off_i, periode_off_i, erreur_off_i = offres_officielles_departement(code, departement_actif)
+                            if erreur_off_i:
+                                erreur_offres_officielles = erreur_off_i
+                            else:
+                                total_offres_officielles += off_i or 0
+                                periode_offres_officielles = periode_offres_officielles or periode_off_i
+                        total_embauches = 0
+                        periode_embauches = None
+                        erreur_embauches = None
+                        for label, code in codes_par_poste_cv.items():
+                            if not code:
+                                continue
+                            emb_i, periode_emb_i, erreur_emb_i = embauches_departement(code, departement_actif)
+                            if erreur_emb_i:
+                                erreur_embauches = erreur_emb_i
+                            else:
+                                total_embauches += emb_i or 0
+                                periode_embauches = periode_embauches or periode_emb_i
+                        # Indicateur qualitatif (paliers), pas une somme : affiché seulement
+                        # pour un poste unique — additionner des paliers de plusieurs postes
+                        # n'aurait pas de sens.
+                        libelle_tension_officielle, periode_tension_officielle, erreur_tension_officielle = (
+                            (None, None, "plusieurs postes sélectionnés")
+                            if len(codes_resolus_cv) != 1
+                            else perspective_recrutement_departement(codes_resolus_cv[0], departement_actif)
+                        )
                     demandeurs_valides = [d for _, d, _, e in detail_par_poste if not e]
                     total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
                     # Période affichée seulement pour un poste unique (ambigu à résumer en
@@ -302,6 +331,14 @@ with tab_profil:
                     else:
                         st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
 
+                    if libelle_tension_officielle:
+                        st.caption(
+                            f"⚖️ Indicateur officiel France Travail de difficulté de recrutement "
+                            f"({periode_tension_officielle}) : **{libelle_tension_officielle}** — "
+                            "méthode de calcul différente de notre indice ci-dessus (offres/demandeurs), "
+                            "présenté en complément qualitatif, pas en remplacement."
+                        )
+
                     if total_dep_offres:
                         c3, c4 = st.columns(2)
                         c3.metric(
@@ -319,6 +356,24 @@ with tab_profil:
                             ),
                         )
 
+                    if not erreur_offres_officielles:
+                        st.caption(
+                            f"📊 Repère officiel France Travail (statistique trimestrielle, {periode_offres_officielles}) : "
+                            f"**{total_offres_officielles}** offre(s) enregistrée(s) sur la période — à ne pas confondre "
+                            f"avec les **{total_dep_offres}** offres actuellement actives comptées ci-dessus : une offre "
+                            "enregistrée peut avoir déjà été pourvue et retirée, l'écart entre les deux n'est donc pas "
+                            "une erreur."
+                        )
+                    if not erreur_embauches:
+                        st.metric(
+                            f"Embauches réalisées — {periode_embauches}", total_embauches,
+                            help=(
+                                "Nombre RÉEL de prises de poste (pas des offres publiées) sur ce métier "
+                                "dans ce département, source France Travail — le repère le plus concret "
+                                "sur la réalité du marché, au-delà du nombre d'offres."
+                            ),
+                        )
+
             with sous_tab_recruteurs:
                 with st.spinner("Récupération des recruteurs actifs..."):
                     _, _, _, _, df_entreprises, _ = offres_par_ville_elargi(
@@ -326,7 +381,11 @@ with tab_profil:
                         jours_max=jours_max_periode_offres,
                     )
 
-                st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
+                st.markdown("##### 🕒 Recruteurs du moment")
+                st.caption(
+                    f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du "
+                    "marché) — ont publié une offre récemment."
+                )
                 if df_entreprises.empty:
                     st.info(
                         "Aucun nom d'entreprise exploitable — soit aucune offre, soit toutes "
@@ -352,6 +411,41 @@ with tab_profil:
                         use_container_width=True,
                         hide_index=True,
                     )
+
+                st.divider()
+                st.markdown("##### 🚀 Recruteurs à fort potentiel")
+                st.caption(
+                    "ℹ️ Entreprises susceptibles de recruter dans les 6 prochains mois pour ce métier "
+                    "et ce département — MÊME SANS offre publiée actuellement (modèle prédictif basé "
+                    "sur l'historique de recrutement). Source : La Bonne Boîte (France Travail). "
+                    "Argument de candidature spontanée, à ne pas confondre avec le tableau ci-dessus."
+                )
+                if len(codes_resolus_cv) != 1:
+                    st.info("Disponible pour un seul poste sélectionné à la fois.")
+                else:
+                    entreprises_potentiel = rechercher_entreprises_potentiel_embauche(
+                        codes_resolus_cv[0], departement_actif
+                    )
+                    if entreprises_potentiel is None:
+                        st.info("Aucune donnée disponible pour ces critères.")
+                    elif not entreprises_potentiel:
+                        st.info("Aucune entreprise à fort potentiel identifiée pour ces critères.")
+                    else:
+                        df_potentiel = pd.DataFrame(
+                            [
+                                {
+                                    "Entreprise": e.get("company_name") or "N/C",
+                                    "Ville": e.get("city") or "N/C",
+                                    "Secteur": e.get("naf_label") or "N/C",
+                                    "Effectif": (
+                                        f"{e.get('headcount_min', 'N/C')} à {e.get('headcount_max', 'N/C')}"
+                                    ),
+                                    "Score de potentiel": e.get("hiring_potential"),
+                                }
+                                for e in entreprises_potentiel
+                            ]
+                        )
+                        st.dataframe(df_potentiel, use_container_width=True, hide_index=True)
 
             with sous_tab_certifs:
                 if "cv_suggestions_apercu" not in st.session_state:
@@ -391,6 +485,31 @@ with tab_profil:
                             hide_index=True,
                         )
 
+                st.divider()
+                st.markdown("##### 📖 Référentiel officiel du métier (ROME)")
+                st.caption(
+                    "ℹ️ Compétences, savoir-faire et savoir-être TELS QUE DÉFINIS par le "
+                    "répertoire officiel — complémentaire des listes ci-dessus (qui reflètent la "
+                    "demande réelle des recruteurs, là maintenant). Une fiche par poste sélectionné, "
+                    "pas fusionnée en cas de multi-poste."
+                )
+                for label, code in codes_par_poste_cv.items():
+                    if not code:
+                        continue
+                    fiche_metier = recuperer_fiche_metier(code)
+                    with st.expander(f"{label} ({code})"):
+                        if not fiche_metier:
+                            st.info("Aucune donnée disponible pour ce métier.")
+                        else:
+                            if fiche_metier["competences"]:
+                                st.markdown("**Compétences :** " + ", ".join(fiche_metier["competences"]))
+                            if fiche_metier["savoir_faire"]:
+                                st.markdown("**Savoir-faire :** " + ", ".join(fiche_metier["savoir_faire"]))
+                            if fiche_metier["savoir_etre"]:
+                                st.markdown("**Savoir-être :** " + ", ".join(fiche_metier["savoir_etre"]))
+                            if fiche_metier["savoirs"]:
+                                st.markdown("**Savoirs :** " + ", ".join(fiche_metier["savoirs"]))
+
             with sous_tab_villes:
                 st.caption(
                     f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top "
@@ -398,6 +517,18 @@ with tab_profil:
                     "de géolocalisation précise côté France Travail, les positions approximatives "
                     "sont signalées séparément ci-dessous."
                 )
+
+                valeur_dyn, nom_dyn, periode_dyn, erreur_dyn = dynamisme_territoire(departement_actif)
+                if not erreur_dyn and valeur_dyn is not None:
+                    st.metric(
+                        f"Dynamisme de l'emploi — département {departement_actif}", valeur_dyn,
+                        help=(
+                            f"{nom_dyn or 'Indicateur de dynamisme'} ({periode_dyn}) — indicateur "
+                            "territorial officiel France Travail (méthode IA prospective sur le "
+                            "trimestre à venir), pas spécifique au poste recherché."
+                        ),
+                    )
+
                 with st.spinner("Récupération des offres par ville..."):
                     df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_elargi(
                         codes_resolus_cv, titre_libre_cv, departement_actif,
@@ -575,6 +706,17 @@ with tab_avance:
 
             st.divider()
             st.markdown("#### 💰 Fourchette de salaire proposée")
+            if code_rome_actif != "MULTI" and code_rome_actif != "TOUS":
+                valeur_sal, nom_sal, periode_sal, erreur_sal = salaires_officiels_metier(
+                    code_rome_actif, code_territoire=departement_actif, code_type_territoire="DEP",
+                )
+                if not erreur_sal and valeur_sal is not None:
+                    st.caption(
+                        f"📊 Repère officiel France Travail — **{nom_sal or 'salaire en poste'}** "
+                        f"({periode_sal}) : **{valeur_sal}** — salaires réels des salariés déjà en "
+                        "poste (pas des salaires proposés sur une offre), à titre de comparaison "
+                        "avec la fourchette ci-dessous."
+                    )
             if nb_total_offres == 0:
                 st.info("Aucune offre trouvée pour ces critères.")
             elif nb_avec_salaire == 0:
