@@ -12,27 +12,114 @@ qui reste différenciant, c'est la lecture de marché (tension, évolution,
 répartition contrats/salaires, villes/recruteurs actifs) — pas le listing
 d'offres lui-même. "Villes qui recrutent"/"Top recruteurs" deviennent des
 pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
+
+V4 : le sélecteur de poste par tags (auparavant _selecteur_poste, privé à ce
+fichier) est désormais FACTORISÉ dans moteur_recherche.py sous le nom
+selecteur_poste_tags() — réutilisé aussi bien dans "Créer mon CV" que dans
+cette page. La sélection de poste se fait maintenant UNE SEULE FOIS, dès
+l'onglet "Créer mon CV" (st.session_state["cv_postes_choisis"] /
+["cv_codes_rome_choisis"]) : "Tendance par profil" lit directement cette
+sélection au lieu de la re-résoudre silencieusement depuis le texte libre
+cv_titre (ancien comportement, qui laissait d'ailleurs une variable
+postes_choisis_profil non définie plus bas dans ce fichier — corrigé ici).
 """
 
 import streamlit as st
 import pandas as pd
+import folium
 from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import altair as alt
 import plotly.express as px
 import plotly.graph_objects as go
+from folium.plugins import MarkerCluster
+from streamlit_folium import st_folium
 
 from cv_builder import afficher_generateur_cv
-from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées
+from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées (dont
+# selecteur_poste_tags et analyser_competences_multi, cf. V4)
 
 st.title("🎯 Aide Conseil Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
+appellations = get_referentiel_appellations()
+labels_appellations = sorted({a.get("libelle", "").strip() for a in appellations if a.get("libelle")})
+
+
+def _selecteur_departement(cle_prefixe):
+    """
+    Sélecteur de département en MULTI-sélection, avec option "Toute la France"
+    (recherche nationale — l'API le permet nativement en omettant le paramètre
+    département). Plusieurs départements sont envoyés à l'API sous forme de
+    codes séparés par une virgule (accepté nativement par l'API Offres d'emploi
+    France Travail).
+
+    Retourne une valeur de paramètre département :
+    - None -> "Toute la France" (aucun filtre)
+    - ""   -> rien sélectionné (état invalide, à gérer par l'appelant)
+    - "13" ou "13,75" -> un ou plusieurs codes
+    """
+    cle_checkbox = f"{cle_prefixe}_checkbox_toute_france"
+    cle_multiselect = f"{cle_prefixe}_departements_multiselect"
+
+    # Valeur du run précédent pour désactiver le multiselect si "Toute la France" est
+    # cochée — la case est rendue APRÈS le multiselect (demande UX), donc on ne connaît
+    # sa valeur pour CE run qu'après l'avoir affichée ; celle du run précédent suffit
+    # pour l'état "disabled" (même trick que pour d'autres sélecteurs de l'app).
+    toute_la_france_precedente = st.session_state.get(cle_checkbox, False)
+
+    if cle_multiselect not in st.session_state:
+        # Préremplit depuis le département renseigné dans "Créer mon CV" (cv_departement),
+        # sinon retombe sur le département par défaut de l'app.
+        code_departement_cv = st.session_state.get("cv_departement")
+        nom_departement_cv = DEPARTEMENTS_VERS_NOM.get(code_departement_cv) if code_departement_cv else None
+        if code_departement_cv and nom_departement_cv:
+            st.session_state[cle_multiselect] = [f"{code_departement_cv} - {nom_departement_cv}"]
+        else:
+            st.session_state[cle_multiselect] = ["13 - Bouches-du-Rhône"]
+
+    options_departements = sorted(f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items())
+    labels_choisis = st.multiselect(
+        "Département(s) (région d'intérêt)",
+        options=options_departements,
+        key=cle_multiselect,
+        disabled=toute_la_france_precedente,
+    )
+
+    toute_la_france = st.checkbox("🇫🇷 Toute la France (aucun filtre département)", key=cle_checkbox)
+    if toute_la_france:
+        return None
+
+    if not labels_choisis:
+        st.info("Sélectionne au moins un département ci-dessus, ou coche « Toute la France ».")
+        return ""
+    return ",".join(label.split(" - ")[0] for label in labels_choisis)
+
+
+def _libelle_departement_affiche(departement_param):
+    """Libellé lisible pour un titre de section ('département 13', 'départements
+    13, 75', 'toute la France')."""
+    if not departement_param:
+        return "toute la France"
+    codes = departement_param.split(",")
+    if len(codes) == 1:
+        return f"département {codes[0]}"
+    return "départements " + ", ".join(codes)
+
+
+# NB (V4) : l'ancien sélecteur de poste privé _selecteur_poste(...) a été
+# supprimé d'ici et déplacé dans moteur_recherche.py sous le nom public
+# selecteur_poste_tags(...) — importé plus haut via `from moteur_recherche
+# import *`. Utilisé désormais uniquement dans cv_builder.py (onglet "Créer
+# mon CV") : "Tendance par profil" lit directement la sélection qui en
+# résulte (st.session_state["cv_postes_choisis"] / ["cv_codes_rome_choisis"])
+# plutôt que de re-proposer un second sélecteur redondant.
+
 
 st.divider()
 
-tab_cv, tab_profil, tab_entreprises, tab_avance = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance par profil", "📇 Fiches entreprises", "🧩 KPIs avancés"]
+tab_cv, tab_profil, tab_avance = st.tabs(
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés"]
 )
 
 # ---------------------------------------------------------------------------
@@ -40,55 +127,53 @@ tab_cv, tab_profil, tab_entreprises, tab_avance = st.tabs(
 # "Métier recherché" doit être en place avant que ce champ ne soit affiché)
 # ---------------------------------------------------------------------------
 with tab_cv:
-    afficher_generateur_cv(fonction_analyse_competences=analyser_competences)
+    afficher_generateur_cv(fonction_analyse_competences_multi=analyser_competences_multi)
 
 # ---------------------------------------------------------------------------
 # Onglet 1 : Tendance par profil
 # ---------------------------------------------------------------------------
 with tab_profil:
     st.write(
-        "Analyse du marché pour le(s) poste(s) sélectionné(s) dans votre CV : où sont les offres "
-        "près de chez vous, le volume national, et le niveau de tension du marché sur ce métier."
+        "Analyse du marché pour le/les poste(s) sélectionné(s) dans votre CV : où sont les "
+        "offres près de chez vous, le volume national, et le niveau de tension du marché."
     )
 
-    postes_cv = st.session_state.get("cv_postes_recherche", [])
-    codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
-    codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
+    titre_poste_cv = st.session_state.get("cv_titre", "").strip()
+    postes_cv = st.session_state.get("cv_postes_choisis", [])
+    codes_rome_cv = [c for c in st.session_state.get("cv_codes_rome_choisis", []) if c]
     departement_cv = st.session_state.get("cv_departement") or "13"
 
-    if not postes_cv:
+    if not titre_poste_cv or not codes_rome_cv:
         st.info(
-            "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV**, puis sélectionne au "
-            "moins une suggestion parmi les étiquettes proposées — l'analyse se lance ensuite "
-            "automatiquement, pas besoin de ressaisir quoi que ce soit ici."
+            "👉 Sélectionne un poste dans l'onglet **🧾 Créer mon CV** (tags de suggestions "
+            "sous le champ « Poste recherché ») — l'analyse se lance automatiquement dès qu'un "
+            "poste est choisi, pas besoin de le ressaisir ici."
         )
     else:
-        # Poste(s) et département viennent uniquement de "Créer mon CV" (étiquettes de
-        # suggestion + champ département) — plus aucun champ affiché ici.
+        # V4 : la résolution ROME se fait désormais UNE SEULE FOIS, côté "Créer mon CV"
+        # (sélecteur à tags). On reprend ici directement cv_postes_choisis /
+        # cv_codes_rome_choisis plutôt que de re-résoudre silencieusement le texte libre.
         cle_auto_signature = "profil_auto_analyse_signature"
-        signature_actuelle = (tuple(postes_cv), departement_cv)
+        signature_actuelle = (tuple(sorted(codes_rome_cv)), departement_cv)
 
         if st.session_state.get(cle_auto_signature) != signature_actuelle:
-            with st.spinner("Analyse du marché en cours..."):
-                if not codes_resolus_cv:
-                    st.session_state["df_rome_profil"] = pd.DataFrame()
-                else:
-                    st.session_state["df_rome_profil"] = pd.DataFrame(
-                        [
-                            {"code_rome": code, "libelle": label, "nb_offres_echantillon": None}
-                            for label, code in codes_par_poste_cv.items()
-                            if code
-                        ]
-                    )
-                    if len(codes_resolus_cv) == 1:
-                        st.session_state["code_rome_choisi"] = codes_resolus_cv[0]
-                    else:
-                        st.session_state["code_rome_choisi"] = "MULTI"
-                    st.session_state["codes_rome_choisis"] = codes_resolus_cv
-                    st.session_state["mots_cles_profil_actif"] = " / ".join(postes_cv)
+            if len(codes_rome_cv) == 1:
+                st.session_state["df_rome_profil"] = pd.DataFrame(
+                    [{"code_rome": codes_rome_cv[0], "libelle": postes_cv[0], "nb_offres_echantillon": None}]
+                )
+                st.session_state["code_rome_choisi"] = codes_rome_cv[0]
+                st.session_state["codes_rome_choisis"] = codes_rome_cv
+                st.session_state["mots_cles_profil_actif"] = postes_cv[0]
+            else:
+                st.session_state["df_rome_profil"] = pd.DataFrame(
+                    [{"code_rome": "MULTI", "libelle": " / ".join(postes_cv), "nb_offres_echantillon": None}]
+                )
+                st.session_state["code_rome_choisi"] = "MULTI"
+                st.session_state["codes_rome_choisis"] = codes_rome_cv
+                st.session_state["mots_cles_profil_actif"] = " ".join(postes_cv)
 
-                st.session_state["departement_profil_actif"] = departement_cv
-                st.session_state[cle_auto_signature] = signature_actuelle
+            st.session_state["departement_profil_actif"] = departement_cv
+            st.session_state[cle_auto_signature] = signature_actuelle
 
     if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
@@ -96,21 +181,19 @@ with tab_profil:
         mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
         code_rome_choisi = st.session_state.get("code_rome_choisi")
         codes_rome_choisis = st.session_state.get("codes_rome_choisis", [])
+        postes_choisis_profil = st.session_state.get("cv_postes_choisis", [])
         recherche_multi = code_rome_choisi == "MULTI"
 
         if df_rome.empty:
             st.error("Aucune offre trouvée pour ce département. Essaie d'élargir les critères.")
         else:
-            # Tension et villes qui recrutent partagent la même base de temps : depuis
-            # le début du semestre EN COURS (celui qui contient la date d'aujourd'hui).
+            # Tous les indicateurs de cet onglet (tension, top recruteurs, top villes)
+            # partagent désormais la même base de temps : depuis le 1er janvier de l'année
+            # en cours. Poste et secteur restent les mêmes filtres que partout ailleurs.
             aujourdhui = datetime.now()
-            if aujourdhui.month <= 6:
-                debut_periode = datetime(aujourdhui.year, 1, 1)
-                libelle_periode_offres = f"1er semestre {aujourdhui.year}"
-            else:
-                debut_periode = datetime(aujourdhui.year, 7, 1)
-                libelle_periode_offres = f"2e semestre {aujourdhui.year}"
-            jours_max_periode_offres = (aujourdhui - debut_periode).days
+            debut_annee = datetime(aujourdhui.year, 1, 1)
+            libelle_periode_offres = f"depuis janvier {aujourdhui.year}"
+            jours_max_periode_offres = (aujourdhui - debut_annee).days
 
             st.markdown("#### ⚖️ Tension du marché")
             if code_rome_choisi == "TOUS":
@@ -128,36 +211,24 @@ with tab_profil:
                 )
             else:
                 st.caption(
-                    f"ℹ️ Les offres comptent depuis le début du semestre en cours (actuellement le "
-                    f"{libelle_periode_offres}) ; les demandeurs d'emploi restent une statistique "
-                    "officielle trimestrielle (non filtrable par date)."
+                    f"ℹ️ Le nombre d'offres porte sur le {libelle_periode_offres} (même base que "
+                    "le top recruteurs et le top villes plus bas) ; les demandeurs d'emploi "
+                    "restent une statistique officielle trimestrielle (non filtrable par date)."
                     + (
                         " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
                         "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
-                        "indicateur officiel par métier unique — détail par poste ci-dessous."
+                        "indicateur officiel par métier unique."
                         if recherche_multi else ""
                     )
                 )
-                detail_par_poste = []
                 if recherche_multi:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
-                        for label, code in codes_par_poste_cv.items():
-                            if not code:
-                                continue
-                            offres_i = volumes_departement_offres(
-                                code, departement_actif, jours_max=jours_max_periode_offres
-                            )
-                            demandeurs_i, periode_i, erreur_i = demandeurs_emploi_departement(
-                                code, departement_actif
-                            )
-                            detail_par_poste.append((label, offres_i, demandeurs_i, erreur_i))
-                    total_dep_offres = sum(o for _, o, _, _ in detail_par_poste)
-                    demandeurs_valides = [d for _, _, d, e in detail_par_poste if not e]
-                    total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
-                    periode_demandeurs = None  # non affiché en multi (périodes potentiellement différentes par poste)
-                    erreur_demandeurs = (
-                        None if demandeurs_valides else "toutes les requêtes demandeurs ont échoué"
-                    )
+                        total_dep_offres = volumes_departement_offres_multi(
+                            codes_rome_choisis, departement_actif, jours_max=jours_max_periode_offres,
+                        )
+                        total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = (
+                            demandeurs_emploi_departement_multi(codes_rome_choisis, departement_actif)
+                        )
                 else:
                     with st.spinner("Récupération des demandeurs d'emploi..."):
                         total_dep_offres = volumes_departement_offres(
@@ -177,19 +248,11 @@ with tab_profil:
                     )
                 else:
                     c1, c2 = st.columns(2)
-                    c1.metric("Offres", total_dep_offres)
+                    c1.metric(f"Offres — {libelle_periode_offres}", total_dep_offres)
                     c2.metric(
                         f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
                         total_dep_demandeurs,
                     )
-
-                if recherche_multi and detail_par_poste:
-                    with st.expander("🔎 Détail par poste (pour repérer un éventuel poste hors-sujet)"):
-                        for label, offres_i, demandeurs_i, erreur_i in detail_par_poste:
-                            if erreur_i:
-                                st.caption(f"**{label}** — demandeurs indisponibles ({erreur_i})")
-                            else:
-                                st.caption(f"**{label}** — {offres_i} offre(s), {demandeurs_i} demandeur(s)")
 
                 tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
                 if tension is not None:
@@ -205,15 +268,15 @@ with tab_profil:
 
             st.divider()
 
+            mots_cles_recherche_large = (
+                "" if postes_choisis_profil == ["🌐 Tous les postes"] else " ".join(postes_choisis_profil)
+            )
+
             with st.spinner("Récupération des recruteurs actifs..."):
-                if recherche_multi:
-                    _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
-                        codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
-                    )
-                else:
-                    _, _, _, _, df_entreprises, _ = offres_par_ville(
-                        code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
-                    )
+                _, _, _, _, df_entreprises, _ = offres_par_ville(
+                    "TOUS", departement_actif,
+                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
+                )
 
             st.markdown("#### 🏢 Top recruteurs")
             st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
@@ -226,10 +289,9 @@ with tab_profil:
                 st.caption(
                     "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
                     "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
-                    "peuvent valoir une candidature directe. Clique sur une ligne pour voir sa fiche "
-                    "entreprise (SIRET, secteur, taille, adresse — source : Recherche d'entreprises, DINUM)."
+                    "peuvent valoir une candidature directe."
                 )
-                selection_recruteur = st.dataframe(
+                st.dataframe(
                     df_entreprises.rename(
                         columns={
                             "entreprise": "Entreprise",
@@ -238,134 +300,131 @@ with tab_profil:
                     ).drop(columns=["villes"]),
                     use_container_width=True,
                     hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="table_top_recruteurs",
                 )
 
-                lignes_selectionnees = selection_recruteur["selection"]["rows"]
-                if lignes_selectionnees:
-                    nom_choisi = df_entreprises.iloc[lignes_selectionnees[0]]["entreprise"]
-                    with st.spinner(f"Récupération des informations sur {nom_choisi}..."):
-                        fiche = rechercher_entreprise_siren(nom_choisi)
-                        if recherche_multi:
-                            offres_pour_fiche = rechercher_offres_completes_multi(
-                                codes_resolus_cv, departement_actif, max_pages=1,
+                # V4.1 — Fiche entreprise (Wikipédia)
+                noms_entreprises = [
+                    e for e in df_entreprises["entreprise"].tolist() if e != LABEL_ENTREPRISE_ANONYME
+                ]
+                if noms_entreprises:
+                    st.caption("🔎 Fiche entreprise (Wikipédia) — quand une page existe pour ce nom.")
+                    entreprise_selectionnee = st.selectbox(
+                        "Voir la fiche d'une entreprise",
+                        options=noms_entreprises,
+                        key="entreprise_fiche_wikipedia_select",
+                    )
+                    if st.button("📖 Afficher la fiche Wikipédia", key="btn_fiche_wikipedia"):
+                        with st.spinner(f"Recherche d'une fiche Wikipédia pour « {entreprise_selectionnee} »..."):
+                            fiche = recuperer_fiche_entreprise_wikipedia(entreprise_selectionnee)
+                        st.session_state["fiche_wikipedia_affichee"] = fiche
+                        st.session_state["fiche_wikipedia_pour"] = entreprise_selectionnee
+
+                    if (
+                        st.session_state.get("fiche_wikipedia_pour") == entreprise_selectionnee
+                        and "fiche_wikipedia_affichee" in st.session_state
+                    ):
+                        fiche = st.session_state["fiche_wikipedia_affichee"]
+                        if fiche is None:
+                            st.info(
+                                f"Aucune fiche Wikipédia trouvée pour « {entreprise_selectionnee} » — "
+                                "nom trop générique, entreprise non notable, ou raison sociale "
+                                "différente du nom commercial."
                             )
                         else:
-                            offres_pour_fiche = rechercher_offres_completes(
-                                code_rome_choisi, departement_actif, max_pages=1,
-                            )
-                        infos_entretien = infos_entretien_entreprise(nom_choisi, offres_pour_fiche)
-
-                    if not fiche and not infos_entretien:
-                        st.info(
-                            f"Aucune information trouvée pour « {nom_choisi} » — ni dans le "
-                            "répertoire des entreprises, ni dans le descriptif de ses offres."
-                        )
-                    else:
-                        st.markdown(f"**{nom_choisi}**")
-
-                        if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
-                            st.caption("💡 À retenir pour un entretien ou une candidature spontanée :")
-                            if infos_entretien["secteur_libelle"]:
-                                st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
-                            if infos_entretien["description"]:
-                                st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
-
-                        if fiche:
-                            st.caption(
-                                "⚠️ Informations administratives ci-dessous : correspondance "
-                                "approximative sur le nom (à vérifier via le lien ci-dessous), "
-                                "surtout pour un nom court ou courant."
-                            )
-                            if fiche["secteur_libelle"]:
-                                st.markdown(f"**Secteur :** {fiche['secteur_libelle']} ({fiche['naf']})")
-                            elif fiche["naf"]:
-                                st.markdown(f"**Secteur (code NAF) :** {fiche['naf']}")
-                            st.markdown(f"**Effectif :** {fiche['tranche_effectif_libelle']}")
-                            st.markdown(f"**Catégorie :** {fiche['categorie_entreprise'] or 'Non renseignée'}")
-                            st.markdown(
-                                "**Présence géographique :** "
-                                + (
-                                    f"{fiche['nombre_etablissements_ouverts']} établissement(s) ouvert(s)"
-                                    if fiche["nombre_etablissements_ouverts"] else "Non renseignée"
-                                )
-                            )
-                            if fiche["adresse"]:
-                                st.markdown(f"📍 Siège : {fiche['adresse']}")
-                            if fiche["date_creation"]:
-                                st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
-                            if fiche["siret_siege"]:
-                                st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
-                            if fiche["est_qualiopi"]:
-                                st.markdown("🏅 Organisme certifié Qualiopi")
-                            if fiche["url_annuaire"]:
-                                st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
-                        elif infos_entretien:
-                            st.caption(
-                                "ℹ️ Aucune fiche administrative trouvée pour ce nom dans le "
-                                "répertoire des entreprises françaises (nom trop générique, "
-                                "entreprise étrangère, ou diffusion restreinte)."
-                            )
+                            with st.container(border=True):
+                                col_texte, col_image = st.columns([3, 1]) if fiche.get("image_url") else (st, None)
+                                col_texte.markdown(f"**{fiche['titre']}**")
+                                col_texte.write(fiche["extrait"])
+                                col_texte.markdown(f"[Voir sur Wikipédia]({fiche['url']})")
+                                if col_image:
+                                    col_image.image(fiche["image_url"], use_container_width=True)
 
             st.divider()
 
-            if "cv_suggestions_apercu" in st.session_state:
-                _, _, _, df_certifs, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
-                st.markdown("#### 🎓 Certifications les plus demandées")
-                st.caption(
-                    "ℹ️ France Travail n'a pas de champ dédié aux certifications — repérées par "
-                    "mot-clé dans les offres réelles (même échantillon que les suggestions de "
-                    "compétences de « Créer mon CV »), couverture partielle par construction."
-                )
-                if df_certifs.empty:
-                    st.info("Aucune certification identifiée dans les offres de cet échantillon.")
-                else:
-                    st.dataframe(
-                        df_certifs.rename(
-                            columns={"libelle": "Certification", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                st.divider()
-
             st.markdown("#### 📍 Villes qui recrutent")
-            st.caption(
-                f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top "
-                "recruteurs). Basée sur le lieu tel qu'indiqué par l'offre — la plupart n'ont pas "
-                "de géolocalisation précise côté France Travail, donc pas de carte ici : un simple "
-                "classement, plus honnête qu'une carte gonflée artificiellement sur une seule ville."
-            )
+            st.caption(f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top recruteurs).")
             with st.spinner("Récupération des offres par ville..."):
-                if recherche_multi:
-                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_multi(
-                        codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
-                    )
-                else:
-                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
-                        code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
-                    )
+                df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
+                    "TOUS", departement_actif,
+                    jours_max=jours_max_periode_offres, mots_cles=mots_cles_recherche_large,
+                )
             st.metric("Total offres dans la région", total_region)
             # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
             # donnent la plage de publication réelle des offres renvoyées par l'API —
             # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
             # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
             # offres sont simplement celles encore actives aujourd'hui.
-            if df_villes.empty:
-                st.info("Aucune offre trouvée pour ces critères.")
-            else:
-                df_villes_top = df_villes[["ville", "nombre_offres"]].head(15)
-                st.bar_chart(df_villes_top.set_index("ville"))
-                st.dataframe(
-                    df_villes_top.rename(
-                        columns={"ville": "Lieu (tel qu'indiqué par l'offre)", "nombre_offres": "Nombre d'offres"}
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            if not df_villes.empty:
+                df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
+                nb_offres_approx = int(df_carte.loc[df_carte["approximatif"], "nombre_offres"].sum()) if not df_carte.empty else 0
+                if nb_offres_approx > 0:
+                    st.caption(
+                        f"📍 {nb_offres_approx} offre(s) sur {total_region} n'ont pas de coordonnées GPS "
+                        "précises côté France Travail (lieu renseigné au niveau département seulement, ou "
+                        "télétravail) — elles sont positionnées sur la plus grande ville du département "
+                        "(marqueurs oranges ci-dessous), à titre indicatif."
+                    )
+                ville_cliquee = None
+                if not df_carte.empty:
+                    df_carte["latitude"] = df_carte["latitude"].astype(float)
+                    df_carte["longitude"] = df_carte["longitude"].astype(float)
+
+                    etendue_lat = df_carte["latitude"].max() - df_carte["latitude"].min()
+                    etendue_lon = df_carte["longitude"].max() - df_carte["longitude"].min()
+                    etendue = max(etendue_lat, etendue_lon)
+                    if etendue < 0.03:
+                        zoom_auto = 12
+                    elif etendue < 0.1:
+                        zoom_auto = 11
+                    elif etendue < 0.3:
+                        zoom_auto = 10
+                    elif etendue < 0.8:
+                        zoom_auto = 9
+                    else:
+                        zoom_auto = 8
+
+                    carte = folium.Map(
+                        location=[df_carte["latitude"].mean(), df_carte["longitude"].mean()],
+                        zoom_start=zoom_auto,
+                        # CartoDB dark_matter exige désormais une clé API (changement récent
+                        # de Carto) — OpenStreetMap reste gratuit et sans clé, en thème clair.
+                        tiles="OpenStreetMap",
+                    )
+                    cluster = MarkerCluster(
+                        options={"maxClusterRadius": 60, "disableClusteringAtZoom": 15}
+                    ).add_to(carte)
+
+                    for _, row in df_carte.iterrows():
+                        couleur = "#e67e22" if row["approximatif"] else "#0066cc"
+                        tooltip_texte = f"{row['ville']} : {int(row['nombre_offres'])} offre(s)"
+                        if row["approximatif"]:
+                            tooltip_texte += " (position approximative)"
+                        for _ in range(int(row["nombre_offres"])):
+                            folium.CircleMarker(
+                                location=[row["latitude"], row["longitude"]],
+                                radius=8,
+                                tooltip=tooltip_texte,
+                                color=couleur,
+                                fill=True,
+                                fill_color=couleur,
+                                fill_opacity=0.8,
+                                weight=1,
+                            ).add_to(cluster)
+
+                    # Carte purement visuelle (tendance) : pas de listing d'offres cliquables —
+                    # l'app ne cherche plus à concurrencer les plateformes de recrutement dédiées,
+                    # seule la lecture de marché (villes qui recrutent) est montrée ici.
+                    # returned_objects=[] évite les allers-retours serveur au zoom/déplacement
+                    # (meilleure stabilité, notamment sur mobile).
+                    st_folium(
+                        carte,
+                        use_container_width=True,
+                        height=500,
+                        key="carte_offres_ville",
+                        returned_objects=[],
+                    )
+                else:
+                    st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
 
             st.divider()
             st.info(
@@ -377,111 +436,12 @@ with tab_profil:
             )
 
 # ---------------------------------------------------------------------------
-# Onglet "Fiches entreprises" — recherche libre par nom, indépendante du poste
-# sélectionné dans le CV. Utile pour préparer un entretien ou une candidature
-# spontanée sur une entreprise précise, ou pour une agence qui veut qualifier
-# un prospect avant de le démarcher.
-# ---------------------------------------------------------------------------
-with tab_entreprises:
-    st.write(
-        "Tape le nom d'une entreprise pour voir sa fiche : secteur, taille, adresse, et — si "
-        "elle recrute actuellement sur le poste de ton CV — sa présentation et son domaine "
-        "d'activité tels qu'elle les décrit elle-même."
-    )
-
-    nom_recherche = st.text_input(
-        "Nom de l'entreprise", key="entreprises_nom_recherche", placeholder="ex: Capgemini, Signe+..."
-    )
-    bouton_rechercher_entreprise = st.button("Rechercher")
-
-    if bouton_rechercher_entreprise:
-        if not nom_recherche.strip():
-            st.error("Tape un nom d'entreprise avant de lancer la recherche.")
-        else:
-            with st.spinner(f"Récupération des informations sur {nom_recherche}..."):
-                fiche = rechercher_entreprise_siren(nom_recherche.strip())
-
-                # Recherche best-effort d'une offre de cette entreprise, uniquement si un
-                # poste a déjà été résolu depuis le CV — cette partie peut légitimement ne
-                # rien trouver (l'entreprise tapée n'a pas forcément d'offre active sur ce
-                # poste précis, ou n'a peut-être pas d'offre du tout en ce moment).
-                infos_entretien = None
-                if "code_rome_choisi" in st.session_state:
-                    code_rome_choisi_recherche = st.session_state["code_rome_choisi"]
-                    codes_rome_choisis_recherche = st.session_state.get("codes_rome_choisis", [])
-                    departement_recherche = st.session_state.get("departement_profil_actif")
-                    if code_rome_choisi_recherche == "MULTI":
-                        offres_pour_recherche = rechercher_offres_completes_multi(
-                            codes_rome_choisis_recherche, departement_recherche, max_pages=1,
-                        )
-                    else:
-                        offres_pour_recherche = rechercher_offres_completes(
-                            code_rome_choisi_recherche, departement_recherche, max_pages=1,
-                        )
-                    infos_entretien = infos_entretien_entreprise(nom_recherche.strip(), offres_pour_recherche)
-
-            if not fiche and not infos_entretien:
-                st.info(
-                    f"Aucune information trouvée pour « {nom_recherche} » — vérifie l'orthographe, "
-                    "ou l'entreprise n'est pas répertoriée (entreprise étrangère, très récente, ou "
-                    "diffusion restreinte)."
-                )
-            else:
-                st.markdown(f"**{nom_recherche}**")
-
-                if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
-                    st.caption(
-                        "💡 À retenir pour un entretien ou une candidature spontanée (cette "
-                        "entreprise a une offre active sur le poste de ton CV) :"
-                    )
-                    if infos_entretien["secteur_libelle"]:
-                        st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
-                    if infos_entretien["description"]:
-                        st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
-
-                if fiche:
-                    st.caption(
-                        "⚠️ Informations administratives ci-dessous : correspondance approximative "
-                        "sur le nom (à vérifier via le lien ci-dessous), surtout pour un nom court "
-                        "ou courant."
-                    )
-                    if fiche["secteur_libelle"]:
-                        st.markdown(f"**Secteur :** {fiche['secteur_libelle']} ({fiche['naf']})")
-                    elif fiche["naf"]:
-                        st.markdown(f"**Secteur (code NAF) :** {fiche['naf']}")
-                    st.markdown(f"**Effectif :** {fiche['tranche_effectif_libelle']}")
-                    st.markdown(f"**Catégorie :** {fiche['categorie_entreprise'] or 'Non renseignée'}")
-                    st.markdown(
-                        "**Présence géographique :** "
-                        + (
-                            f"{fiche['nombre_etablissements_ouverts']} établissement(s) ouvert(s)"
-                            if fiche["nombre_etablissements_ouverts"] else "Non renseignée"
-                        )
-                    )
-                    if fiche["adresse"]:
-                        st.markdown(f"📍 Siège : {fiche['adresse']}")
-                    if fiche["date_creation"]:
-                        st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
-                    if fiche["siret_siege"]:
-                        st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
-                    if fiche["est_qualiopi"]:
-                        st.markdown("🏅 Organisme certifié Qualiopi")
-                    if fiche["url_annuaire"]:
-                        st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
-                elif infos_entretien:
-                    st.caption(
-                        "ℹ️ Aucune fiche administrative trouvée pour ce nom dans le répertoire "
-                        "des entreprises françaises (nom trop générique, entreprise étrangère, "
-                        "ou diffusion restreinte)."
-                    )
-
-# ---------------------------------------------------------------------------
 # Onglet "KPIs avancés"
 # ---------------------------------------------------------------------------
 with tab_avance:
     if "code_rome_choisi" not in st.session_state:
         st.info(
-            "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
+            "👉 Sélectionne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
             "s'appuient sur l'analyse automatique de l'onglet Tendance par profil."
         )
     else:
