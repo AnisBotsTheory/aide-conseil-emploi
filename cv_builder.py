@@ -936,107 +936,105 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
     afficher_drapeaux = st.checkbox("🏳️ Afficher un drapeau à côté des langues reconnues", value=True, key="cv_drapeaux")
 
-    st.markdown("#### 👤 Informations générales")
-    c1, c2 = st.columns(2)
-    prenom = c1.text_input("Prénom", key="cv_prenom")
-    nom = c2.text_input("Nom", key="cv_nom")
+    with st.expander("👤 Informations générales", expanded=True):
+        c1, c2 = st.columns(2)
+        prenom = c1.text_input("Prénom", key="cv_prenom")
+        nom = c2.text_input("Nom", key="cv_nom")
 
-    titre_recherche = st.text_input(
-        "Titre du poste recherché (ex: PMO Finance)",
-        key="cv_titre",
-        help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peut être personnalisé librement.",
-    )
-    st.caption(
-        "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
-        "Finance senior confirmé »). Ci-dessous, choisis un ou plusieurs intitulés officiels "
-        "France Travail (ROME) proches — ce sont eux qui alimentent l'analyse automatique de "
-        "l'onglet **🎯 Tendance par profil** et les suggestions de compétences plus bas."
-    )
-    _selecteur_poste_recherche(titre_recherche)
+        titre_recherche = st.text_input(
+            "Titre du poste recherché (ex: PMO Finance)",
+            key="cv_titre",
+            help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peut être personnalisé librement.",
+        )
+        st.caption(
+            "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
+            "Finance senior confirmé »). Ci-dessous, choisis un ou plusieurs intitulés officiels "
+            "France Travail (ROME) proches — ce sont eux qui alimentent l'analyse automatique de "
+            "l'onglet **🎯 Tendance par profil** et les suggestions de compétences plus bas."
+        )
+        _selecteur_poste_recherche(titre_recherche)
 
-    c3, c4 = st.columns(2)
-    email = c3.text_input("Email", key="cv_email")
-    telephone = c4.text_input("Téléphone", key="cv_telephone")
-    adresse = st.text_input(
-        "Adresse", key="cv_adresse", placeholder="ex: 6 Calle Cronista Veravens, 3012 Alicante, España"
-    )
+        c3, c4 = st.columns(2)
+        email = c3.text_input("Email", key="cv_email")
+        telephone = c4.text_input("Téléphone", key="cv_telephone")
+        adresse = st.text_input(
+            "Adresse", key="cv_adresse", placeholder="ex: 6 Calle Cronista Veravens, 3012 Alicante, España"
+        )
 
-    options_departement_cv = ["Non renseigné"] + sorted(
-        f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items()
-    )
-    departement_choisi_cv = st.selectbox(
-        "Département de résidence",
-        options=options_departement_cv,
-        key="cv_departement_label",
-        help=(
-            "N'apparaît pas sur le CV — préremplit automatiquement le département dans "
-            "l'onglet 🎯 Tendance par profil."
-        ),
-    )
-    if departement_choisi_cv != "Non renseigné":
-        st.session_state["cv_departement"] = departement_choisi_cv.split(" - ")[0]
-    else:
-        st.session_state.pop("cv_departement", None)
+        options_departement_cv = ["Non renseigné"] + sorted(
+            f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items()
+        )
+        departement_choisi_cv = st.selectbox(
+            "Département de résidence",
+            options=options_departement_cv,
+            key="cv_departement_label",
+            help=(
+                "N'apparaît pas sur le CV — préremplit automatiquement le département dans "
+                "l'onglet 🎯 Tendance par profil."
+            ),
+        )
+        if departement_choisi_cv != "Non renseigné":
+            st.session_state["cv_departement"] = departement_choisi_cv.split(" - ")[0]
+        else:
+            st.session_state.pop("cv_departement", None)
 
-    profil = st.text_area(
-        "Profil / accroche (2-3 phrases qui résument votre parcours et votre projet)",
-        key="cv_profil",
-        height=100,
-    )
-    disponibilite = st.text_input(
-        "Disponibilité", key="cv_disponibilite", placeholder="ex: immédiate, sous 1 mois..."
-    )
+        profil = st.text_area(
+            "Profil / accroche (2-3 phrases qui résument votre parcours et votre projet)",
+            key="cv_profil",
+            height=100,
+        )
+        disponibilite = st.text_input(
+            "Disponibilité", key="cv_disponibilite", placeholder="ex: immédiate, sous 1 mois..."
+        )
 
-    st.divider()
-    _section_experiences()
+    with st.expander("💼 Expériences professionnelles"):
+        _section_experiences()
 
-    st.divider()
-    _section_formations()
+    with st.expander("🎓 Formation"):
+        _section_formations()
 
-    st.divider()
-    st.markdown("#### 🌍 Langues")
-    langues = _champ_liste_avec_ajout(
-        "Sélectionne ou ajoute tes langues (précise le niveau via « Ajouter », ex: « Anglais - Courant »)",
-        "cv_langues_choix", _DEFAUTS_LANGUES,
-    )
+    with st.expander("🌍 Langues"):
+        langues = _champ_liste_avec_ajout(
+            "Sélectionne ou ajoute tes langues (précise le niveau via « Ajouter », ex: « Anglais - Courant »)",
+            "cv_langues_choix", _DEFAUTS_LANGUES,
+        )
 
-    st.divider()
-    st.markdown("#### 💡 Compétences, outils & langages")
-    st.caption("ℹ️ Ces éléments apparaîtront sur votre CV, dans le bandeau latéral.")
-    _section_suggestions_competences(fonction_analyse_competences)
+    with st.expander("💡 Compétences, outils, langages & certifications"):
+        st.caption("ℹ️ Ces éléments apparaîtront sur votre CV, dans le bandeau latéral.")
+        _section_suggestions_competences(fonction_analyse_competences)
 
-    st.markdown("###### 🧠 Compétences")
-    competences = _champ_liste_avec_ajout(
-        "Sélectionne ou ajoute tes compétences", "cv_competences", _DEFAUTS_COMPETENCES
-    )
+        st.markdown("###### 🧠 Compétences")
+        competences = _champ_liste_avec_ajout(
+            "Sélectionne ou ajoute tes compétences", "cv_competences", _DEFAUTS_COMPETENCES
+        )
 
-    st.markdown("###### 🛠️ Outils informatiques")
-    outils = _champ_liste_avec_ajout(
-        "Sélectionne ou ajoute tes outils", "cv_outils", _DEFAUTS_OUTILS
-    )
+        st.markdown("###### 🛠️ Outils informatiques")
+        outils = _champ_liste_avec_ajout(
+            "Sélectionne ou ajoute tes outils", "cv_outils", _DEFAUTS_OUTILS
+        )
 
-    st.markdown("###### 💻 Langages informatiques")
-    st.caption("Facultatif — pertinent surtout pour les profils tech/data.")
-    langages_informatiques = _champ_liste_avec_ajout(
-        "Sélectionne ou ajoute tes langages", "cv_langages", _DEFAUTS_LANGAGES
-    )
+        st.markdown("###### 💻 Langages informatiques")
+        st.caption("Facultatif — pertinent surtout pour les profils tech/data.")
+        langages_informatiques = _champ_liste_avec_ajout(
+            "Sélectionne ou ajoute tes langages", "cv_langages", _DEFAUTS_LANGAGES
+        )
 
-    st.markdown("###### 🎓 Certifications")
-    st.caption(
-        "Facultatif — ex: PMP, Scrum Master, CISSP, AWS Certified, CACES, permis... Les "
-        "suggestions ci-dessus (si disponibles) sont repérées par mot-clé dans les offres "
-        "réelles, pas un champ officiel dédié côté France Travail."
-    )
-    certifications = _champ_liste_avec_ajout(
-        "Sélectionne ou ajoute tes certifications", "cv_certifications", _DEFAUTS_CERTIFICATIONS
-    )
+        st.markdown("###### 🎓 Certifications")
+        st.caption(
+            "Facultatif — ex: PMP, Scrum Master, CISSP, AWS Certified, CACES, permis... Les "
+            "suggestions ci-dessus (si disponibles) sont repérées par mot-clé dans les offres "
+            "réelles, pas un champ officiel dédié côté France Travail."
+        )
+        certifications = _champ_liste_avec_ajout(
+            "Sélectionne ou ajoute tes certifications", "cv_certifications", _DEFAUTS_CERTIFICATIONS
+        )
 
-    st.markdown("#### 🎯 Centres d'intérêt")
-    interets = st.text_area(
-        "Séparés par une virgule ou une ligne (ex: Kayak, Dessin, Voyages)",
-        key="cv_interets",
-        height=60,
-    )
+    with st.expander("🎯 Centres d'intérêt"):
+        interets = st.text_area(
+            "Séparés par une virgule ou une ligne (ex: Kayak, Dessin, Voyages)",
+            key="cv_interets",
+            height=60,
+        )
 
     st.divider()
 
