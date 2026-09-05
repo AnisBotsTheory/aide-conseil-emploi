@@ -1340,7 +1340,99 @@ def rechercher_wikipedia_entreprise(nom_entreprise):
         "titre": resume.get("title", titre),
         "extrait": extrait,
         "url": (resume.get("content_urls", {}).get("desktop", {}) or {}).get("page"),
+        # Identifiant Wikidata lié à cet article (ex: "Q193326" pour Capgemini) —
+        # permet d'aller chercher des champs structurés (secteurs, effectif,
+        # filiales) que le simple extrait Wikipédia ne contient pas.
+        "wikidata_id": resume.get("wikibase_item"),
     }
+
+
+@st.cache_data(ttl=86400)
+def rechercher_wikidata_entreprise(wikidata_id):
+    """
+    Complète rechercher_wikipedia_entreprise() avec des champs structurés depuis
+    Wikidata (la base de données liée à Wikipédia, gratuite et sans clé) :
+    secteurs d'intervention (propriété "industry"/P452, PLUSIEURS valeurs
+    possibles — plus riche qu'un unique code NAF), effectif (propriété
+    "employees"/P1128, un vrai nombre avec sa date de mesure — plus précis que
+    la tranche SIRENE), et filiales (propriété "subsidiary"/P355).
+
+    Pays de présence VOLONTAIREMENT absent : Wikidata ne structure fiablement
+    que le pays du SIÈGE (P17), pas l'empreinte internationale réelle d'une
+    entreprise — l'inclure donnerait une fausse impression de couverture
+    complète plutôt que de ne rien dire du tout.
+
+    Deux appels : 1) les "claims" (déclarations) de l'entité, qui pour les
+    secteurs/filiales ne sont que des identifiants Wikidata (QID) à résoudre ;
+    2) un second appel groupé pour récupérer le libellé français de chaque QID
+    trouvé. Renvoie None si rien d'exploitable (fréquent : beaucoup d'entités
+    Wikidata d'entreprises ont un article mais peu de champs structurés remplis).
+    """
+    if not wikidata_id:
+        return None
+    try:
+        r = requests.get(
+            "https://www.wikidata.org/w/api.php",
+            params={
+                "action": "wbgetentities", "ids": wikidata_id, "format": "json",
+                "props": "claims",
+            },
+            headers=WIKIPEDIA_HEADERS, timeout=8,
+        )
+        r.raise_for_status()
+        claims = r.json().get("entities", {}).get(wikidata_id, {}).get("claims", {})
+    except requests.RequestException:
+        return None
+
+    def _qids_pour_propriete(code_prop, limite=8):
+        qids = []
+        for claim in claims.get(code_prop, [])[:limite]:
+            valeur = claim.get("mainsnak", {}).get("datavalue", {}).get("value")
+            if isinstance(valeur, dict) and valeur.get("id"):
+                qids.append(valeur["id"])
+        return qids
+
+    qids_industrie = _qids_pour_propriete("P452")
+    qids_filiales = _qids_pour_propriete("P355", limite=10)
+
+    # Effectif (P1128) : valeur numérique directe, rien à résoudre.
+    effectif = None
+    if claims.get("P1128"):
+        valeur_effectif = claims["P1128"][0].get("mainsnak", {}).get("datavalue", {}).get("value")
+        montant = valeur_effectif.get("amount") if isinstance(valeur_effectif, dict) else None
+        if montant:
+            try:
+                effectif = int(float(montant))
+            except (TypeError, ValueError):
+                effectif = None
+
+    tous_qids = qids_industrie + qids_filiales
+    libelles = {}
+    if tous_qids:
+        try:
+            r_labels = requests.get(
+                "https://www.wikidata.org/w/api.php",
+                params={
+                    "action": "wbgetentities", "ids": "|".join(tous_qids), "format": "json",
+                    "props": "labels", "languages": "fr",
+                },
+                headers=WIKIPEDIA_HEADERS, timeout=8,
+            )
+            r_labels.raise_for_status()
+            for qid, ent in r_labels.json().get("entities", {}).items():
+                label = ent.get("labels", {}).get("fr", {}).get("value")
+                if label:
+                    libelles[qid] = label
+        except requests.RequestException:
+            pass
+
+    secteurs = [libelles[q] for q in qids_industrie if q in libelles]
+    filiales = [libelles[q] for q in qids_filiales if q in libelles]
+
+    if not secteurs and not effectif and not filiales:
+        return None
+
+    return {"secteurs": secteurs, "effectif": effectif, "filiales": filiales}
 
 
 def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
@@ -1916,6 +2008,7 @@ __all__ = [
     "rechercher_offres_entreprise",
     "WIKIPEDIA_HEADERS",
     "rechercher_wikipedia_entreprise",
+    "rechercher_wikidata_entreprise",
     "infos_entretien_entreprise",
     "offres_par_ville",
     "volumes_departement_offres",
