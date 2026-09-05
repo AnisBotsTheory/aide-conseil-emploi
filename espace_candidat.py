@@ -561,29 +561,40 @@ with tab_profil:
                         df_carte["pourcentage"] = (
                             (100 * df_carte["nombre_offres"] / total_region).round(1) if total_region else 0
                         )
-                        fig_carte = px.scatter_mapbox(
-                            df_carte,
-                            lat="latitude", lon="longitude",
-                            size="nombre_offres", size_max=30,
-                            color="approximatif",
-                            color_discrete_map={False: "#0066cc", True: "#e67e22"},
-                            hover_name="ville",
-                            hover_data={
-                                "nombre_offres": True, "pourcentage": ":.1f",
-                                "latitude": False, "longitude": False, "approximatif": False,
-                            },
-                            labels={
-                                "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres",
-                                "approximatif": "Position approximative",
-                            },
-                            zoom=8, height=450,
-                        )
-                        fig_carte.update_layout(
-                            mapbox_style="carto-darkmatter",
-                            margin=dict(t=0, l=0, r=0, b=0),
-                            showlegend=False,
-                        )
-                        st.plotly_chart(fig_carte, use_container_width=True)
+                        df_carte["approximatif"] = df_carte["approximatif"].astype(bool)
+                        try:
+                            fig_carte = px.scatter_mapbox(
+                                df_carte,
+                                lat="latitude", lon="longitude",
+                                size="nombre_offres", size_max=30,
+                                color="approximatif",
+                                color_discrete_map={False: "#0066cc", True: "#e67e22"},
+                                hover_name="ville",
+                                hover_data={
+                                    "nombre_offres": True, "pourcentage": ":.1f",
+                                    "latitude": False, "longitude": False, "approximatif": False,
+                                },
+                                labels={
+                                    "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres",
+                                    "approximatif": "Position approximative",
+                                },
+                                zoom=8, height=450,
+                            )
+                            fig_carte.update_layout(
+                                mapbox_style="carto-darkmatter",
+                                margin=dict(t=0, l=0, r=0, b=0),
+                                showlegend=False,
+                            )
+                            st.plotly_chart(fig_carte, use_container_width=True)
+                        except Exception:
+                            # Repli robuste : px.scatter_mapbox peut échouer selon la version de
+                            # Plotly installée (dépréciation en cours au profit de scatter_map) —
+                            # mieux vaut une carte plus simple qu'une page entière qui plante et
+                            # empêche tout ce qui suit (Recruteurs, Fiches entreprises...) de s'afficher.
+                            st.map(
+                                df_carte, latitude="latitude", longitude="longitude",
+                                size="nombre_offres", color="#0066cc",
+                            )
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
 
@@ -762,22 +773,28 @@ with tab_avance:
                 st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
             else:
                 df_experience_tri = df_experience.sort_values("nombre_offres", ascending=False)
-                fig_experience = px.treemap(
-                    df_experience_tri,
-                    path=[px.Constant(""), "experience"],
-                    values="nombre_offres",
-                    color="nombre_offres",
-                    color_continuous_scale="Tealgrn",
-                )
-                fig_experience.update_traces(
-                    textinfo="label+value", texttemplate="%{label}<br>%{value}",
-                    marker=dict(line=dict(width=2, color="#0e1117")),
-                )
-                fig_experience.update_layout(
-                    height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
-                    paper_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig_experience, use_container_width=True)
+                try:
+                    fig_experience = px.treemap(
+                        df_experience_tri,
+                        path=[px.Constant(""), "experience"],
+                        values="nombre_offres",
+                        color="nombre_offres",
+                        color_continuous_scale="Tealgrn",
+                    )
+                    fig_experience.update_traces(
+                        textinfo="label+value", texttemplate="%{label}<br>%{value}",
+                        marker=dict(line=dict(width=2, color="#0e1117")),
+                    )
+                    fig_experience.update_layout(
+                        height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_experience, use_container_width=True)
+                except Exception:
+                    st.dataframe(
+                        df_experience_tri.rename(columns={"experience": "Expérience", "nombre_offres": "Nombre d'offres"}),
+                        use_container_width=True, hide_index=True,
+                    )
 
             st.divider()
             st.markdown("#### 🎯 Difficulté de recrutement (BMO)")
