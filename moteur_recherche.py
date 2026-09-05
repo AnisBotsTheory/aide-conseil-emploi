@@ -420,21 +420,47 @@ DICTIONNAIRE_INTITULES_MODERNES = {
 }
 
 
+_RE_GENRE_ROME = re.compile(r"^(\S+)\s*/\s*\S+\b(.*)$")
+
+
 def _normaliser_texte(texte):
-    """Minuscules et retrait des accents, pour des comparaisons robustes."""
+    """
+    Minuscules et retrait des accents, pour des comparaisons robustes. Retire
+    aussi la variante de genre en tête d'un libellé ROME type "Chef / Cheffe de
+    projet informatique" -> "chef de projet informatique" : sans ça, une saisie
+    comme "chef de projet informatique" ne correspondait JAMAIS au vrai préfixe
+    du libellé officiel (le "/ Cheffe" s'interposait), ce qui cassait toute
+    correspondance directe et faisait retomber la recherche sur du bruit flou.
+    """
     texte = texte.lower().strip()
     remplacements = str.maketrans("àâäéèêëîïôöùûüç", "aaaeeeeiioouuuc")
-    return texte.translate(remplacements)
+    texte = texte.translate(remplacements)
+    correspondance_genre = _RE_GENRE_ROME.match(texte)
+    if correspondance_genre:
+        texte = (correspondance_genre.group(1) + correspondance_genre.group(2)).strip()
+    return texte
 
 
 @st.cache_data(ttl=1800)
 def suggerer_postes(saisie, max_resultats=8):
     """
-    Suggère des postes du référentiel ROME à partir d'un intitulé libre/moderne,
-    en combinant un petit dictionnaire de correspondances connues (ex: "Data
-    Analyst" -> "Analyste de données") et une recherche floue directe sur la
-    saisie brute (rattrape les variantes/fautes de frappe absentes du
-    dictionnaire). Retourne une liste de libellés d'appellations officielles.
+    Suggère des postes du référentiel ROME à partir d'un intitulé libre/moderne.
+    Ordre de priorité, du plus fiable au plus approximatif :
+      1. Dictionnaire de correspondances connues (ex: "Data Analyst" -> "Analyste
+         de données").
+      2. Correspondance EXACTE (normalisée) avec un libellé officiel.
+      3. Le libellé COMMENCE par la saisie (ex: "chef de projet" tapé ->
+         "Chef de projet informatique") — presque toujours une vraie
+         spécialisation du même métier, la priorité recherchée en pratique.
+      4. La saisie apparaît ailleurs dans le libellé, précédée d'un autre mot
+         (ex: "chef de projet" tapé -> "Assistant chef de projet") — une
+         correspondance réelle mais qui change souvent le métier (rôle
+         d'appui, subalterne...), donc délibérément moins prioritaire qu'un
+         préfixe direct.
+      5. Recherche floue en dernier recours seulement (fautes de frappe,
+         variantes non couvertes ci-dessus), plafonnée pour ne jamais dépasser
+         une correspondance directe.
+    Retourne une liste de libellés d'appellations officielles.
     """
     saisie_normalisee = _normaliser_texte(saisie)
     if len(saisie_normalisee) < 2:
@@ -446,6 +472,7 @@ def suggerer_postes(saisie, max_resultats=8):
         return []
 
     candidats = {}  # libelle -> meilleur score
+    labels_normalises = {label: _normaliser_texte(label) for label in labels}
 
     # 1) Dictionnaire : si un terme connu est contenu dans la saisie, on cherche
     # les appellations officielles correspondant aux mots-clés français associés.
@@ -453,38 +480,47 @@ def suggerer_postes(saisie, max_resultats=8):
         if terme_moderne in saisie_normalisee:
             for mot_cle in mots_cles_fr:
                 mot_cle_normalise = _normaliser_texte(mot_cle)
-                for label in labels:
-                    if mot_cle_normalise in _normaliser_texte(label):
-                        candidats[label] = max(candidats.get(label, 0), 100)  # priorité maximale
+                for label, label_norm in labels_normalises.items():
+                    if mot_cle_normalise in label_norm:
+                        candidats[label] = max(candidats.get(label, 0), 100)
 
-    # 2) Recherche floue, en complément — sur la saisie ET le référentiel EXPLICITEMENT
-    # normalisés des deux côtés (au lieu de compter sur le traitement interne de
-    # fuzz.WRatio, qui a produit des résultats différents entre "PMO" et "pmo" en
-    # pratique — la casse ne doit jamais changer les suggestions).
-    labels_normalises = {label: _normaliser_texte(label) for label in labels}
+    # 2/3/4) Correspondance directe (exacte, préfixe, ou incluse ailleurs) —
+    # avant toute recherche floue, sur la base de la présence littérale de la
+    # saisie dans le libellé normalisé.
+    for label, label_norm in labels_normalises.items():
+        if label_norm == saisie_normalisee:
+            candidats[label] = max(candidats.get(label, 0), 100)
+        elif label_norm.startswith(saisie_normalisee):
+            candidats[label] = max(candidats.get(label, 0), 95)
+        elif f" {saisie_normalisee} " in f" {label_norm} " or label_norm.endswith(f" {saisie_normalisee}"):
+            candidats[label] = max(candidats.get(label, 0), 70)
+
+    # 5) Recherche floue, en tout dernier recours (fautes de frappe/variantes non
+    # couvertes ci-dessus) — fuzz.WRatio écarté : testé et confirmé trop permissif
+    # avec des textes courts (donnait 85,5 à "chef de projet" vs "accessoiriste de
+    # décor", des libellés sans aucun rapport). fuzz.token_sort_ratio reste strict
+    # sur les paires non liées (score ~30-40 sur le même exemple) tout en
+    # rattrapant correctement une vraie faute de frappe (~90-96). Score plafonné à
+    # 90 pour ne jamais dépasser une correspondance directe.
     norm_vers_label = {}
     for label, norm in labels_normalises.items():
         norm_vers_label.setdefault(norm, label)
     resultats_flous = process.extract(
-        saisie_normalisee, list(norm_vers_label.keys()), scorer=fuzz.WRatio, limit=max_resultats * 2
+        saisie_normalisee, list(norm_vers_label.keys()), scorer=fuzz.token_sort_ratio, limit=max_resultats * 2
     )
     for label_normalise, score, _ in resultats_flous:
-        if score >= 55:  # seuil pour écarter le bruit non pertinent
+        if score >= 70:
             label = norm_vers_label[label_normalise]
-            candidats[label] = max(candidats.get(label, 0), score)
+            candidats[label] = max(candidats.get(label, 0), min(score, 90))
 
-    # Pénalité par mot supplémentaire : fuzz.WRatio traite volontiers la saisie comme un
-    # SOUS-TEXTE de l'appellation et lui donne un score élevé, même quand l'appellation
-    # ajoute un mot qui change complètement le métier (ex: "chef de projet" saisi ->
-    # "Assistant chef de projet" bien noté alors que ce n'est pas le même métier). On
-    # pénalise chaque mot en trop par rapport à la saisie pour repousser ces faux amis
-    # derrière les correspondances de longueur équivalente.
+    # Pénalité (affinage) par mot supplémentaire par rapport à la saisie — utile
+    # surtout pour départager plusieurs correspondances de catégorie 4 entre elles.
     mots_saisie = len(saisie_normalisee.split())
     candidats_ajustes = {}
     for label, score in candidats.items():
-        mots_label = len(_normaliser_texte(label).split())
+        mots_label = len(labels_normalises[label].split())
         mots_en_trop = max(0, mots_label - mots_saisie)
-        candidats_ajustes[label] = score - (mots_en_trop * 8)
+        candidats_ajustes[label] = score - (mots_en_trop * 3)
 
     resultats_tries = sorted(candidats_ajustes.items(), key=lambda x: x[1], reverse=True)
     return [label for label, _ in resultats_tries[:max_resultats]]
