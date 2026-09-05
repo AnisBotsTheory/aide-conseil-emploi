@@ -203,6 +203,7 @@ with tab_profil:
                 debut_periode = datetime(aujourdhui.year, 7, 1)
                 libelle_periode_offres = f"2e semestre {aujourdhui.year}"
             jours_max_periode_offres = (aujourdhui - debut_periode).days
+            titre_libre_cv = st.session_state.get("cv_titre", "").strip()
 
             sous_tab_tension, sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
                 ["⚖️ Tension", "🏢 Recruteurs", "🎓 Certifications", "📍 Répartition géographique"]
@@ -234,34 +235,32 @@ with tab_profil:
                             if recherche_multi else ""
                         )
                     )
-                    detail_par_poste = []
-                    if recherche_multi:
-                        with st.spinner("Récupération des demandeurs d'emploi..."):
-                            for label, code in codes_par_poste_cv.items():
-                                if not code:
-                                    continue
-                                offres_i = volumes_departement_offres(
-                                    code, departement_actif, jours_max=jours_max_periode_offres
-                                )
-                                demandeurs_i, periode_i, erreur_i = demandeurs_emploi_departement(
-                                    code, departement_actif
-                                )
-                                detail_par_poste.append((label, offres_i, demandeurs_i, erreur_i))
-                        total_dep_offres = sum(o for _, o, _, _ in detail_par_poste)
-                        demandeurs_valides = [d for _, _, d, e in detail_par_poste if not e]
-                        total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
-                        periode_demandeurs = None  # non affiché en multi (périodes potentiellement différentes par poste)
-                        erreur_demandeurs = (
-                            None if demandeurs_valides else "toutes les requêtes demandeurs ont échoué"
+                    with st.spinner("Récupération des offres et demandeurs d'emploi..."):
+                        total_dep_offres = len(
+                            rechercher_offres_completes_elargi(
+                                codes_resolus_cv, titre_libre_cv, departement_actif,
+                                jours_max=jours_max_periode_offres,
+                            )
                         )
-                    else:
-                        with st.spinner("Récupération des demandeurs d'emploi..."):
-                            total_dep_offres = volumes_departement_offres(
-                                code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
+                        detail_par_poste = []
+                        for label, code in codes_par_poste_cv.items():
+                            if not code:
+                                continue
+                            demandeurs_i, periode_i, erreur_i = demandeurs_emploi_departement(
+                                code, departement_actif
                             )
-                            total_dep_demandeurs, periode_demandeurs, erreur_demandeurs = demandeurs_emploi_departement(
-                                code_rome_choisi, departement_actif
-                            )
+                            detail_par_poste.append((label, demandeurs_i, periode_i, erreur_i))
+                    demandeurs_valides = [d for _, d, _, e in detail_par_poste if not e]
+                    total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
+                    # Période affichée seulement pour un poste unique (ambigu à résumer en
+                    # une seule période quand plusieurs postes aux périodes potentiellement
+                    # différentes sont sommés).
+                    periode_demandeurs = (
+                        detail_par_poste[0][2] if len(detail_par_poste) == 1 and not detail_par_poste[0][3] else None
+                    )
+                    erreur_demandeurs = (
+                        None if demandeurs_valides else "toutes les requêtes demandeurs ont échoué"
+                    )
 
                     if erreur_demandeurs:
                         st.warning(
@@ -293,14 +292,10 @@ with tab_profil:
 
             with sous_tab_recruteurs:
                 with st.spinner("Récupération des recruteurs actifs..."):
-                    if recherche_multi:
-                        _, _, _, _, df_entreprises, _ = offres_par_ville_multi(
-                            codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
-                        )
-                    else:
-                        _, _, _, _, df_entreprises, _ = offres_par_ville(
-                            code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
-                        )
+                    _, _, _, _, df_entreprises, _ = offres_par_ville_elargi(
+                        codes_resolus_cv, titre_libre_cv, departement_actif,
+                        jours_max=jours_max_periode_offres,
+                    )
 
                 st.caption(f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du marché).")
                 if df_entreprises.empty:
@@ -356,14 +351,10 @@ with tab_profil:
                     "sont signalées séparément ci-dessous."
                 )
                 with st.spinner("Récupération des offres par ville..."):
-                    if recherche_multi:
-                        df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_multi(
-                            codes_resolus_cv, departement_actif, jours_max=jours_max_periode_offres,
-                        )
-                    else:
-                        df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville(
-                            code_rome_choisi, departement_actif, jours_max=jours_max_periode_offres,
-                        )
+                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_elargi(
+                        codes_resolus_cv, titre_libre_cv, departement_actif,
+                        jours_max=jours_max_periode_offres,
+                    )
                 st.metric("Total offres dans la région", total_region)
                 # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
                 # donnent la plage de publication réelle des offres renvoyées par l'API —
