@@ -139,7 +139,7 @@ with tab_cv:
 # Onglet 1 : Tendance par profil
 # ---------------------------------------------------------------------------
 with tab_profil:
-    st.write(
+    st.caption(
         "Analyse du marché pour le(s) poste(s) sélectionné(s) dans votre CV : où sont les offres "
         "près de chez vous, le volume national, et le niveau de tension du marché sur ce métier."
     )
@@ -408,7 +408,7 @@ with tab_profil:
 # un prospect avant de le démarcher.
 # ---------------------------------------------------------------------------
 with tab_entreprises:
-    st.write(
+    st.caption(
         "Tape le nom d'une entreprise pour voir sa fiche : secteur, taille, adresse, et — si "
         "elle recrute actuellement sur le poste de ton CV — sa présentation et son domaine "
         "d'activité tels qu'elle les décrit elle-même."
