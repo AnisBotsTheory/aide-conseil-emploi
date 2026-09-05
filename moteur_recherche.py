@@ -522,7 +522,10 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    payload = [{"identifiant": "1", "intitule": intitule, "contexte": ""}]
+    # Confirmé par l'API elle-même (message d'erreur "Le champ appellations est
+    # obligatoire") : la liste doit être enveloppée sous la clé "appellations",
+    # pas envoyée telle quelle comme corps de requête.
+    payload = {"appellations": [{"identifiant": "1", "intitule": intitule, "contexte": ""}]}
 
     try:
         r = requests.post(
@@ -541,7 +544,16 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
 
     # La doc montre un objet unique par intitulé soumis ; on gère aussi le cas
     # où l'API renvoie directement une liste (un élément par identifiant envoyé).
-    predictions_reponse = data if isinstance(data, list) else [data]
+    # Réponse potentiellement enveloppée elle aussi (même logique que la requête,
+    # qui l'était sous "appellations") — on gère les deux formes possibles.
+    if isinstance(data, dict) and isinstance(data.get("predictionsAppellation"), list):
+        predictions_reponse = data["predictionsAppellation"]
+    elif isinstance(data, dict) and isinstance(data.get("predictions"), list):
+        predictions_reponse = data["predictions"]
+    elif isinstance(data, list):
+        predictions_reponse = data
+    else:
+        predictions_reponse = [data]
 
     resultats = []
     for reponse_intitule in predictions_reponse:
@@ -624,30 +636,121 @@ def diagnostiquer_romeo(intitule="chef de projet"):
 # mais SANS garantie que l'URL/les noms de paramètres n'aient pas changé lors
 # du passage à francetravail.io. Diagnostic d'abord, intégration ensuite.
 # ---------------------------------------------------------------------------
-LA_BONNE_BOITE_SCOPE = "api_labonneboitev2"  # confirmé via le nom du produit souscrit
-
-_CANDIDATS_ENDPOINT_LBB = [
-    "https://api.francetravail.io/partenaire/labonneboite/v2/entreprises",
-    "https://api.francetravail.io/partenaire/labonneboite/v1/entreprises",
-    "https://api.francetravail.io/partenaire/la-bonne-boite/v2/entreprises",
-]
+LA_BONNE_BOITE_SCOPE = "search office api_labonneboitev2"  # confirmé par la doc officielle (3 scopes requis)
+LA_BONNE_BOITE_TOKEN_URL = (
+    "https://authentification-partenaire.francetravail.io/connexion/oauth2/access_token?realm=/partenaire"
+)  # confirmé par la doc officielle — domaine DIFFÉRENT du reste de l'app (entreprise.francetravail.fr)
 
 
-def diagnostiquer_la_bonne_boite(code_rome="M1805", commune_insee="13001", distance=30):
+def _get_token_la_bonne_boite(scope):
     """
-    Outil de DIAGNOSTIC pour La Bonne Boîte — même principe que
-    diagnostiquer_romeo() : teste plusieurs endpoints candidats en GET avec les
-    paramètres historiquement connus de cette API (commune_id, distance,
-    rome_codes), et renvoie le détail brut de chaque tentative. Pas utilisé par
-    le flux normal de l'app.
+    Jeton pour La Bonne Boîte — domaine d'authentification différent
+    (authentification-partenaire.francetravail.io) de celui utilisé par le
+    reste de l'app (entreprise.francetravail.fr), confirmé par la documentation
+    officielle de cette API spécifique. Fonction dédiée plutôt que de modifier
+    get_token(), pour ne pas risquer de casser les autres intégrations.
+    """
+    payload = {
+        "grant_type": "client_credentials", "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET, "scope": scope,
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    r = requests.post(LA_BONNE_BOITE_TOKEN_URL, data=payload, headers=headers)
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+def nombre_entreprises_potentiel_embauche(code_rome, departement=None):
+    """
+    Indicateur "nombreEntreprise" de La Bonne Boîte (endpoint confirmé par la
+    doc officielle) : nombre d'entreprises susceptibles de recruter dans les 6
+    prochains mois pour un métier (code ROME) et un lieu — un COMPTAGE
+    seulement, pas la liste des entreprises elles-mêmes (endpoint frère à
+    identifier séparément pour ça, pas encore confirmé).
+
+    Renvoie le nombre (int) ou None en cas d'échec — dégradation silencieuse,
+    comme partout ailleurs dans ce module.
     """
     try:
-        token = get_token(LA_BONNE_BOITE_SCOPE)
+        token = _get_token_la_bonne_boite(LA_BONNE_BOITE_SCOPE)
+    except Exception:
+        return None
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    params = {"rome": [code_rome]}
+    if departement:
+        try:
+            params["department_number"] = [int(departement)]
+        except (TypeError, ValueError):
+            pass  # départements non numériques (2A/2B, DOM) : on tente sans filtre département plutôt que planter
+    try:
+        r = requests.get(
+            "https://api.francetravail.io/partenaire/labonneboite/v2/nombreEntreprise",
+            headers=headers, params=params, timeout=8,
+        )
+    except requests.RequestException:
+        return None
+    if r.status_code not in (200, 206):
+        return None
+    try:
+        return r.json().get("hits")
+    except ValueError:
+        return None
+
+
+def rechercher_entreprises_potentiel_embauche(code_rome, departement=None, page_size=10):
+    """
+    Endpoint /recherche de La Bonne Boîte (confirmé par la doc officielle) :
+    liste réelle des entreprises à fort potentiel d'embauche pour un métier et
+    un lieu, triée par score décroissant (hiring_potential, 0-100). Complète
+    nombre_entreprises_potentiel_embauche() (qui ne donne qu'un comptage) avec
+    les vraies fiches : nom, SIRET, secteur NAF, tranche d'effectif, score.
+
+    Renvoie une liste de dicts (potentiellement vide) ou None en cas d'échec —
+    dégradation silencieuse, comme partout ailleurs dans ce module.
+    """
+    try:
+        token = _get_token_la_bonne_boite(LA_BONNE_BOITE_SCOPE)
+    except Exception:
+        return None
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    params = {"rome": [code_rome], "page": 1, "page_size": min(page_size, 100)}
+    if departement:
+        try:
+            params["department_number"] = [int(departement)]
+        except (TypeError, ValueError):
+            pass  # départements non numériques (2A/2B, DOM) : on tente sans filtre département plutôt que planter
+    try:
+        r = requests.get(
+            "https://api.francetravail.io/partenaire/labonneboite/v2/recherche",
+            headers=headers, params=params, timeout=8,
+        )
+    except requests.RequestException:
+        return None
+    if r.status_code not in (200, 206):
+        return None
+    try:
+        return r.json().get("items", [])
+    except ValueError:
+        return None
+
+
+def diagnostiquer_la_bonne_boite(code_rome="M1805", departement="13"):
+    """
+    Outil de DIAGNOSTIC pour La Bonne Boîte — endpoint et scopes désormais
+    confirmés par la doc officielle (nombreEntreprise), donc ce diagnostic sert
+    surtout à vérifier que ça répond bien en conditions réelles plutôt qu'à
+    tester des candidats à l'aveugle comme avant. Pas utilisé par le flux
+    normal de l'app.
+    """
+    try:
+        token = _get_token_la_bonne_boite(LA_BONNE_BOITE_SCOPE)
     except Exception as e:
         detail_erreur = str(e)
         try:
             r_token = requests.post(
-                "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire",
+                LA_BONNE_BOITE_TOKEN_URL,
                 data={
                     "grant_type": "client_credentials", "client_id": CLIENT_ID,
                     "client_secret": CLIENT_SECRET, "scope": LA_BONNE_BOITE_SCOPE,
@@ -657,20 +760,19 @@ def diagnostiquer_la_bonne_boite(code_rome="M1805", commune_insee="13001", dista
             detail_erreur = f"{r_token.status_code} — {r_token.text[:500]}"
         except requests.RequestException:
             pass
-        return [{"etape": "obtention du token (scope api_labonneboitev2)", "erreur": detail_erreur}]
+        return [{"etape": "obtention du token (scope 'search office api_labonneboitev2')", "erreur": detail_erreur}]
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"commune_id": commune_insee, "distance": distance, "rome_codes": code_rome}
-
-    resultats_diagnostic = []
-    for endpoint in _CANDIDATS_ENDPOINT_LBB:
-        try:
-            r = requests.get(endpoint, headers=headers, params=params, timeout=8)
-            resultats_diagnostic.append(
-                {"endpoint": endpoint, "status": r.status_code, "reponse": r.text[:500]}
-            )
-        except requests.RequestException as e:
-            resultats_diagnostic.append({"endpoint": endpoint, "erreur": str(e)})
+    params = {"rome": [code_rome], "department_number": [int(departement)]} if departement.isdigit() else {"rome": [code_rome]}
+    resultats_diagnostic = [{"etape": "token obtenu"}]
+    try:
+        r = requests.get(
+            "https://api.francetravail.io/partenaire/labonneboite/v2/nombreEntreprise",
+            headers=headers, params=params, timeout=8,
+        )
+        resultats_diagnostic.append({"status": r.status_code, "reponse": r.text[:500]})
+    except requests.RequestException as e:
+        resultats_diagnostic.append({"erreur": str(e)})
     return resultats_diagnostic
 
 
@@ -765,10 +867,81 @@ def diagnostiquer_marche_travail(code_rome="M1805", departement="13"):
 FICHES_METIERS_SCOPE = "api_rome-fiches-metiersv1 nomenclatureRome"  # confirmé via la même source que ROMEO
 
 _CANDIDATS_ENDPOINT_FICHE_METIER = [
+    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiche-metier/{code}",  # confirmé (429 = route existante)
     "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiches-metiers/{code}",
-    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiche-metier/{code}",
     "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/metiers/{code}/fiche",
 ]
+
+
+@st.cache_data(ttl=86400)
+def recuperer_fiche_metier(code_rome):
+    """
+    Récupère la fiche métier officielle ROME 4.0 pour un code ROME donné :
+    compétences détaillées, macro savoir-faire, macro savoir-être professionnel
+    et savoirs — un référentiel OFFICIEL du métier, complémentaire (pas un
+    remplacement) des "Compétences les plus demandées" tirées des offres réelles
+    (celui-ci décrit le métier par définition, l'autre ce que les recruteurs
+    demandent concrètement là maintenant).
+
+    Le schéma mélange 4 types dans "groupesCompetencesMobilisees[].competences"
+    (CompetenceDetaillee, MacroSavoirEtreProfessionnel, MacroSavoirFaire, Savoir)
+    sans étiquette de discrimination confirmée dans la doc — on se base sur le
+    champ "type" observé sur certains de ces schémas (ex: "MACRO-SAVOIR-FAIRE",
+    "SAVOIR") pour les répartir ; à ajuster si le vrai contenu diverge une fois
+    testé en conditions réelles.
+
+    Retourne un dict {"competences": [...], "savoir_faire": [...],
+    "savoir_etre": [...], "savoirs": [...]} (listes de libellés, potentiellement
+    vides) ou None en cas d'échec (endpoint non confirmé à 100%, scope à revoir
+    si jamais invalide).
+    """
+    try:
+        token = get_token(FICHES_METIERS_SCOPE)
+    except Exception:
+        return None
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    endpoint = _CANDIDATS_ENDPOINT_FICHE_METIER[0].format(code=code_rome)
+    try:
+        r = requests.get(endpoint, headers=headers, timeout=8)
+    except requests.RequestException:
+        return None
+    if r.status_code not in (200, 206):
+        return None
+    try:
+        data = r.json()
+    except ValueError:
+        return None
+
+    resultat = {"competences": [], "savoir_faire": [], "savoir_etre": [], "savoirs": []}
+
+    for groupe in data.get("groupesCompetencesMobilisees", []) or []:
+        for item in groupe.get("competences", []) or []:
+            if not isinstance(item, dict):
+                continue
+            libelle = (item.get("libelle") or "").strip()
+            if not libelle:
+                continue
+            type_item = (item.get("type") or "").upper()
+            if "SAVOIR-FAIRE" in type_item:
+                resultat["savoir_faire"].append(libelle)
+            elif "SAVOIR-ETRE" in type_item or "SAVOIR-ÊTRE" in type_item:
+                resultat["savoir_etre"].append(libelle)
+            elif type_item == "SAVOIR":
+                resultat["savoirs"].append(libelle)
+            else:
+                resultat["competences"].append(libelle)
+
+    for groupe_savoir in data.get("groupesSavoirs", []) or []:
+        for savoir in groupe_savoir.get("savoirs", []) or []:
+            if isinstance(savoir, dict):
+                libelle = (savoir.get("libelle") or "").strip()
+                if libelle and libelle not in resultat["savoirs"]:
+                    resultat["savoirs"].append(libelle)
+
+    if not any(resultat.values()):
+        return None
+    return resultat
 
 
 def diagnostiquer_fiche_metier(code_rome="M1805"):
@@ -2167,6 +2340,216 @@ def demandeurs_emploi_departement(code_rome, departement):
     return total, periode, None
 
 
+def offres_officielles_departement(code_rome, departement):
+    """
+    Indicateur OFF_1 : nombre OFFICIEL d'offres enregistrées pour un ROME et un
+    département (source France Travail, trimestriel) — endpoint FRÈRE de
+    demandeurs_emploi_departement() sur la même API (stats-offres-demandes-emploi,
+    même scope déjà confirmé), simplement jamais exploité jusqu'ici
+    ("/v1/indicateur/stat-offres" au lieu de "/v1/indicateur/stat-demandeurs").
+
+    Sert de repère OFFICIEL en complément du décompte qu'on fait nous-mêmes via
+    la recherche élargie (code ROME + mots-clés) — les deux méthodes ne mesurent
+    pas exactement la même chose (celle-ci compte les offres ENREGISTRÉES sur le
+    trimestre, la nôtre compte les offres actuellement ACTIVES), donc un écart
+    entre les deux n'est pas forcément une erreur.
+    """
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "ROME",
+        "codeActivite": code_rome,
+        "codeTypePeriode": "TRIMESTRE",
+        "codeTypeNomenclature": "ORIGINEOFF",
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    data, erreur = _appel_avec_decouverte_scope(
+        _CANDIDATS_SCOPE_STATS_MARCHE, "scope_stats_marche", BASE_STATS_MARCHE,
+        "/v1/indicateur/stat-offres", payload,
+    )
+    if erreur:
+        return None, None, erreur
+    valeurs = data.get("listeValeursParPeriode", [])
+    total = sum(v.get("valeurPrincipaleNombre") or 0 for v in valeurs)
+    periode = valeurs[0].get("libPeriode") if valeurs else None
+    return total, periode, None
+
+
+BASE_STATS_TERRITOIRE = "https://api.francetravail.io/partenaire/stats-informations-territoire"
+SCOPE_STATS_TERRITOIRE = "infosterritoire api_stats-informations-territoirev1"  # confirmé par la doc officielle
+
+
+def dynamisme_territoire(departement):
+    """
+    Indicateur DYN_1 : dynamisme global de l'emploi sur un territoire (source
+    France Travail, trimestriel, méthode IA prospective sur le trimestre à
+    venir). Appartient à une API DIFFÉRENTE de celle utilisée pour les autres
+    indicateurs de cette section (stats-informations-territoire, pas
+    stats-offres-demandes-emploi) — base URL et scope tous les deux confirmés
+    par la doc officielle, distincts de _CANDIDATS_SCOPE_STATS_MARCHE utilisé
+    ailleurs (une version précédente de cette fonction utilisait par erreur ce
+    mauvais scope, provoquant probablement un échec silencieux). Indicateur
+    TERRITORIAL, pas par métier : l'exemple officiel utilise "MOYENNE"/"MOYENNE"
+    comme type/code d'activité plutôt qu'un vrai code ROME.
+
+    Retourne (valeur, libelle_valeur, periode, erreur) — la forme exacte de la
+    valeur (nombre, taux...) n'est pas confirmée avec certitude par la doc
+    (schéma générique partagé par plusieurs indicateurs), donc on renvoie la
+    première valeur non nulle trouvée parmi les champs possibles, avec son
+    libellé associé pour ne pas l'afficher sans contexte.
+    """
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "MOYENNE",
+        "codeActivite": "MOYENNE",
+        "codeTypePeriode": "TRIMESTRE",
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    try:
+        token = get_token(SCOPE_STATS_TERRITOIRE)
+    except Exception as e:
+        return None, None, None, str(e)
+    data, erreur = _appeler_indicateur(BASE_STATS_TERRITOIRE, "/v1/indicateur/stat-dynamique-emploi", token, payload)
+    if erreur:
+        return None, None, None, erreur
+    valeurs = data.get("listeValeursParPeriode", [])
+    if not valeurs:
+        return None, None, None, None
+    premiere = valeurs[0]
+    for champ_valeur, champ_nom in [
+        ("valeurPrincipaleTaux", "valeurPrincipaleNom"),
+        ("valeurPrincipaleNombre", "valeurPrincipaleNom"),
+        ("valeurPrincipaleMontant", "valeurPrincipaleNom"),
+    ]:
+        if premiere.get(champ_valeur) is not None:
+            return premiere[champ_valeur], premiere.get(champ_nom), premiere.get("libPeriode"), None
+    return None, None, premiere.get("libPeriode"), None
+
+
+def embauches_departement(code_rome, departement):
+    """
+    Indicateur EMB_1 : nombre RÉEL d'embauches réalisées (pas des offres
+    publiées, de vraies prises de poste) pour un ROME et un département, sur le
+    trimestre — quatrième endpoint frère de la même API stats-offres-demandes-emploi
+    (même scope déjà confirmé). Probablement le repère le plus parlant pour un
+    candidat : combien de personnes ont RÉELLEMENT été embauchées sur ce métier,
+    ici, récemment — au-delà du nombre d'offres publiées ou actives.
+    """
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "ROME",
+        "codeActivite": code_rome,
+        "codeTypePeriode": "TRIMESTRE",
+        "codeTypeNomenclature": "CATCANDxDUREEEMP",
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    data, erreur = _appel_avec_decouverte_scope(
+        _CANDIDATS_SCOPE_STATS_MARCHE, "scope_stats_marche", BASE_STATS_MARCHE,
+        "/v1/indicateur/stat-embauches", payload,
+    )
+    if erreur:
+        return None, None, erreur
+    valeurs = data.get("listeValeursParPeriode", [])
+    total = sum(v.get("valeurPrincipaleNombre") or 0 for v in valeurs)
+    periode = valeurs[0].get("libPeriode") if valeurs else None
+    return total, periode, None
+
+
+def perspective_recrutement_departement(code_rome, departement):
+    """
+    Indicateur PERSP_2 : la vraie "difficulté de recrutement" officielle par
+    métier (gradation en paliers, ex: "très faible" à "très élevée") — c'est
+    l'indicateur qu'on cherchait depuis le début en explorant "Marché du
+    travail"/BMO, trouvé en fait sur la même API stats-offres-demandes-emploi
+    déjà exploitée ailleurs (même scope confirmé), pas besoin d'un scope séparé.
+    Basé sur ROME (pas FAP comme le BMO classique) — cohérent avec le reste de
+    l'app.
+
+    Particularités vues dans l'exemple officiel : période ANNUELLE (pas
+    trimestrielle comme les autres indicateurs de cette même API) et nomenclature
+    "TYPE_TENSION" plutôt que CATCAND.
+
+    Retourne (libelle_tension, periode, erreur) — le libellé qualitatif
+    (libNomenclature, ex: "Tension élevée") de la première valeur trouvée, à
+    présenter en COMPLÉMENT qualitatif de notre indice offres/demandeurs
+    maison, pas en remplacement (deux méthodes de calcul différentes).
+    """
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "ROME",
+        "codeActivite": code_rome,
+        "codeTypePeriode": "ANNEE",
+        "codeTypeNomenclature": "TYPE_TENSION",
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    data, erreur = _appel_avec_decouverte_scope(
+        _CANDIDATS_SCOPE_STATS_MARCHE, "scope_stats_marche", BASE_STATS_MARCHE,
+        "/v1/indicateur/stat-perspective-employeur", payload,
+    )
+    if erreur:
+        return None, None, erreur
+    valeurs = data.get("listeValeursParPeriode", [])
+    if not valeurs:
+        return None, None, None
+    premiere = valeurs[0]
+    libelle_tension = premiere.get("libNomenclature") or premiere.get("valeurPrincipaleNom")
+    return libelle_tension, premiere.get("libPeriode"), None
+
+
+def salaires_officiels_metier(code_rome, code_territoire="FR", code_type_territoire="NAT"):
+    """
+    Indicateur SAL_3 : salaires en poste (montants réels des salariés déjà en
+    poste, pas des salaires proposés sur des offres) par métier — cinquième
+    endpoint frère de la même API stats-offres-demandes-emploi. Différence
+    importante avec nos propres salaires (tirés du champ "salaire" des offres) :
+    ceux-ci reflètent ce que les salariés EN POSTE gagnent réellement, pas ce
+    que les recruteurs proposent sur une annonce — deux mesures complémentaires,
+    pas redondantes.
+
+    Particularité : GET (pas POST comme les autres indicateurs de cette API),
+    avec codeTypeTerritoire/codeTerritoire en paramètres de chemin plutôt qu'un
+    corps JSON, et codeRome en paramètre de requête optionnel. Par défaut
+    national (NAT/FR) dans l'exemple officiel — la granularité département
+    n'est pas confirmée pour cet indicateur précis.
+
+    Retourne (valeur, libelle_valeur, periode, erreur).
+    """
+    try:
+        token = get_token("api_stats-offres-demandes-emploiv1 offresetdemandesemploi")
+    except Exception as e:
+        return None, None, None, str(e)
+
+    url = f"{BASE_STATS_MARCHE}/v1/indicateur/salaire-rome-fap/{code_type_territoire}/{code_territoire}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    params = {"codeRome": code_rome} if code_rome else {}
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=8)
+    except requests.RequestException as e:
+        return None, None, None, str(e)
+    if r.status_code not in (200, 206):
+        return None, None, None, f"Erreur API {r.status_code} : {r.text}"
+    data = r.json()
+    valeurs = data.get("listeValeursParPeriode", [])
+    if not valeurs:
+        return None, None, None, None
+    premiere = valeurs[0]
+    for champ_valeur, champ_nom in [
+        ("valeurPrincipaleMontant", "valeurPrincipaleNom"),
+        ("valeurPrincipaleNombre", "valeurPrincipaleNom"),
+        ("valeurPrincipaleTaux", "valeurPrincipaleNom"),
+    ]:
+        if premiere.get(champ_valeur) is not None:
+            return premiere[champ_valeur], premiere.get(champ_nom), premiere.get("libPeriode"), None
+    return None, None, premiere.get("libPeriode"), None
+
+
 def demandeurs_emploi_departement_multi(codes_rome, departement):
     """
     Somme des demandeurs d'emploi (cat. A+B+C) pour une liste de codes ROME —
@@ -2478,10 +2861,15 @@ __all__ = [
     "predire_rome_romeo",
     "diagnostiquer_romeo",
     "LA_BONNE_BOITE_SCOPE",
+    "LA_BONNE_BOITE_TOKEN_URL",
+    "_get_token_la_bonne_boite",
+    "nombre_entreprises_potentiel_embauche",
+    "rechercher_entreprises_potentiel_embauche",
     "diagnostiquer_la_bonne_boite",
     "diagnostiquer_marche_travail",
     "FICHES_METIERS_SCOPE",
     "diagnostiquer_fiche_metier",
+    "recuperer_fiche_metier",
     "suggerer_postes",
     "chercher_offres",
     "resoudre_codes_rome",
@@ -2530,6 +2918,13 @@ __all__ = [
     "_appeler_indicateur",
     "_appel_avec_decouverte_scope",
     "demandeurs_emploi_departement",
+    "offres_officielles_departement",
+    "dynamisme_territoire",
+    "BASE_STATS_TERRITOIRE",
+    "SCOPE_STATS_TERRITOIRE",
+    "embauches_departement",
+    "perspective_recrutement_departement",
+    "salaires_officiels_metier",
     "demandeurs_emploi_departement_multi",
     "_MOIS_FR",
     "_formater_mois_fr",
