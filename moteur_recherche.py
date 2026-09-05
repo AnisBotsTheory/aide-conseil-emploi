@@ -564,6 +564,40 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
     return None
 
 
+def diagnostiquer_romeo(intitule="chef de projet"):
+    """
+    Outil de DIAGNOSTIC pour ROMEO 2 — pas utilisé par le flux normal de l'app
+    (predire_rome_romeo() reste la fonction courante, avec son coupe-circuit
+    silencieux). Teste chaque combinaison endpoint/champ candidate et renvoie le
+    détail brut de ce qui se passe réellement (code HTTP, corps de réponse) pour
+    chacune, afin d'identifier la bonne combinaison — ou de confirmer que le
+    scope 'api_romeov2' n'est tout simplement pas souscrit sur le compte
+    (auquel cas déjà l'obtention du token échoue, avant même d'atteindre un
+    endpoint).
+    """
+    try:
+        token = get_token(ROMEO_SCOPE)
+    except Exception as e:
+        return [{"etape": "obtention du token (scope api_romeov2)", "erreur": str(e)}]
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    resultats_diagnostic = []
+    for endpoint in _CANDIDATS_ENDPOINT_ROMEO:
+        for champ in _CANDIDATS_CHAMP_INTITULE_ROMEO:
+            try:
+                r = requests.post(endpoint, headers=headers, json={champ: [intitule]}, timeout=8)
+                resultats_diagnostic.append(
+                    {"endpoint": endpoint, "champ": champ, "status": r.status_code, "reponse": r.text[:300]}
+                )
+            except requests.RequestException as e:
+                resultats_diagnostic.append({"endpoint": endpoint, "champ": champ, "erreur": str(e)})
+    return resultats_diagnostic
+
+
 @st.cache_data(ttl=1800)
 def suggerer_postes(saisie, max_resultats=8):
     """
@@ -2225,6 +2259,7 @@ __all__ = [
     "_normaliser_texte",
     "ROMEO_SCOPE",
     "predire_rome_romeo",
+    "diagnostiquer_romeo",
     "suggerer_postes",
     "chercher_offres",
     "resoudre_codes_rome",
