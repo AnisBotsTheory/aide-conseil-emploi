@@ -468,6 +468,16 @@ def _normaliser_texte(texte):
     return texte
 
 
+def _mot_entier_dans_texte(mot, texte):
+    """
+    True si `mot` apparaît dans `texte` comme un mot entier (pas comme sous-chaîne
+    d'un autre mot) — utilisé pour tester un acronyme court (ex: "pmo", "qa", "sre")
+    contre un libellé ROME sans faux positif du type "pmo" qui matcherait à
+    l'intérieur d'un mot plus long contenant ces trois lettres par hasard.
+    """
+    return re.search(rf"(?<![a-z0-9]){re.escape(mot)}(?![a-z0-9])", texte) is not None
+
+
 ROMEO_SCOPE = "api_romeov2"  # confirmé via un serveur MCP tiers documentant ce scope exact
 
 # Endpoint confirmé par la doc officielle (cf. predire_rome_romeo) :
@@ -476,13 +486,19 @@ ROMEO_SCOPE = "api_romeov2"  # confirmé via un serveur MCP tiers documentant ce
 # candidats comme au début de l'intégration.
 
 
-def predire_rome_romeo(intitule, contexte="", seuil_score=0.3, nb_resultats=5):
+def predire_rome_romeo(intitule, contexte="", seuil_score=0.15, nb_resultats=10):
     """
     Utilise ROMEO 2 (modèle d'IA de France Travail) pour rapprocher un intitulé de
     poste en texte libre des appellations ROME les plus probables, avec un score
     de confiance — robuste sur des cas que notre recherche floue maison ne peut
     pas résoudre par nature (ex: "Responsable de projet" -> "Chef de projet",
     vrais synonymes métier sans aucune ressemblance textuelle).
+
+    seuil_score et nb_resultats élargis (0.3 -> 0.15, 5 -> 10) : constaté en usage
+    réel que le seuil par défaut de l'API était trop strict et ne remontait pas
+    assez de pistes pour des intitulés composés (ex: "PMO Finance") — un seuil
+    plus bas laisse passer davantage de candidats, quitte à en avoir un ou deux
+    de moins bonne qualité, ce qui reste préférable à une liste trop courte.
 
     Format confirmé par la documentation officielle complète (Swagger
     francetravail.io, ressource /predictionMetiers) : la requête contient un
@@ -975,12 +991,22 @@ def diagnostiquer_fiche_metier(code_rome="M1805"):
 
 
 @st.cache_data(ttl=1800)
-def suggerer_postes(saisie, max_resultats=8):
+def suggerer_postes(saisie, max_resultats=14):
     """
     Suggère des postes du référentiel ROME à partir d'un intitulé libre/moderne.
+    max_resultats relevé (8 -> 14) : constaté en usage réel que la liste était
+    souvent trop courte pour laisser à l'utilisateur le choix de plusieurs
+    intitulés pertinents.
+
     Ordre de priorité, du plus fiable au plus approximatif :
+      0. ROMEO 2 (IA), avec un seuil abaissé (cf. predire_rome_romeo) pour
+         élargir la couverture.
       1. Dictionnaire de correspondances connues (ex: "Data Analyst" -> "Analyste
-         de données").
+         de données") — élargi pour aussi tester l'acronyme/terme moderne
+         LUI-MÊME comme mot-clé (ex: "pmo"), afin de retrouver un libellé ROME
+         qui contient littéralement ce terme (ex: "Project Management Officer -
+         PMO") même quand la saisie complète ("PMO Finance") ne correspond à
+         aucun libellé mot pour mot.
       2. Correspondance EXACTE (normalisée) avec un libellé officiel.
       3. Le libellé COMMENCE par la saisie (ex: "chef de projet" tapé ->
          "Chef de projet informatique") — presque toujours une vraie
@@ -1019,7 +1045,11 @@ def suggerer_postes(saisie, max_resultats=8):
             candidats[pred["libelle"]] = max(candidats.get(pred["libelle"], 0), score_romeo)
 
     # 1) Dictionnaire : si un terme connu est contenu dans la saisie, on cherche
-    # les appellations officielles correspondant aux mots-clés français associés.
+    # les appellations officielles correspondant aux mots-clés français associés
+    # ET au terme moderne lui-même (utile pour un acronyme qui apparaît tel quel
+    # dans un libellé ROME, ex: "PMO" dans "Project Management Officer - PMO") —
+    # avec un test de mot entier pour ce dernier cas afin d'éviter un faux
+    # positif sur un acronyme court qui matcherait à l'intérieur d'un autre mot.
     for terme_moderne, mots_cles_fr in DICTIONNAIRE_INTITULES_MODERNES.items():
         if terme_moderne in saisie_normalisee:
             for mot_cle in mots_cles_fr:
@@ -1027,6 +1057,11 @@ def suggerer_postes(saisie, max_resultats=8):
                 for label, label_norm in labels_normalises.items():
                     if mot_cle_normalise in label_norm:
                         candidats[label] = max(candidats.get(label, 0), 100)
+            # Terme moderne lui-même (souvent un acronyme court : "pmo", "sre"...) —
+            # testé en mot entier, pas en simple sous-chaîne.
+            for label, label_norm in labels_normalises.items():
+                if _mot_entier_dans_texte(terme_moderne, label_norm):
+                    candidats[label] = max(candidats.get(label, 0), 100)
 
     # 2/3/4) Correspondance directe (exacte, préfixe, ou incluse ailleurs) —
     # avant toute recherche floue, sur la base de la présence littérale de la
@@ -1050,10 +1085,10 @@ def suggerer_postes(saisie, max_resultats=8):
     for label, norm in labels_normalises.items():
         norm_vers_label.setdefault(norm, label)
     resultats_flous = process.extract(
-        saisie_normalisee, list(norm_vers_label.keys()), scorer=fuzz.token_sort_ratio, limit=max_resultats * 2
+        saisie_normalisee, list(norm_vers_label.keys()), scorer=fuzz.token_sort_ratio, limit=max_resultats * 3
     )
     for label_normalise, score, _ in resultats_flous:
-        if score >= 70:
+        if score >= 65:
             label = norm_vers_label[label_normalise]
             candidats[label] = max(candidats.get(label, 0), min(score, 90))
 
@@ -2859,6 +2894,7 @@ __all__ = [
     "_extraire_code_rome",
     "DICTIONNAIRE_INTITULES_MODERNES",
     "_normaliser_texte",
+    "_mot_entier_dans_texte",
     "ROMEO_SCOPE",
     "predire_rome_romeo",
     "diagnostiquer_romeo",
