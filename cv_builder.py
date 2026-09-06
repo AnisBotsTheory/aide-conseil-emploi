@@ -167,6 +167,8 @@ def _estimer_volume_contenu(data):
     volume += len(data.get("langages_informatiques", ""))
     volume += len(data.get("certifications", ""))
     volume += len(data.get("interets", ""))
+    for section_perso in data.get("sections_perso", []):
+        volume += len(section_perso.get("contenu", "")) + 20
     return volume
 
 
@@ -212,6 +214,8 @@ def _init_cv_state():
         st.session_state.cv_experiences = []
     if "cv_formations" not in st.session_state:
         st.session_state.cv_formations = []
+    if "cv_sections_perso" not in st.session_state:
+        st.session_state.cv_sections_perso = []
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +283,42 @@ def _section_formations():
         st.rerun()
 
 
+def _section_sections_perso():
+    """
+    Sections libres, ajoutées par l'utilisateur, affichées dans le bandeau
+    latéral du CV au même titre que Langues/Compétences/Outils... Sert
+    notamment à combler le vide de la colonne de gauche quand les sections
+    standards ne suffisent pas (ex: Savoir-être, Permis, Réseaux, Références).
+    """
+    st.caption(
+        "Ajoute tes propres sections dans le bandeau latéral si celles ci-dessus ne "
+        "suffisent pas (ex: Savoir-être, Permis, Réseaux, Références...)."
+    )
+
+    a_supprimer = None
+    for i, section in enumerate(st.session_state.cv_sections_perso):
+        with st.container(border=True):
+            section["titre"] = st.text_input(
+                "Titre de la section", value=section.get("titre", ""), key=f"section_titre_{i}"
+            )
+            section["contenu"] = st.text_area(
+                "Contenu (une ligne = un élément)",
+                value=section.get("contenu", ""),
+                key=f"section_contenu_{i}",
+                height=80,
+            )
+            if st.button("🗑️ Supprimer cette section", key=f"section_supprimer_{i}"):
+                a_supprimer = i
+
+    if a_supprimer is not None:
+        st.session_state.cv_sections_perso.pop(a_supprimer)
+        st.rerun()
+
+    if st.button("➕ Ajouter une section personnalisée"):
+        st.session_state.cv_sections_perso.append({})
+        st.rerun()
+
+
 # ---------------------------------------------------------------------------
 # Helpers python-docx bas niveau (ombrage de cellule, bordures de tableau)
 # ---------------------------------------------------------------------------
@@ -316,11 +356,27 @@ def _definir_marges_cellule(cell, gauche=0.15, droite=0.15, haut=0.05, bas=0.05)
     tc_pr.append(tc_mar)
 
 
-def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0, espace_avant=12):
-    """Ajoute un titre de section stylé (majuscules, gras, coloré)."""
+def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0, espace_avant=12, encadre=False):
+    """
+    Ajoute un titre de section stylé (majuscules, gras, coloré). Si encadre=True,
+    ajoute un filet horizontal au-dessus ET en dessous du titre (utilisé pour les
+    titres de la colonne principale — "Expériences professionnelles", "Formation" —
+    afin de mieux les détacher visuellement du reste du contenu).
+    """
     p = cell_ou_doc.add_paragraph()
     p.paragraph_format.space_before = _pt(espace_avant, echelle)
-    p.paragraph_format.space_after = _pt(4, echelle)
+    p.paragraph_format.space_after = _pt(6 if encadre else 4, echelle)
+    if encadre:
+        pPr = p._p.get_or_add_pPr()
+        bord = OxmlElement("w:pBdr")
+        for cote in ("top", "bottom"):
+            elem = OxmlElement(f"w:{cote}")
+            elem.set(qn("w:val"), "single")
+            elem.set(qn("w:sz"), "8")
+            elem.set(qn("w:space"), "4")
+            elem.set(qn("w:color"), couleur_hex)
+            bord.append(elem)
+        pPr.append(bord)
     run = p.add_run(texte.upper())
     run.bold = True
     run.font.size = _pt(taille, echelle)
@@ -573,28 +629,45 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for interet in interets_list:
             _puce(cell_bandeau, interet, echelle=echelle, caractere="▪")
 
+    # --- Sections personnalisées (ajoutées librement par l'utilisateur) ---
+    for section_perso in data.get("sections_perso", []):
+        titre_section_perso = (section_perso.get("titre") or "").strip()
+        contenu_section_perso = (section_perso.get("contenu") or "").strip()
+        if titre_section_perso and contenu_section_perso:
+            _titre_section(cell_bandeau, titre_section_perso, bandeau_texte, echelle=echelle)
+            for ligne in contenu_section_perso.split("\n"):
+                ligne = _nettoyer_ligne(ligne)
+                if ligne:
+                    _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+
     # =======================================================================
     # COLONNE PRINCIPALE
     # =======================================================================
-    # --- En-tête : nom + titre recherché ---
+    # --- En-tête : nom et poste fusionnés sur une seule ligne ("Prénom NOM – Poste") ---
     p_nom = cell_principale.add_paragraph()
-    p_nom.paragraph_format.space_after = Pt(0)
-    run_nom = p_nom.add_run(f"{data.get('prenom', '')} {data.get('nom', '')}".strip().upper())
+    p_nom.paragraph_format.space_after = _pt(4, echelle)
+
+    prenom_val = _majuscule_premiere_lettre(data.get("prenom", ""))
+    nom_val = data.get("nom", "").strip().upper()
+    run_nom = p_nom.add_run(f"{prenom_val} {nom_val}".strip())
     run_nom.bold = True
-    run_nom.font.size = _pt(28, echelle)
+    run_nom.font.size = _pt(24, echelle)
     run_nom.font.color.rgb = RGBColor.from_string(accent)
 
     if data.get("titre_recherche"):
-        p_titre = cell_principale.add_paragraph()
-        p_titre.paragraph_format.space_after = _pt(8, echelle)
-        run_titre = p_titre.add_run(data["titre_recherche"])
+        run_tiret = p_nom.add_run(" – ")
+        run_tiret.bold = True
+        run_tiret.font.size = _pt(24, echelle)
+        run_tiret.font.color.rgb = RGBColor.from_string(accent)
+
+        run_titre = p_nom.add_run(data["titre_recherche"])
         run_titre.italic = True
-        run_titre.font.size = _pt(13, echelle)
+        run_titre.font.size = _pt(17, echelle)
         run_titre.font.color.rgb = RGBColor.from_string(accent)
 
     # Filet horizontal sous l'en-tête
     p_filet = cell_principale.add_paragraph()
-    p_filet.paragraph_format.space_after = _pt(8, echelle)
+    p_filet.paragraph_format.space_after = _pt(4, echelle)
     pPr = p_filet._p.get_or_add_pPr()
     bord = OxmlElement("w:pBdr")
     bas = OxmlElement("w:bottom")
@@ -631,7 +704,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     experiences = [e for e in data.get("experiences", []) if e.get("poste") or e.get("entreprise")]
     experiences = _trier_par_date(experiences, "date_fin", "date_debut")
     if experiences:
-        _titre_section(cell_principale, libelles["experiences"], accent, taille=16, echelle=echelle)
+        _titre_section(cell_principale, libelles["experiences"], accent, taille=16, echelle=echelle, encadre=True)
         for exp in experiences:
             p = cell_principale.add_paragraph()
             p.paragraph_format.space_before = _pt(6, echelle)
@@ -667,7 +740,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
     formations = [f for f in data.get("formations", []) if f.get("diplome") or f.get("etablissement")]
     formations = _trier_par_date(formations, "annee")
     if formations:
-        _titre_section(cell_principale, libelles["formation"], accent, taille=16, echelle=echelle)
+        _titre_section(cell_principale, libelles["formation"], accent, taille=16, echelle=echelle, encadre=True)
         for form in formations:
             p = cell_principale.add_paragraph()
             p.paragraph_format.space_before = _pt(4, echelle)
@@ -698,15 +771,6 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 # ---------------------------------------------------------------------------
 # Suggestions de compétences / outils / langages (basées sur les offres réelles)
 # ---------------------------------------------------------------------------
-def _ajouter_suggestion(cle_session, valeur):
-    """Ajoute une ligne à un textarea (par clé de session_state) si elle n'y est pas déjà."""
-    actuel = st.session_state.get(cle_session, "")
-    lignes = [l.strip() for l in actuel.split("\n") if l.strip()]
-    if valeur not in lignes:
-        lignes.append(valeur)
-        st.session_state[cle_session] = "\n".join(lignes)
-
-
 def _ajouter_suggestion(cle_session, valeur):
     """Ajoute une valeur à une liste d'options (session_state) si elle n'y est pas déjà."""
     if cle_session not in st.session_state:
@@ -949,7 +1013,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         titre_recherche = st.text_input(
             "Titre du poste recherché (ex: PMO Finance)",
             key="cv_titre",
-            help="C'est ce titre qui apparaîtra sur ton CV, sous ton nom — peut être personnalisé librement.",
+            help="C'est ce titre qui apparaîtra sur ton CV, sous forme « Prénom NOM – Poste ».",
         )
         st.caption(
             "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
@@ -1082,6 +1146,22 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             height=60,
         )
 
+    with st.expander("➕ Sections personnalisées (bandeau latéral)"):
+        _section_sections_perso()
+
+    # --- Message anti-vide pour le bandeau latéral (colonne contacts) ---
+    nb_sections_remplies = sum(
+        1 for v in [langues, competences, outils, langages_informatiques, certifications, interets] if v.strip()
+    ) + len(st.session_state.get("cv_sections_perso", []))
+
+    if nb_sections_remplies <= 2:
+        st.info(
+            "💡 La colonne de gauche du CV (langues, compétences, outils...) risque d'avoir "
+            "beaucoup de vide avec si peu d'éléments renseignés. Ajoute quelques langues, "
+            "compétences, ou crée une **section personnalisée** (ex: Savoir-être, Permis...) "
+            "juste au-dessus pour mieux la remplir."
+        )
+
     st.divider()
 
     if st.button("📄 Générer mon CV", type="primary"):
@@ -1105,6 +1185,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "outils": outils,
                 "certifications": certifications,
                 "interets": interets,
+                "sections_perso": st.session_state.cv_sections_perso,
             }
             photo_bytes = photo_uploadee.getvalue() if photo_uploadee else None
             message_attente = (
