@@ -470,21 +470,13 @@ def _normaliser_texte(texte):
 
 ROMEO_SCOPE = "api_romeov2"  # confirmé via un serveur MCP tiers documentant ce scope exact
 
-# Chemins d'endpoint candidats : aucune documentation publique officielle trouvée en
-# clair pour ROMEO 2 (contrairement au scope, confirmé) — on suit la convention
-# observée sur le reste de francetravail.io (api.francetravail.io/partenaire/
-# <produit>/v<version>/<ressource>) et on teste plusieurs variantes plausibles.
-_CANDIDATS_ENDPOINT_ROMEO = [
-    "https://api.francetravail.io/partenaire/romeo/v2/predictionMetiers",
-    "https://api.francetravail.io/partenaire/romeo/v1/predictionMetiers",
-    "https://api.francetravail.io/partenaire/romeo/v2/predictionMetier",
-    "https://api.francetravail.io/partenaire/rome-romeo/v2/predictionMetiers",
-]
-# Idem pour le nom du champ portant l'intitulé dans le corps de la requête POST.
-_CANDIDATS_CHAMP_INTITULE_ROMEO = ["intitulesPostes", "libellesAppellation", "intitules"]
+# Endpoint confirmé par la doc officielle (cf. predire_rome_romeo) :
+# https://api.francetravail.io/partenaire/romeo/v2/predictionMetiers,
+# corps enveloppé sous "appellations" — plus besoin de tester plusieurs
+# candidats comme au début de l'intégration.
 
 
-def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
+def predire_rome_romeo(intitule, contexte="", seuil_score=0.3, nb_resultats=5):
     """
     Utilise ROMEO 2 (modèle d'IA de France Travail) pour rapprocher un intitulé de
     poste en texte libre des appellations ROME les plus probables, avec un score
@@ -492,12 +484,20 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
     pas résoudre par nature (ex: "Responsable de projet" -> "Chef de projet",
     vrais synonymes métier sans aucune ressemblance textuelle).
 
-    Format confirmé via la documentation Swagger officielle (ressource
-    predictionMetiers, schéma de réponse PredictionAppellation) : la requête est
-    une LISTE d'objets {"identifiant":..., "intitule":..., "contexte":...} (jusqu'à
-    20 par appel, un seul ici), la réponse une liste de prédictions contenant
-    "metiersRome" (liste de {libelleAppellation, codeAppellation, libelleRome,
-    codeRome, scorePrediction}).
+    Format confirmé par la documentation officielle complète (Swagger
+    francetravail.io, ressource /predictionMetiers) : la requête contient un
+    tableau "appellations" (objets intitule/identifiant/contexte, 20 maximum par
+    appel) ET un objet "options" — nomAppelant OBLIGATOIRE (absent de la
+    documentation partielle consultée au moment de l'intégration initiale,
+    d'où une version précédente de cette fonction qui l'omettait). Le seuil de
+    score et le nombre de résultats sont transmis directement à l'API
+    (options.seuilScorePrediction / options.nbResultats) plutôt que filtrés
+    après coup côté Python.
+
+    contexte (optionnel) : libellé NAF, SIRET, ou texte libre décrivant le
+    secteur — utile quand l'intitulé seul est ambigu (ex: "conseiller" peut
+    désigner un métier de l'immobilier ou de l'emploi), cf. bonnes pratiques
+    officielles de l'API.
 
     Se dégrade silencieusement (renvoie None) en cas d'erreur — scope non
     souscrit, panne réseau, ou si le format réel diverge malgré tout de la doc —
@@ -519,13 +519,17 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json; charset=utf-8, application/json",
     }
-    # Confirmé par l'API elle-même (message d'erreur "Le champ appellations est
-    # obligatoire") : la liste doit être enveloppée sous la clé "appellations",
-    # pas envoyée telle quelle comme corps de requête.
-    payload = {"appellations": [{"identifiant": "1", "intitule": intitule, "contexte": ""}]}
+    payload = {
+        "appellations": [{"identifiant": "1", "intitule": intitule, "contexte": contexte or ""}],
+        "options": {
+            "nomAppelant": "AideConseilEmploi",
+            "nbResultats": max(1, min(nb_resultats, 25)),
+            "seuilScorePrediction": seuil_score,
+        },
+    }
 
     try:
         r = requests.post(
@@ -542,18 +546,10 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
     except ValueError:
         return None
 
-    # La doc montre un objet unique par intitulé soumis ; on gère aussi le cas
-    # où l'API renvoie directement une liste (un élément par identifiant envoyé).
-    # Réponse potentiellement enveloppée elle aussi (même logique que la requête,
-    # qui l'était sous "appellations") — on gère les deux formes possibles.
-    if isinstance(data, dict) and isinstance(data.get("predictionsAppellation"), list):
-        predictions_reponse = data["predictionsAppellation"]
-    elif isinstance(data, dict) and isinstance(data.get("predictions"), list):
-        predictions_reponse = data["predictions"]
-    elif isinstance(data, list):
-        predictions_reponse = data
-    else:
-        predictions_reponse = [data]
+    # Confirmé par la doc officielle : la réponse est un TABLEAU (un élément par
+    # intitulé soumis dans "appellations"). On garde toutefois un repli si un
+    # jour l'API renvoyait un objet unique plutôt qu'un tableau à un élément.
+    predictions_reponse = data if isinstance(data, list) else [data]
 
     resultats = []
     for reponse_intitule in predictions_reponse:
@@ -572,29 +568,23 @@ def predire_rome_romeo(intitule, seuil_score=0.3, nb_resultats=5):
     if not resultats:
         return None
 
-    resultats = [r for r in resultats if r["score"] is None or r["score"] >= seuil_score]
     resultats.sort(key=lambda r: r["score"] or 0, reverse=True)
     return resultats[:nb_resultats] or None
 
 
 def diagnostiquer_romeo(intitule="chef de projet"):
     """
-    Outil de DIAGNOSTIC pour ROMEO 2 — pas utilisé par le flux normal de l'app
-    (predire_rome_romeo() reste la fonction courante, avec son coupe-circuit
-    silencieux). Teste chaque combinaison endpoint/champ candidate et renvoie le
-    détail brut de ce qui se passe réellement (code HTTP, corps de réponse) pour
-    chacune, afin d'identifier la bonne combinaison — ou de confirmer que le
-    scope 'api_romeov2' n'est tout simplement pas souscrit sur le compte
-    (auquel cas déjà l'obtention du token échoue, avant même d'atteindre un
-    endpoint).
+    Outil de DIAGNOSTIC pour ROMEO 2 — teste désormais le format CONFIRMÉ
+    (endpoint /predictionMetiers, corps enveloppé sous "appellations") plutôt
+    que les anciens candidats erronés testés avant la découverte du vrai
+    format. Sert à vérifier que ça répond bien en conditions réelles ; le
+    résultat concret pour l'utilisateur reste toutefois de tester directement
+    la saisie d'un poste dans "Créer mon CV" (predire_rome_romeo(), utilisée
+    par suggerer_postes(), a le même format que ce diagnostic).
     """
     try:
         token = get_token(ROMEO_SCOPE)
     except Exception as e:
-        # get_token() utilise raise_for_status(), qui perd le corps de la réponse —
-        # on refait l'appel token nous-mêmes ici pour voir le VRAI motif du refus
-        # (ex: "invalid_scope" si l'API n'est pas souscrite sur ce compte), plutôt
-        # que le message générique "400 Client Error" qui ne dit rien d'exploitable.
         detail_erreur = str(e)
         try:
             r_token = requests.post(
@@ -615,17 +605,18 @@ def diagnostiquer_romeo(intitule="chef de projet"):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    resultats_diagnostic = []
-    for endpoint in _CANDIDATS_ENDPOINT_ROMEO:
-        for champ in _CANDIDATS_CHAMP_INTITULE_ROMEO:
-            try:
-                r = requests.post(endpoint, headers=headers, json={champ: [intitule]}, timeout=8)
-                resultats_diagnostic.append(
-                    {"endpoint": endpoint, "champ": champ, "status": r.status_code, "reponse": r.text[:300]}
-                )
-            except requests.RequestException as e:
-                resultats_diagnostic.append({"endpoint": endpoint, "champ": champ, "erreur": str(e)})
-    return resultats_diagnostic
+    payload = {
+        "appellations": [{"identifiant": "1", "intitule": intitule, "contexte": ""}],
+        "options": {"nomAppelant": "AideConseilEmploi", "nbResultats": 5, "seuilScorePrediction": 0.3},
+    }
+    try:
+        r = requests.post(
+            "https://api.francetravail.io/partenaire/romeo/v2/predictionMetiers",
+            headers=headers, json=payload, timeout=8,
+        )
+        return [{"status": r.status_code, "reponse": r.text[:800]}]
+    except requests.RequestException as e:
+        return [{"erreur": str(e)}]
 
 
 # ---------------------------------------------------------------------------
@@ -2026,21 +2017,31 @@ def rechercher_wikidata_entreprise(wikidata_id):
 
 def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
     """
-    Repère, parmi une liste d'offres déjà récupérées, une offre de cette
-    entreprise et en extrait le nécessaire pour préparer un entretien : le
-    domaine d'activité TEL QUE DÉCRIT par France Travail (secteurActiviteLibelle,
-    un libellé humain — plus parlant qu'un code NAF brut), la description
-    d'entreprise rédigée par l'employeur lui-même (entreprise.description), la
-    tranche d'effectif TELLE QUE DÉCLARÉE SUR L'OFFRE (trancheEffectifEtab —
-    présente sur ~20% des offres seulement, mais directe, sans les faux positifs
-    de correspondance par nom qu'implique SIRENE), et deux badges d'inclusion
-    (entrepriseAdaptee, employeurHandiEngage). Renvoie un dict (potentiellement
-    partiel si l'information manque) ou None si aucune offre de cette entreprise
-    trouvée.
+    Repère, parmi une liste d'offres déjà récupérées, la plus RÉCENTE offre de
+    cette entreprise (par dateCreation, quand plusieurs offres correspondent —
+    l'info affichée reste ainsi la plus fraîche possible) et en extrait le
+    nécessaire pour préparer un entretien : le domaine d'activité TEL QUE DÉCRIT
+    par France Travail (secteurActiviteLibelle, un libellé humain — plus parlant
+    qu'un code NAF brut), la description d'entreprise rédigée par l'employeur
+    lui-même (entreprise.description), la tranche d'effectif TELLE QUE DÉCLARÉE
+    SUR L'OFFRE (trancheEffectifEtab — présente sur ~20% des offres seulement,
+    mais directe, sans les faux positifs de correspondance par nom qu'implique
+    SIRENE), deux badges d'inclusion (entrepriseAdaptee, employeurHandiEngage),
+    et la date de création de l'offre source (pour dater l'info présentée).
+    Renvoie un dict (potentiellement partiel si l'information manque) ou None
+    si aucune offre de cette entreprise trouvée.
     """
-    for offre in offres_disponibles:
-        if _nom_entreprise_normalise(offre).strip().lower() != nom_entreprise.strip().lower():
-            continue
+    correspondances = [
+        offre for offre in offres_disponibles
+        if _nom_entreprise_normalise(offre).strip().lower() == nom_entreprise.strip().lower()
+    ]
+    if not correspondances:
+        return None
+    # dateCreation manquante -> traitée comme la plus ancienne possible, pour ne
+    # jamais la faire gagner par erreur face à une offre datée.
+    correspondances.sort(key=lambda o: o.get("dateCreation") or "", reverse=True)
+
+    for offre in correspondances:
         description = (offre.get("entreprise", {}) or {}).get("description")
         secteur_libelle = offre.get("secteurActiviteLibelle")
         tranche_effectif = offre.get("trancheEffectifEtab")
@@ -2053,6 +2054,7 @@ def infos_entretien_entreprise(nom_entreprise, offres_disponibles):
                 "tranche_effectif": tranche_effectif,
                 "entreprise_adaptee": bool(entreprise_adaptee),
                 "employeur_handi_engage": bool(employeur_handi_engage),
+                "date_creation_offre": offre.get("dateCreation"),
             }
     return None
 
