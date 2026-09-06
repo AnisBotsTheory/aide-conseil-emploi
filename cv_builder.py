@@ -840,12 +840,15 @@ def _selecteur_poste_recherche(titre_recherche):
     appellations = get_referentiel_appellations()
     cle_selection = "cv_postes_recherche_selectionnes"
     cle_terme_precedent = "cv_postes_recherche_terme_precedent"
-    cle_auto = "cv_postes_recherche_auto_pour_terme"
 
     if cle_selection not in st.session_state:
         st.session_state[cle_selection] = []
 
-    suggestions = suggerer_postes(titre_recherche) if titre_recherche.strip() else []
+    # max_resultats relevé (8 -> 14) pour afficher davantage de pistes ROME —
+    # aucune sélection automatique n'est faite ici : les étiquettes sont
+    # affichées, mais c'est à l'utilisateur de cliquer sur celle(s) qu'il veut
+    # réellement retenir pour l'analyse de marché.
+    suggestions = suggerer_postes(titre_recherche, max_resultats=14) if titre_recherche.strip() else []
 
     # Un nouveau terme de recherche efface la sélection précédente : sinon les postes
     # d'une recherche antérieure restent cochés en changeant complètement de sujet.
@@ -853,12 +856,6 @@ def _selecteur_poste_recherche(titre_recherche):
     if titre_recherche != terme_precedent and st.session_state[cle_selection]:
         st.session_state[cle_selection] = []
     st.session_state[cle_terme_precedent] = titre_recherche
-
-    # Auto-sélectionne la meilleure suggestion une fois par terme, pour ne pas dépendre
-    # d'un clic si l'utilisateur ne remarque pas les étiquettes.
-    if suggestions and not st.session_state[cle_selection] and st.session_state.get(cle_auto) != titre_recherche:
-        st.session_state[cle_selection].append(suggestions[0])
-    st.session_state[cle_auto] = titre_recherche
 
     if suggestions or st.session_state[cle_selection]:
         tous_les_tags = list(dict.fromkeys(suggestions + st.session_state[cle_selection]))
