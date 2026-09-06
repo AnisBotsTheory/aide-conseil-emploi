@@ -258,10 +258,6 @@ with tab_profil:
                             jours_max=jours_max_periode_offres,
                         )
                         total_dep_offres = len(offres_pour_tension)
-                        nb_postes_ouverts = sum(o.get("nombrePostes") or 1 for o in offres_pour_tension)
-                        nb_offres_manque_candidats = sum(
-                            1 for o in offres_pour_tension if o.get("offresManqueCandidats")
-                        )
                         detail_par_poste = []
                         total_offres_officielles = 0
                         periode_offres_officielles = None
@@ -347,23 +343,6 @@ with tab_profil:
                             "présenté en complément qualitatif, pas en remplacement."
                         )
 
-                    if total_dep_offres:
-                        c3, c4 = st.columns(2)
-                        c3.metric(
-                            "Postes ouverts (cumulé)", nb_postes_ouverts,
-                            help="Une offre peut proposer plusieurs postes — total réel de postes à pourvoir.",
-                        )
-                        pct_manque_candidats = round(100 * nb_offres_manque_candidats / total_dep_offres)
-                        c4.metric(
-                            "Offres signalées difficiles à pourvoir", f"{pct_manque_candidats}%",
-                            help=(
-                                f"{nb_offres_manque_candidats} offre(s) sur {total_dep_offres} signalée(s) "
-                                "par France Travail comme manquant de candidats (champ officiel "
-                                "'offresManqueCandidats') — indicateur de tension directement sur ces "
-                                "offres, sans dépendre d'une nomenclature différente (contrairement au BMO)."
-                            ),
-                        )
-
                     if not erreur_offres_officielles:
                         st.caption(
                             f"📊 Repère officiel France Travail (statistique trimestrielle, {periode_offres_officielles}) : "
@@ -409,7 +388,7 @@ with tab_profil:
                     )
                     df_entreprises_affiche = df_entreprises.copy()
                     total_offres_entreprises = df_entreprises_affiche["nombre_offres"].sum()
-                    df_entreprises_affiche["% des offres"] = (
+                    df_entreprises_affiche["Part des offres"] = (
                         (100 * df_entreprises_affiche["nombre_offres"] / total_offres_entreprises).round(1)
                         if total_offres_entreprises else 0
                     )
@@ -418,6 +397,11 @@ with tab_profil:
                         .drop(columns=["villes", "nombre_offres"]),
                         use_container_width=True,
                         hide_index=True,
+                        column_config={
+                            "Part des offres": st.column_config.NumberColumn(
+                                "Part des offres", format="%.1f%%"
+                            )
+                        },
                     )
 
                 st.divider()
@@ -454,6 +438,18 @@ with tab_profil:
                             ]
                         )
                         st.dataframe(df_potentiel, use_container_width=True, hide_index=True)
+
+                with st.expander("🔧 Diagnostic technique La Bonne Boîte (temporaire)"):
+                    st.caption(
+                        "Teste directement l'appel API pour le poste et le département actuellement "
+                        "sélectionnés, et affiche la vraie réponse brute — utile pour vérifier "
+                        "pourquoi une liste reste vide ou pour confirmer que l'intégration répond bien."
+                    )
+                    if st.button("Lancer le diagnostic", key="btn_diagnostic_lbb_tendance"):
+                        code_diag = codes_resolus_cv[0] if codes_resolus_cv else "M1805"
+                        with st.spinner("Test de l'appel La Bonne Boîte en cours..."):
+                            resultats_diag_lbb = diagnostiquer_la_bonne_boite(code_diag, departement_actif)
+                        st.json(resultats_diag_lbb)
 
             with sous_tab_certifs:
                 if "cv_suggestions_apercu" not in st.session_state:
@@ -493,6 +489,19 @@ with tab_profil:
                             hide_index=True,
                         )
 
+                    with st.expander("🔧 Diagnostic technique Savoir-être (temporaire)"):
+                        st.caption(
+                            "Récupère quelques offres brutes pour le poste actuel et affiche "
+                            "directement le contenu du champ 'qualitesProfessionnelles' tel que "
+                            "renvoyé par l'API — utile pour vérifier qu'il est bien rempli en pratique "
+                            "quand la liste ci-dessus reste vide."
+                        )
+                        if st.button("Lancer le diagnostic", key="btn_diagnostic_savoir_etre"):
+                            code_diag_se = codes_resolus_cv[0] if codes_resolus_cv else "M1805"
+                            with st.spinner("Récupération d'un échantillon d'offres..."):
+                                resultats_diag_se = diagnostiquer_savoir_etre(code_diag_se, departement_actif)
+                            st.json(resultats_diag_se)
+
                 st.divider()
                 st.markdown("##### 📖 Référentiel officiel du métier (ROME)")
                 st.caption(
@@ -517,6 +526,18 @@ with tab_profil:
                                 st.markdown("**Savoir-être :** " + ", ".join(fiche_metier["savoir_etre"]))
                             if fiche_metier["savoirs"]:
                                 st.markdown("**Savoirs :** " + ", ".join(fiche_metier["savoirs"]))
+
+                with st.expander("🔧 Diagnostic technique Fiches métiers ROME (temporaire)"):
+                    st.caption(
+                        "Teste directement l'appel API pour le premier poste sélectionné et affiche "
+                        "la vraie réponse brute — utile pour vérifier pourquoi une fiche reste vide "
+                        "ou pour confirmer que l'intégration répond bien."
+                    )
+                    if st.button("Lancer le diagnostic", key="btn_diagnostic_fiche_metier_tendance"):
+                        code_diag_fm = codes_resolus_cv[0] if codes_resolus_cv else "M1805"
+                        with st.spinner("Test de l'appel Fiches métiers en cours..."):
+                            resultats_diag_fm = diagnostiquer_fiche_metier(code_diag_fm)
+                        st.json(resultats_diag_fm)
 
             with sous_tab_villes:
                 st.caption(
@@ -570,6 +591,10 @@ with tab_profil:
                             (100 * df_carte["nombre_offres"] / total_region).round(1) if total_region else 0
                         )
                         df_carte["approximatif"] = df_carte["approximatif"].astype(bool)
+                        # Étiquette texte affichée directement sur chaque point de la carte
+                        # (en plus du détail au survol) — évite d'avoir à survoler chaque
+                        # point pour connaître son poids relatif.
+                        df_carte["etiquette_pourcentage"] = df_carte["pourcentage"].map(lambda x: f"{x:.1f}%")
                         try:
                             fig_carte = px.scatter_mapbox(
                                 df_carte,
@@ -578,15 +603,21 @@ with tab_profil:
                                 color="approximatif",
                                 color_discrete_map={False: "#0066cc", True: "#e67e22"},
                                 hover_name="ville",
+                                text="etiquette_pourcentage",
                                 hover_data={
                                     "nombre_offres": True, "pourcentage": ":.1f",
                                     "latitude": False, "longitude": False, "approximatif": False,
+                                    "etiquette_pourcentage": False,
                                 },
                                 labels={
                                     "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres",
                                     "approximatif": "Position approximative",
                                 },
                                 zoom=8, height=450,
+                            )
+                            fig_carte.update_traces(
+                                textposition="top center",
+                                textfont=dict(size=11, color="white"),
                             )
                             fig_carte.update_layout(
                                 mapbox_style="carto-darkmatter",
@@ -599,6 +630,8 @@ with tab_profil:
                             # Plotly installée (dépréciation en cours au profit de scatter_map) —
                             # mieux vaut une carte plus simple qu'une page entière qui plante et
                             # empêche tout ce qui suit (Recruteurs, Fiches entreprises...) de s'afficher.
+                            # Pas d'étiquette de pourcentage possible sur ce repli (st.map ne le
+                            # permet pas), seulement les points bruts.
                             st.map(
                                 df_carte, latitude="latitude", longitude="longitude",
                                 size="nombre_offres", color="#0066cc",
