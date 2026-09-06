@@ -990,6 +990,57 @@ def diagnostiquer_fiche_metier(code_rome="M1805"):
     return resultats_diagnostic
 
 
+# ---------------------------------------------------------------------------
+# Diagnostic pour le champ "qualitesProfessionnelles" (savoir-être) — ce champ
+# est un champ STANDARD de l'API Offres d'emploi (contrairement à ROMEO/La Bonne
+# Boîte/Fiches métiers, dont l'existence même était incertaine) : ce diagnostic
+# ne teste donc pas des scopes/endpoints candidats, mais affiche simplement le
+# contenu brut réellement renvoyé par quelques offres, pour vérifier qu'il est
+# bien rempli en pratique quand la liste "Savoir-être" reste vide côté app.
+# ---------------------------------------------------------------------------
+def diagnostiquer_savoir_etre(code_rome, departement=None, mots_cles=None):
+    """
+    Récupère un petit échantillon d'offres (10 maximum) pour le poste et le
+    département donnés, et renvoie pour chacune son intitulé et le contenu brut
+    de son champ "qualitesProfessionnelles" tel que fourni par l'API — sans
+    aucun traitement, pour voir directement si le champ est vide, absent, ou
+    rempli mais sous une forme inattendue. Pas utilisé par le flux normal de
+    l'app.
+    """
+    try:
+        token = get_token(SCOPE_OFFRES)
+    except Exception as e:
+        return [{"etape": "obtention du token", "erreur": str(e)}]
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
+    params = {"range": "0-9"}
+    if departement:
+        params["departement"] = departement
+    params.update(_params_filtre_poste(code_rome, mots_cles))
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=8)
+    except requests.RequestException as e:
+        return [{"erreur": str(e)}]
+    if r.status_code == 204:
+        return [{"info": "204 No Content — aucune offre trouvée pour ces critères."}]
+    if r.status_code not in (200, 206):
+        return [{"status": r.status_code, "reponse": r.text[:500]}]
+    try:
+        resultats = r.json().get("resultats", [])
+    except ValueError:
+        return [{"erreur": "réponse non JSON"}]
+    if not resultats:
+        return [{"info": "Aucune offre trouvée pour ces critères."}]
+    return [
+        {
+            "intitule": o.get("intitule"),
+            "qualitesProfessionnelles": o.get("qualitesProfessionnelles"),
+        }
+        for o in resultats[:10]
+    ]
+
+
 @st.cache_data(ttl=1800)
 def suggerer_postes(saisie, max_resultats=14):
     """
@@ -1917,6 +1968,15 @@ def rechercher_wikipedia_entreprise(nom_entreprise):
     n'a pas toujours un article au nom exact tapé), 2) résumé de cet article via
     l'API REST officielle de Wikipédia (gratuite, sans clé). Renvoie None si aucun
     article trouvé, si la page est une homonymie, ou en cas d'erreur réseau.
+
+    Validation de pertinence AVANT de résoudre le résumé : pour un nom d'entreprise
+    peu connu ou générique, la recherche MediaWiki peut renvoyer en premier
+    résultat un article sans rapport (ex: une personne dont le nom ne partage
+    aucun mot avec la requête) — constaté en usage réel (recherche "parlym" ->
+    article "Éric Champ"). On compare le titre trouvé au nom recherché avec
+    rapidfuzz (déjà utilisé ailleurs dans ce module) et on rejette (retourne None)
+    si la similarité est trop faible, plutôt que d'afficher une fiche entreprise
+    qui parle en réalité d'un tout autre sujet.
     """
     if not nom_entreprise:
         return None
@@ -1934,6 +1994,19 @@ def rechercher_wikipedia_entreprise(nom_entreprise):
         if not resultats_recherche:
             return None
         titre = resultats_recherche[0]["title"]
+
+        # Rejet précoce si le titre trouvé n'a manifestement rien à voir avec le
+        # nom recherché (seuil bas car token_set_ratio reste déjà strict sur des
+        # paires sans mot commun — cf. usage similaire dans suggerer_postes()).
+        # Ponctuation retirée avant comparaison : sinon un nom comme "Signe+"
+        # (avec un caractère spécial collé au mot) est traité comme un token
+        # entièrement différent de "Signe" et rejeté à tort face à un titre
+        # Wikipédia légitime du type "Signe (entreprise)".
+        nom_normalise_comparaison = re.sub(r"[^a-z0-9 ]", " ", nom_entreprise.lower()).strip()
+        titre_normalise_comparaison = re.sub(r"[^a-z0-9 ]", " ", titre.lower()).strip()
+        score_pertinence = fuzz.token_set_ratio(nom_normalise_comparaison, titre_normalise_comparaison)
+        if score_pertinence < 55:
+            return None
 
         r_resume = requests.get(
             f"https://fr.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(titre)}",
@@ -2907,6 +2980,7 @@ __all__ = [
     "diagnostiquer_marche_travail",
     "FICHES_METIERS_SCOPE",
     "diagnostiquer_fiche_metier",
+    "diagnostiquer_savoir_etre",
     "recuperer_fiche_metier",
     "suggerer_postes",
     "chercher_offres",
