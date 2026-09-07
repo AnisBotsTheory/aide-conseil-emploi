@@ -34,7 +34,7 @@ st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 st.divider()
 
 tab_cv, tab_profil, tab_avance, tab_evenements = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance", "📊 Compléments d'analyse", "📅 Événements"]
+    ["🧾 Créer mon CV", "🎯 Analyse principale", "📊 Compléments d'analyse", "📅 Événements"]
 )
 
 
@@ -168,144 +168,9 @@ with tab_profil:
             jours_max_periode_offres = (aujourdhui - debut_periode).days
             titre_libre_cv = st.session_state.get("cv_titre", "").strip()
 
-            sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes, sous_tab_tension = st.tabs(
-                ["🏢 Top Recruteurs", "🎓 Compétences", "📍 Dynamisme géographique", "⚖️ Tension"]
+            sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
+                ["🏢 Top Recruteurs", "🎓 Compétences", "📍 Dynamisme géographique"]
             )
-
-            with sous_tab_tension:
-                if code_rome_choisi == "TOUS":
-                    st.info(
-                        "⚖️ La tension du marché nécessite un ou plusieurs postes précis (l'indicateur "
-                        "officiel raisonne par métier). Sélectionne au moins un poste ci-dessus pour "
-                        "voir ce calcul."
-                    )
-                elif departement_est_multiple(departement_actif):
-                    st.info(
-                        "⚖️ La tension du marché nécessite un seul département sélectionné (statistique "
-                        "officielle trimestrielle, un appel par territoire) — indisponible pour « Toute "
-                        "la France » ou une sélection de plusieurs départements. Choisis un seul "
-                        "département ci-dessus pour voir ce calcul."
-                    )
-                else:
-                    st.caption(
-                        f"ℹ️ Les offres comptent depuis le début du semestre en cours (actuellement le "
-                        f"{libelle_periode_offres}) ; les demandeurs d'emploi restent une statistique "
-                        "officielle trimestrielle (non filtrable par date)."
-                        + (
-                            "\n\nPlusieurs postes sélectionnés : tension calculée sur la somme des offres "
-                            "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
-                            "indicateur officiel par métier unique — détail par poste ci-dessous."
-                            if recherche_multi else ""
-                        )
-                    )
-                    with st.spinner("Récupération des offres et demandeurs d'emploi..."):
-                        offres_pour_tension = rechercher_offres_completes_elargi(
-                            codes_resolus_cv, titre_libre_cv, departement_actif,
-                            jours_max=jours_max_periode_offres,
-                        )
-                        total_dep_offres = len(offres_pour_tension)
-                        detail_par_poste = []
-                        total_offres_officielles = 0
-                        periode_offres_officielles = None
-                        erreur_offres_officielles = None
-                        for label, code in codes_par_poste_cv.items():
-                            if not code:
-                                continue
-                            demandeurs_i, periode_i, erreur_i = demandeurs_emploi_departement(
-                                code, departement_actif
-                            )
-                            detail_par_poste.append((label, demandeurs_i, periode_i, erreur_i))
-                            off_i, periode_off_i, erreur_off_i = offres_officielles_departement(code, departement_actif)
-                            if erreur_off_i:
-                                erreur_offres_officielles = erreur_off_i
-                            else:
-                                total_offres_officielles += off_i or 0
-                                periode_offres_officielles = periode_offres_officielles or periode_off_i
-                        total_embauches = 0
-                        periode_embauches = None
-                        erreur_embauches = None
-                        for label, code in codes_par_poste_cv.items():
-                            if not code:
-                                continue
-                            emb_i, periode_emb_i, erreur_emb_i = embauches_departement(code, departement_actif)
-                            if erreur_emb_i:
-                                erreur_embauches = erreur_emb_i
-                            else:
-                                total_embauches += emb_i or 0
-                                periode_embauches = periode_embauches or periode_emb_i
-                        # Indicateur qualitatif (paliers), pas une somme : affiché seulement
-                        # pour un poste unique — additionner des paliers de plusieurs postes
-                        # n'aurait pas de sens.
-                        libelle_tension_officielle, periode_tension_officielle, erreur_tension_officielle = (
-                            (None, None, "plusieurs postes sélectionnés")
-                            if len(codes_resolus_cv) != 1
-                            else perspective_recrutement_departement(codes_resolus_cv[0], departement_actif)
-                        )
-                    demandeurs_valides = [d for _, d, _, e in detail_par_poste if not e]
-                    total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
-                    # Période affichée seulement pour un poste unique (ambigu à résumer en
-                    # une seule période quand plusieurs postes aux périodes potentiellement
-                    # différentes sont sommés).
-                    periode_demandeurs = (
-                        detail_par_poste[0][2] if len(detail_par_poste) == 1 and not detail_par_poste[0][3] else None
-                    )
-                    erreur_demandeurs = (
-                        None if demandeurs_valides else "toutes les requêtes demandeurs ont échoué"
-                    )
-
-                    if erreur_demandeurs:
-                        st.warning(
-                            f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
-                            "Saisis une valeur manuelle en attendant."
-                        )
-                        total_dep_demandeurs = st.number_input(
-                            "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
-                        )
-                    else:
-                        c1, c2 = st.columns(2)
-                        c1.metric("Offres", total_dep_offres)
-                        c2.metric(
-                            f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
-                            total_dep_demandeurs,
-                        )
-
-                    tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
-                    if tension is not None:
-                        st.metric("Indice de tension (offres / demandeurs)", tension)
-                        st.info(interpreter_tension(tension))
-                        conseils = conseils_tension(tension)
-                        if conseils:
-                            with st.expander("💡 Conseils pour ce niveau de tension"):
-                                for conseil in conseils:
-                                    st.markdown(f"- {conseil}")
-                    else:
-                        st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
-
-                    if libelle_tension_officielle:
-                        st.caption(
-                            f"⚖️ Indicateur officiel France Travail de difficulté de recrutement "
-                            f"({periode_tension_officielle}) : **{libelle_tension_officielle}** — "
-                            "méthode de calcul différente de notre indice ci-dessus (offres/demandeurs), "
-                            "présenté en complément qualitatif, pas en remplacement."
-                        )
-
-                    if not erreur_offres_officielles:
-                        mention_cumul = " (cumulé sur l'ensemble des postes sélectionnés)" if recherche_multi else ""
-                        st.caption(
-                            f"📊 Repère officiel France Travail (statistique trimestrielle, {periode_offres_officielles}) : "
-                            f"**{total_offres_officielles}** offre(s) enregistrée(s) sur la période{mention_cumul} — "
-                            f"à ne pas confondre avec les **{total_dep_offres}** offres actuellement actives "
-                            "comptées ci-dessus : une offre enregistrée peut avoir déjà été pourvue et retirée."
-                        )
-                    if not erreur_embauches:
-                        st.metric(
-                            f"Embauches réalisées — {periode_embauches}", total_embauches,
-                            help=(
-                                "Nombre RÉEL de prises de poste (pas des offres publiées) sur ce métier "
-                                "dans ce département, source France Travail — le repère le plus concret "
-                                "sur la réalité du marché, au-delà du nombre d'offres."
-                            ),
-                        )
 
             with sous_tab_recruteurs:
                 with st.spinner("Récupération des recruteurs actifs..."):
@@ -316,8 +181,9 @@ with tab_profil:
 
                 st.markdown("##### 🕒 Recruteurs du moment")
                 st.caption(
-                    f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du "
-                    "marché) — ont publié une offre récemment."
+                    f"ℹ️ Recruteurs actifs {libelle_periode_offres} — ont publié une offre "
+                    "récemment sur le métier et le département sélectionnés. Argument de "
+                    "candidature ciblée."
                 )
                 if df_entreprises.empty:
                     st.info(
@@ -325,11 +191,6 @@ with tab_profil:
                         "les offres sont diffusées de façon anonyme."
                     )
                 else:
-                    st.caption(
-                        "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
-                        "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
-                        "peuvent valoir une candidature directe."
-                    )
                     df_entreprises_affiche = df_entreprises.copy()
                     total_offres_entreprises = df_entreprises_affiche["nombre_offres"].sum()
                     df_entreprises_affiche["Part des offres"] = (
@@ -343,7 +204,7 @@ with tab_profil:
                         hide_index=True,
                         column_config={
                             "Part des offres": st.column_config.NumberColumn(
-                                "Part des offres", format="%.1f%%"
+                                "Part d'occurrence", format="%.1f%%"
                             )
                         },
                     )
@@ -351,10 +212,10 @@ with tab_profil:
                 st.divider()
                 st.markdown("##### 🚀 Recruteurs à fort potentiel")
                 st.caption(
-                    "ℹ️ Entreprises susceptibles de recruter dans les 6 prochains mois pour ce métier "
-                    "et ce département — MÊME SANS offre publiée actuellement (modèle prédictif basé "
-                    "sur l'historique de recrutement). Source : La Bonne Boîte (France Travail). "
-                    "Argument de candidature spontanée, à ne pas confondre avec le tableau ci-dessus."
+                    "ℹ️ Entreprises susceptibles de recruter dans les 6 prochains mois pour ce "
+                    "métier et ce département — MÊME SANS offre publiée actuellement (modèle "
+                    "prédictif basé sur l'historique de recrutement). Argument de candidature "
+                    "spontanée. Source : La Bonne Boîte (France Travail)."
                 )
                 if not codes_resolus_cv:
                     st.info("Sélectionne au moins un poste ci-dessus.")
@@ -604,7 +465,7 @@ with tab_profil:
                         hide_index=True,
                         column_config={
                             "Part des offres": st.column_config.NumberColumn(
-                                "Part des offres", format="%.1f%%"
+                                "Part d'occurrence", format="%.1f%%"
                             )
                         },
                     )
@@ -735,7 +596,7 @@ with tab_avance:
     if "code_rome_choisi" not in st.session_state:
         st.info(
             "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les Compléments d'analyse "
-            "s'appuient sur l'analyse automatique de l'onglet Tendance."
+            "s'appuient sur l'analyse automatique de l'onglet Analyse principale."
         )
     else:
         code_rome_actif = st.session_state["code_rome_choisi"]
@@ -779,31 +640,40 @@ with tab_avance:
                 couleurs_contrats = [
                     palette_contrats[i % len(palette_contrats)] for i in range(len(df_contrats_tri))
                 ]
-                # Taille basée sur la racine carrée du nombre d'offres (pas la valeur brute) :
-                # compresse l'écart entre le plus petit et le plus grand contrat (ex: 12 vs 129)
-                # pour que même la plus petite sphère reste assez grande pour contenir son
-                # étiquette proprement — avec la valeur brute, l'écart de taille entre CDI et
-                # Intérim faisait déborder le texte hors de la petite sphère.
-                tailles_base = df_contrats_tri["nombre_offres"] ** 0.5
-                # Écartement horizontal entre sphères (x2, au lieu de positions 0,1,2...) pour
+                # Taille proportionnelle à l'AIRE du nombre d'offres brut, SANS compression
+                # supplémentaire (une racine carrée avait été appliquée en plus du sizemode="area"
+                # déjà en place, ce qui écrasait trop l'écart entre les valeurs — un 50 rendait
+                # quasiment la même taille qu'un 20, un 10 la même taille qu'un 5). La lisibilité
+                # du texte dans les petites sphères est assurée autrement : un plancher de taille
+                # (sizemin) ET une police PAR SPHÈRE, plus petite pour les petites valeurs plutôt
+                # que de gonfler artificiellement leur taille.
+                tailles_base = df_contrats_tri["nombre_offres"]
+                valeur_max = tailles_base.max()
+                # Police entre 10 et 18 pt, sur la racine carrée du ratio à la valeur max (la
+                # racine carrée reflète le rayon, dimension realmente perçue visuellement, pas
+                # l'aire) — reste lisible même sur la plus petite sphère, sans être minuscule.
+                polices_contrats = [
+                    round(10 + 8 * ((v / valeur_max) ** 0.5), 1) for v in tailles_base
+                ]
+                # Écartement horizontal entre sphères (x2.4, au lieu de positions 0,1,2...) pour
                 # garantir un espace visible entre elles même quand il y a plusieurs types de
                 # contrat — sans ça, des sphères voisines se touchaient ou se chevauchaient
                 # (constaté avec 5 types de contrat affichés simultanément).
-                positions_x = [i * 2.0 for i in range(len(df_contrats_tri))]
+                positions_x = [i * 2.4 for i in range(len(df_contrats_tri))]
                 fig_contrats = go.Figure(
                     go.Scatter(
                         x=positions_x,
                         y=[0] * len(df_contrats_tri),
                         mode="markers+text",
                         marker=dict(
-                            # sizemode="area" + cette formule rend l'AIRE du cercle proportionnelle
-                            # à tailles_base — le diamètre cible maximal est relevé (110 -> 160) pour
-                            # que l'ensemble des sphères soit plus grand, et sizemin relevé (18 -> 55)
-                            # pour garantir un plancher suffisant à la plus petite d'entre elles.
+                            # sizemode="area" rend l'AIRE du cercle proportionnelle à
+                            # nombre_offres — le diamètre cible maximal (150) fixe la taille de
+                            # la plus grande sphère, sizemin garantit un plancher pour que même
+                            # la plus petite valeur reste visible et manipulable.
                             size=tailles_base,
                             sizemode="area",
-                            sizeref=2.0 * tailles_base.max() / (160.0 ** 2),
-                            sizemin=55,
+                            sizeref=2.0 * valeur_max / (150.0 ** 2),
+                            sizemin=38,
                             color=couleurs_contrats,
                             line=dict(width=2, color="white"),
                         ),
@@ -815,7 +685,7 @@ with tab_avance:
                             for row in df_contrats_tri.itertuples()
                         ],
                         textposition="middle center",
-                        textfont=dict(size=13, color="white"),
+                        textfont=dict(size=polices_contrats, color="white"),
                         hoverinfo="skip",
                     )
                 )
