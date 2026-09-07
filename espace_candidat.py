@@ -16,6 +16,7 @@ pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
 
 import streamlit as st
 import pandas as pd
+import re
 from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import plotly.express as px
@@ -33,6 +34,20 @@ st.divider()
 tab_cv, tab_profil, tab_entreprises, tab_avance = st.tabs(
     ["🧾 Créer mon CV", "🎯 Tendance par profil", "📇 Fiches entreprises", "🧩 KPIs avancés"]
 )
+
+
+def _nom_ville_simplifie(libelle_brut):
+    """
+    Simplifie un libellé de lieu France Travail (souvent "code - Nom commune",
+    parfois avec un arrondissement) en un nom de ville regroupable — utilisé
+    pour la carte "Répartition géographique" : sans ça, "Marseille 1er
+    Arrondissement" et "Marseille 6e Arrondissement" comptaient comme deux
+    villes séparées, chacune avec un minuscule point sur la carte, plutôt
+    qu'un seul point "Marseille" agrégé.
+    """
+    nom = libelle_brut.split(" - ", 1)[-1].strip() if " - " in libelle_brut else libelle_brut.strip()
+    nom = re.sub(r"\s+\d+\s*(er|e|ème)?\s+arrondissement.*$", "", nom, flags=re.IGNORECASE).strip()
+    return nom or libelle_brut
 
 
 def _afficher_fiche_entreprise(nom_entreprise):
@@ -149,7 +164,7 @@ def _afficher_fiche_entreprise(nom_entreprise):
 # "Métier recherché" doit être en place avant que ce champ ne soit affiché)
 # ---------------------------------------------------------------------------
 with tab_cv:
-    afficher_generateur_cv(fonction_analyse_competences=analyser_competences)
+    afficher_generateur_cv(fonction_analyse_competences=analyser_competences_elargi)
 
 # ---------------------------------------------------------------------------
 # Onglet 1 : Tendance par profil
@@ -418,11 +433,38 @@ with tab_profil:
                     entreprises_potentiel = rechercher_entreprises_potentiel_embauche(
                         codes_resolus_cv[0], departement_actif
                     )
+                    # Repli national : un "hits":0 / une liste vide au niveau département
+                    # est une réponse VALIDE de La Bonne Boîte (son modèle prédictif n'a
+                    # simplement pas de données pour ce métier précis dans ce département),
+                    # pas forcément une panne — on retente sans filtre département avant
+                    # de conclure à une absence totale de données pour ce métier.
+                    recherche_nationale_repli = False
+                    if entreprises_potentiel is not None and not entreprises_potentiel:
+                        entreprises_potentiel_nationales = rechercher_entreprises_potentiel_embauche(
+                            codes_resolus_cv[0], None
+                        )
+                        if entreprises_potentiel_nationales:
+                            entreprises_potentiel = entreprises_potentiel_nationales
+                            recherche_nationale_repli = True
+
                     if entreprises_potentiel is None:
-                        st.info("Aucune donnée disponible pour ces critères.")
+                        st.info(
+                            "Aucune donnée disponible pour ces critères — l'appel API a échoué "
+                            "(voir le diagnostic ci-dessous pour le détail)."
+                        )
                     elif not entreprises_potentiel:
-                        st.info("Aucune entreprise à fort potentiel identifiée pour ces critères.")
+                        st.info(
+                            "Aucune entreprise à fort potentiel identifiée pour ce métier, ni dans "
+                            "ce département ni à l'échelle nationale — La Bonne Boîte n'a pas "
+                            "toujours de données prédictives pour tous les métiers (ce n'est pas "
+                            "une erreur de l'app, juste une absence de données pour ce cas précis)."
+                        )
                     else:
+                        if recherche_nationale_repli:
+                            st.caption(
+                                "ℹ️ Aucun résultat dans le département sélectionné pour ce métier — "
+                                "liste ci-dessous à l'échelle nationale à la place."
+                            )
                         df_potentiel = pd.DataFrame(
                             [
                                 {
@@ -587,19 +629,41 @@ with tab_profil:
                             )
                         df_carte["latitude"] = df_carte["latitude"].astype(float)
                         df_carte["longitude"] = df_carte["longitude"].astype(float)
+                        df_carte["approximatif"] = df_carte["approximatif"].astype(bool)
+
+                        # Regroupement des arrondissements/quartiers d'une même ville sous
+                        # un point unique (ex: "Marseille 1er Arrondissement" et "Marseille
+                        # 6e Arrondissement" comptaient jusqu'ici comme deux villes séparées,
+                        # avec chacune un minuscule point) — calculé APRÈS nb_offres_approx
+                        # ci-dessus, qui doit rester basé sur les lieux bruts.
+                        df_carte["ville"] = df_carte["ville"].map(_nom_ville_simplifie)
+                        df_carte = (
+                            df_carte.groupby("ville", as_index=False)
+                            .agg(
+                                nombre_offres=("nombre_offres", "sum"),
+                                latitude=("latitude", "mean"),
+                                longitude=("longitude", "mean"),
+                                approximatif=("approximatif", "min"),
+                            )
+                        )
+
                         df_carte["pourcentage"] = (
                             (100 * df_carte["nombre_offres"] / total_region).round(1) if total_region else 0
                         )
-                        df_carte["approximatif"] = df_carte["approximatif"].astype(bool)
                         # Étiquette texte affichée directement sur chaque point de la carte
                         # (en plus du détail au survol) — évite d'avoir à survoler chaque
                         # point pour connaître son poids relatif.
                         df_carte["etiquette_pourcentage"] = df_carte["pourcentage"].map(lambda x: f"{x:.1f}%")
+                        # Taille de pastille dédiée à l'affichage (plancher à 4 offres
+                        # équivalentes) : les points à 1 ou 2 offres étaient auparavant
+                        # quasi invisibles sur la carte, sans changer la valeur réelle
+                        # affichée dans l'étiquette/l'infobulle.
+                        df_carte["taille_carte"] = df_carte["nombre_offres"].clip(lower=4)
                         try:
                             fig_carte = px.scatter_mapbox(
                                 df_carte,
                                 lat="latitude", lon="longitude",
-                                size="nombre_offres", size_max=30,
+                                size="taille_carte", size_max=55,
                                 color="approximatif",
                                 color_discrete_map={False: "#0066cc", True: "#e67e22"},
                                 hover_name="ville",
@@ -607,7 +671,7 @@ with tab_profil:
                                 hover_data={
                                     "nombre_offres": True, "pourcentage": ":.1f",
                                     "latitude": False, "longitude": False, "approximatif": False,
-                                    "etiquette_pourcentage": False,
+                                    "etiquette_pourcentage": False, "taille_carte": False,
                                 },
                                 labels={
                                     "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres",
@@ -615,9 +679,16 @@ with tab_profil:
                                 },
                                 zoom=8, height=450,
                             )
+                            # mode="markers+text" est INDISPENSABLE pour que le paramètre
+                            # "text" ci-dessus s'affiche réellement sur la carte — sans lui,
+                            # px.scatter_mapbox ne garde ce texte que pour l'infobulle,
+                            # jamais comme étiquette visible sur le point lui-même (bug
+                            # constaté : les pourcentages restaient invisibles malgré
+                            # "text=" déjà renseigné).
                             fig_carte.update_traces(
+                                mode="markers+text",
                                 textposition="top center",
-                                textfont=dict(size=11, color="white"),
+                                textfont=dict(size=13, color="white"),
                             )
                             fig_carte.update_layout(
                                 mapbox_style="carto-darkmatter",
@@ -774,9 +845,6 @@ with tab_avance:
             elif nb_avec_salaire == 0:
                 st.info("Aucune des offres trouvées n'indique de salaire.")
             else:
-                pct = round(100 * nb_avec_salaire / nb_total_offres)
-                st.metric("Offres indiquant un salaire (tous contrats)", f"{nb_avec_salaire} / {nb_total_offres} ({pct}%)")
-
                 df_salaires_cdi = (
                     df_salaires[df_salaires["Type de contrat"] == "CDI"]
                     if "Type de contrat" in df_salaires.columns
@@ -785,27 +853,47 @@ with tab_avance:
                 if df_salaires_cdi.empty:
                     st.info("Aucune offre en CDI avec salaire indiqué pour ces critères.")
                 else:
-                    groupement_choisi = st.radio(
-                        "Regrouper les salaires (CDI uniquement) par",
-                        ["Poste", "Entreprise"],
-                        horizontal=True,
-                        key="salaire_groupement",
-                    )
-                    df_salaires_groupes = (
-                        df_salaires_cdi.groupby(groupement_choisi, as_index=False)
-                        .agg(
-                            nombre_offres=(groupement_choisi, "count"),
-                            salaires=("Salaire indiqué", lambda s: " · ".join(sorted(set(s)))),
+                    # Jauge visuelle (min -> max), sans détail par poste ni par entreprise —
+                    # juste la fourchette globale des salaires CDI indiqués dans l'échantillon.
+                    bornes = [_extraire_bornes_salaire(s) for s in df_salaires_cdi["Salaire indiqué"]]
+                    valeurs_min = [b[0] for b in bornes if b[0] is not None]
+                    valeurs_max = [b[1] for b in bornes if b[1] is not None]
+                    if not valeurs_min or not valeurs_max:
+                        st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
+                    else:
+                        borne_basse = min(valeurs_min)
+                        borne_haute = max(valeurs_max)
+                        fig_jauge = go.Figure(
+                            go.Bar(
+                                x=[borne_haute - borne_basse],
+                                y=[""],
+                                base=[borne_basse],
+                                orientation="h",
+                                marker=dict(color="#2E86DE"),
+                                text=[f"{borne_basse:,.0f} € — {borne_haute:,.0f} € / an".replace(",", " ")],
+                                textposition="inside",
+                                insidetextanchor="middle",
+                                textfont=dict(size=15, color="white"),
+                                hoverinfo="skip",
+                            )
                         )
-                        .sort_values("nombre_offres", ascending=False)
-                        .reset_index(drop=True)
-                    )
-                    st.dataframe(
-                        df_salaires_groupes.rename(
-                            columns={"nombre_offres": "Nombre d'offres CDI", "salaires": "Salaires indiqués"}
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
+                        fig_jauge.update_xaxes(visible=False)
+                        fig_jauge.update_yaxes(visible=False)
+                        fig_jauge.update_layout(
+                            height=90, margin=dict(t=10, l=10, r=10, b=10),
+                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig_jauge, use_container_width=True)
+
+                    # Repère de fiabilité déplacé ici en simple mention de source (au lieu
+                    # d'un gros st.metric qui lui donnait plus de poids visuel que ce n'est
+                    # qu'un indicateur de taille d'échantillon).
+                    pct = round(100 * nb_avec_salaire / nb_total_offres)
+                    st.caption(
+                        f"📎 Source : {nb_avec_salaire} offre(s) sur {nb_total_offres} indiquent un "
+                        f"salaire ({pct}%, tous types de contrat confondus) — fourchette ci-dessus "
+                        "calculée uniquement sur les offres CDI parmi elles."
                     )
 
             st.divider()
