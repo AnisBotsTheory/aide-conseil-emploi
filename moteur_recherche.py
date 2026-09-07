@@ -3173,11 +3173,28 @@ def _get_token_evenements(scope):
     return r.json()["access_token"]
 
 
-def rechercher_evenements_emploi(codes_rome, departement=None, jours_max=90, page_size=20):
+def rechercher_evenements_emploi(
+    codes_rome, departement=None, jours_max=90, page_size=50, modalite=None, public_cible=None
+):
     """
     Recherche des événements "Mes événements emploi" (forums, salons, ateliers,
     job dating...) pertinents pour le(s) code(s) ROME donnés, sur les
     "jours_max" prochains jours (par défaut 90).
+
+    modalite (optionnel) : "ENPHY" (présentiel) ou "ADIST" (distanciel), tel
+    qu'attendu par l'API — None = pas de filtre, les deux modalités remontent.
+    public_cible (optionnel) : liste de codes du référentiel officiel (ex:
+    [1, 2] pour "Ouvert aux jeunes" + "Débutant(e) accepté(e)") — None = pas
+    de filtre.
+
+    page_size relevé par défaut (20 -> 50) : les résultats sont triés par
+    défaut par date croissante, et plusieurs événements sont récurrents
+    (ex: "Les Mardis du recrutement", chaque semaine) — un tri par date
+    ascendante sur une petite page peut faire remonter presque uniquement la
+    toute prochaine occurrence de ces événements récurrents, donnant
+    l'impression trompeuse que "toutes les dates sont identiques" alors que
+    d'autres événements à des dates différentes existent plus loin dans les
+    résultats.
 
     Renvoie une liste de dicts (contenu brut de l'API, potentiellement vide)
     ou None en cas d'échec — dégradation silencieuse, comme partout ailleurs
@@ -3200,6 +3217,10 @@ def rechercher_evenements_emploi(codes_rome, departement=None, jours_max=90, pag
         corps["secteurActivite"] = grand_domaine
     if departement:
         corps["departements"] = [str(departement)]
+    if modalite:
+        corps["modalite"] = modalite
+    if public_cible:
+        corps["publicCible"] = list(public_cible)
 
     headers = {
         "Authorization": f"Bearer {token}", "Accept": "application/json",
