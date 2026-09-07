@@ -780,18 +780,30 @@ def rechercher_entreprises_potentiel_embauche(code_rome, departement=None, page_
     if r.status_code not in (200, 206):
         return None
     try:
-        return r.json().get("items", [])
+        data = r.json()
     except ValueError:
         return None
+    # "items" est la clé confirmée par la doc officielle, mais en l'absence de
+    # confirmation à 100% sur le format réel (constaté : /nombreEntreprise et
+    # /recherche peuvent diverger), on tente aussi quelques clés alternatives
+    # plausibles avant d'abandonner — évite de renvoyer [] à tort si la vraie
+    # clé s'avère différente de "items".
+    for cle_candidate in ("items", "results", "companies", "entreprises", "data"):
+        valeur = data.get(cle_candidate)
+        if isinstance(valeur, list):
+            return valeur
+    return []
 
 
 def diagnostiquer_la_bonne_boite(code_rome="M1805", departement="13"):
     """
-    Outil de DIAGNOSTIC pour La Bonne Boîte — endpoint et scopes désormais
-    confirmés par la doc officielle (nombreEntreprise), donc ce diagnostic sert
-    surtout à vérifier que ça répond bien en conditions réelles plutôt qu'à
-    tester des candidats à l'aveugle comme avant. Pas utilisé par le flux
-    normal de l'app.
+    Outil de DIAGNOSTIC pour La Bonne Boîte — teste désormais LES DEUX endpoints
+    utilisés par l'app (/nombreEntreprise ET /recherche), pas seulement le
+    premier comme avant : un "hits" non nul sur /nombreEntreprise ne garantit
+    pas que /recherche renvoie quelque chose d'exploitable — ce sont deux
+    endpoints distincts, potentiellement avec un format de réponse ou une clé
+    de résultat différente. Ce diagnostic sert surtout à comparer les deux
+    réponses brutes plutôt qu'à tester des candidats à l'aveugle.
     """
     try:
         token = _get_token_la_bonne_boite(LA_BONNE_BOITE_SCOPE)
@@ -814,14 +826,28 @@ def diagnostiquer_la_bonne_boite(code_rome="M1805", departement="13"):
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     params = {"rome": [code_rome], "department_number": [int(departement)]} if departement.isdigit() else {"rome": [code_rome]}
     resultats_diagnostic = [{"etape": "token obtenu"}]
+
     try:
         r = requests.get(
             "https://api.francetravail.io/partenaire/labonneboite/v2/nombreEntreprise",
             headers=headers, params=params, timeout=8,
         )
-        resultats_diagnostic.append({"status": r.status_code, "reponse": r.text[:500]})
+        resultats_diagnostic.append({"endpoint": "nombreEntreprise", "status": r.status_code, "reponse": r.text[:500]})
     except requests.RequestException as e:
-        resultats_diagnostic.append({"erreur": str(e)})
+        resultats_diagnostic.append({"endpoint": "nombreEntreprise", "erreur": str(e)})
+
+    params_recherche = dict(params)
+    params_recherche["page"] = 1
+    params_recherche["page_size"] = 10
+    try:
+        r2 = requests.get(
+            "https://api.francetravail.io/partenaire/labonneboite/v2/recherche",
+            headers=headers, params=params_recherche, timeout=8,
+        )
+        resultats_diagnostic.append({"endpoint": "recherche", "status": r2.status_code, "reponse": r2.text[:1500]})
+    except requests.RequestException as e:
+        resultats_diagnostic.append({"endpoint": "recherche", "erreur": str(e)})
+
     return resultats_diagnostic
 
 
@@ -2910,38 +2936,64 @@ def repartition_contrats_et_salaires_elargi(codes_rome, mots_cles_libres, depart
     return _agreger_contrats_et_salaires(toutes_offres)
 
 
+_RE_MONTANT_EUROS = re.compile(r"(\d[\d\s\u2009.,]*\d|\d)\s*(?:€|euros?)", re.IGNORECASE)
+
+
+def _nettoyer_montant_numerique(brut):
+    """Convertit un fragment numérique brut (espaces/points/virgules mélangés
+    selon la source) en float, ou None si non convertible."""
+    nettoye = brut.replace("\u2009", "").replace(" ", "").replace(",", ".")
+    morceaux = nettoye.split(".")
+    # Plusieurs points dans un même nombre (ex: séparateur de milliers "36.000.00")
+    # : on ne garde le dernier "." comme séparateur décimal que s'il isole 1 ou 2
+    # chiffres (cas d'un vrai décimal) ; sinon tous les points sont des séparateurs
+    # de milliers à retirer.
+    if len(morceaux) > 2:
+        if len(morceaux[-1]) <= 2:
+            nettoye = "".join(morceaux[:-1]) + "." + morceaux[-1]
+        else:
+            nettoye = "".join(morceaux)
+    try:
+        return float(nettoye)
+    except ValueError:
+        return None
+
+
 def _extraire_bornes_salaire(libelle_salaire):
     """
-    Extrait les bornes numériques (min, max) d'un libellé de salaire en texte
-    libre (ex: "Annuel de 36000.0 Euros à 45000.0 Euros", "35 000 € par an") —
-    France Travail et Adzuna ne renvoient pas de champ salaire structuré en
-    montants séparés, seulement ce libellé déjà formaté pour l'affichage.
-    Best-effort : prend tous les nombres trouvés dans le texte et retourne
-    (min(nombres), max(nombres)) — pour un libellé à une seule valeur, min et
-    max seront identiques. Retourne (None, None) si aucun nombre n'est trouvé.
+    Extrait les bornes (min, max) d'un libellé de salaire en texte libre (ex:
+    "Annuel de 36000.0 Euros à 45000.0 Euros", "Mensuel de 1900.0 Euros à
+    2100.0 Euros sur 12.0 mois", "35 000 € par an") — France Travail et Adzuna
+    ne renvoient pas de champ salaire structuré en montants séparés, seulement
+    ce libellé déjà formaté pour l'affichage.
+
+    Ne retient QUE les nombres directement accolés à "euros"/"€" dans le texte
+    (regex _RE_MONTANT_EUROS) — un montant "Mensuel de X Euros à Y Euros sur
+    12.0 mois" contient un "12" qui n'est PAS un montant mais un nombre de
+    mois : le prendre en compte (bug corrigé ici) pouvait faire apparaître un
+    minimum absurde comme "12 €" dans une fourchette par ailleurs à 5 chiffres.
+
+    Normalise le résultat en équivalent ANNUEL : un montant "Mensuel" est
+    multiplié par 12 (approximation standard, hors 13e mois éventuel). Un
+    montant "Horaire" est ignoré (retourne None, None) — le convertir en
+    annuel nécessiterait de connaître le temps de travail réel de l'offre
+    (temps plein/partiel), une approximation trop risquée pour une fourchette
+    affichée telle quelle ; mieux vaut exclure ces offres du calcul que
+    mélanger des montants horaires et annuels dans la même fourchette.
     """
     if not libelle_salaire:
         return None, None
-    nombres_bruts = re.findall(r"\d[\d\s\u2009.,]*\d|\d", libelle_salaire)
-    valeurs = []
-    for brut in nombres_bruts:
-        nettoye = brut.replace("\u2009", "").replace(" ", "").replace(",", ".")
-        morceaux = nettoye.split(".")
-        # Plusieurs points dans un même nombre (ex: séparateur de milliers "36.000.00")
-        # : on ne garde le dernier "." comme séparateur décimal que s'il isole 1 ou 2
-        # chiffres (cas d'un vrai décimal) ; sinon tous les points sont des séparateurs
-        # de milliers à retirer.
-        if len(morceaux) > 2:
-            if len(morceaux[-1]) <= 2:
-                nettoye = "".join(morceaux[:-1]) + "." + morceaux[-1]
-            else:
-                nettoye = "".join(morceaux)
-        try:
-            valeurs.append(float(nettoye))
-        except ValueError:
-            continue
+    texte_minuscule = libelle_salaire.lower()
+    if "horaire" in texte_minuscule:
+        return None, None
+
+    montants_bruts = _RE_MONTANT_EUROS.findall(libelle_salaire)
+    valeurs = [v for v in (_nettoyer_montant_numerique(b) for b in montants_bruts) if v is not None]
     if not valeurs:
         return None, None
+
+    multiplicateur = 12 if "mensuel" in texte_minuscule else 1
+    valeurs = [v * multiplicateur for v in valeurs]
     return min(valeurs), max(valeurs)
 
 
