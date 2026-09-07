@@ -17,6 +17,7 @@ pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
 import streamlit as st
 import pandas as pd
 import re
+import random
 from collections import Counter
 from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
@@ -32,8 +33,8 @@ st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
 st.divider()
 
-tab_cv, tab_profil, tab_entreprises, tab_avance = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance par profil", "📇 Fiches entreprises", "🧩 KPIs avancés"]
+tab_cv, tab_profil, tab_avance, tab_evenements = st.tabs(
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés", "📅 Événements"]
 )
 
 
@@ -41,123 +42,14 @@ def _nom_ville_simplifie(libelle_brut):
     """
     Simplifie un libellé de lieu France Travail (souvent "code - Nom commune",
     parfois avec un arrondissement) en un nom de ville regroupable — utilisé
-    pour la carte "Répartition géographique" : sans ça, "Marseille 1er
-    Arrondissement" et "Marseille 6e Arrondissement" comptaient comme deux
-    villes séparées, chacune avec un minuscule point sur la carte, plutôt
-    qu'un seul point "Marseille" agrégé.
+    pour le classement des villes dans "Dynamisme géographique" : sans ça,
+    "Marseille 1er Arrondissement" et "Marseille 6e Arrondissement" comptaient
+    comme deux villes séparées dans le classement, au lieu d'être regroupées
+    sous "Marseille".
     """
     nom = libelle_brut.split(" - ", 1)[-1].strip() if " - " in libelle_brut else libelle_brut.strip()
     nom = re.sub(r"\s+\d+\s*(er|e|ème)?\s+arrondissement.*$", "", nom, flags=re.IGNORECASE).strip()
     return nom or libelle_brut
-
-
-def _afficher_fiche_entreprise(nom_entreprise):
-    """
-    Affiche la fiche complète d'une entreprise, un accordéon par source (repliés
-    par défaut — le libellé de chaque accordéon sert de résumé visible sans tout
-    dérouler), puis la liste des sources réellement utilisées. Structure pensée
-    pour rester lisible même si d'autres sources s'ajoutent plus tard (Pappers,
-    INPI...). Appelée à la fois depuis "Tendance par profil" (onglet Recruteurs)
-    et depuis l'onglet "Fiches entreprises" (recherche libre).
-    """
-    with st.spinner(f"Récupération des informations sur {nom_entreprise}..."):
-        fiche = rechercher_entreprise_siren(nom_entreprise)
-        offres_entreprise = rechercher_offres_entreprise(nom_entreprise)
-        infos_entretien = infos_entretien_entreprise(nom_entreprise, offres_entreprise)
-        wikipedia = rechercher_wikipedia_entreprise(nom_entreprise)
-        wikidata = rechercher_wikidata_entreprise(wikipedia["wikidata_id"]) if wikipedia else None
-
-    if not fiche and not infos_entretien and not wikipedia:
-        st.info(
-            f"Aucune information trouvée pour « {nom_entreprise} » — vérifie l'orthographe, "
-            "ou l'entreprise n'est pas répertoriée dans les sources disponibles."
-        )
-        return
-
-    st.markdown(f"**{nom_entreprise}**")
-    sources_utilisees = []
-
-    if wikipedia:
-        with st.expander(f"📖 Wikipédia — {wikipedia['titre']}"):
-            st.markdown(wikipedia["extrait"])
-            if wikipedia["url"]:
-                st.markdown(f"[Lire l'article complet]({wikipedia['url']})")
-        sources_utilisees.append(f"Wikipédia (article « {wikipedia['titre']} »)")
-
-    if wikidata:
-        with st.expander("📊 Wikidata — secteurs, effectif, filiales"):
-            if wikidata["secteurs"]:
-                st.markdown(f"**Secteurs d'intervention :** {', '.join(wikidata['secteurs'])}")
-            if wikidata["effectif"]:
-                st.markdown(f"**Effectif :** {wikidata['effectif']:,}".replace(",", " ") + " salarié(s)")
-            if wikidata["filiales"]:
-                st.markdown(f"**Filiales :** {', '.join(wikidata['filiales'])}")
-        sources_utilisees.append("Wikidata")
-
-    if infos_entretien and (infos_entretien["description"] or infos_entretien["secteur_libelle"]):
-        with st.expander("💼 France Travail — présentation par l'entreprise"):
-            if infos_entretien["secteur_libelle"]:
-                st.markdown(f"**Domaine d'activité :** {infos_entretien['secteur_libelle']}")
-            if infos_entretien["description"]:
-                st.markdown(f"**Présentation (par l'entreprise elle-même) :** {infos_entretien['description']}")
-            if infos_entretien.get("tranche_effectif"):
-                st.markdown(
-                    f"**Effectif (déclaré sur l'offre) :** {infos_entretien['tranche_effectif']} "
-                    "— déclaratif, présent sur ~20% des offres seulement."
-                )
-            if infos_entretien.get("entreprise_adaptee"):
-                st.markdown("♿ Entreprise adaptée")
-            if infos_entretien.get("employeur_handi_engage"):
-                st.markdown("🏅 Employeur reconnu \"Handi-engagé\"")
-            if infos_entretien.get("date_creation_offre"):
-                try:
-                    date_formatee = datetime.strptime(
-                        infos_entretien["date_creation_offre"][:10], "%Y-%m-%d"
-                    ).strftime("%d/%m/%Y")
-                except ValueError:
-                    date_formatee = infos_entretien["date_creation_offre"][:10]
-                st.caption(f"ℹ️ Informations tirées de l'offre la plus récente trouvée, publiée le {date_formatee}.")
-        sources_utilisees.append("France Travail (offre publiée par l'entreprise)")
-
-    if fiche:
-        with st.expander("🏛️ Informations administratives (SIRENE)"):
-            st.caption(
-                "⚠️ Correspondance approximative sur le nom (à vérifier via le lien "
-                "ci-dessous), surtout pour un nom court ou courant."
-            )
-            if fiche["secteur_libelle"]:
-                st.markdown(f"**Secteur (NAF) :** {fiche['secteur_libelle']} ({fiche['naf']})")
-            elif fiche["naf"]:
-                st.markdown(f"**Secteur (code NAF) :** {fiche['naf']}")
-            st.markdown(f"**Effectif :** {fiche['tranche_effectif_libelle']}")
-            st.markdown(f"**Catégorie :** {fiche['categorie_entreprise'] or 'Non renseignée'}")
-            st.markdown(
-                "**Présence géographique :** "
-                + (
-                    f"{fiche['nombre_etablissements_ouverts']} établissement(s) ouvert(s)"
-                    if fiche["nombre_etablissements_ouverts"] else "Non renseignée"
-                )
-            )
-            if fiche["adresse"]:
-                st.markdown(f"📍 Siège : {fiche['adresse']}")
-            if fiche["date_creation"]:
-                st.markdown(f"🗓️ Créée le {fiche['date_creation']}")
-            if fiche["siret_siege"]:
-                st.markdown(f"🔢 SIREN {fiche['siren']} — SIRET (siège) {fiche['siret_siege']}")
-            if fiche["est_qualiopi"]:
-                st.markdown("🏅 Organisme certifié Qualiopi")
-            if fiche["url_annuaire"]:
-                st.markdown(f"🔗 [Vérifier sur l'Annuaire des Entreprises]({fiche['url_annuaire']})")
-        sources_utilisees.append("Recherche d'entreprises (DINUM — données SIRENE/INSEE)")
-    else:
-        st.caption(
-            "ℹ️ Aucune fiche administrative trouvée pour ce nom dans le répertoire "
-            "des entreprises françaises (nom trop générique, entreprise étrangère, "
-            "ou diffusion restreinte)."
-        )
-
-    if sources_utilisees:
-        st.caption("📚 Sources : " + " · ".join(sources_utilisees) + ".")
 
 
 # ---------------------------------------------------------------------------
@@ -179,13 +71,21 @@ with tab_profil:
     postes_cv = st.session_state.get("cv_postes_recherche", [])
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
-    departement_cv = st.session_state.get("cv_departement") or "13"
+    departement_cv = st.session_state.get("cv_departement")
 
     if not postes_cv:
         st.info(
             "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV**, puis sélectionne au "
             "moins une suggestion parmi les étiquettes proposées — l'analyse se lance ensuite "
             "automatiquement, pas besoin de ressaisir quoi que ce soit ici."
+        )
+    elif not departement_cv:
+        # Cas de bord : le département a été effacé après la sélection du poste (retour à
+        # "Non renseigné" dans "Créer mon CV") — pas de repli silencieux sur un département
+        # arbitraire, on redemande explicitement.
+        st.info(
+            "👉 Ton département de résidence n'est plus renseigné — retourne dans l'onglet "
+            "**🧾 Créer mon CV** pour le sélectionner avant de relancer l'analyse."
         )
     else:
         # Poste(s) et département viennent uniquement de "Créer mon CV" (étiquettes de
@@ -238,8 +138,8 @@ with tab_profil:
             jours_max_periode_offres = (aujourdhui - debut_periode).days
             titre_libre_cv = st.session_state.get("cv_titre", "").strip()
 
-            sous_tab_tension, sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
-                ["⚖️ Tension", "🏢 Recruteurs", "🎓 Certifications", "📍 Dynamisme géographique"]
+            sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes, sous_tab_tension = st.tabs(
+                ["🏢 Recruteurs", "🎓 Compétences", "📍 Dynamisme géographique", "⚖️ Tension"]
             )
 
             with sous_tab_tension:
@@ -398,9 +298,7 @@ with tab_profil:
                     st.caption(
                         "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
                         "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
-                        "peuvent valoir une candidature directe. Pour la fiche complète d'une "
-                        "entreprise (secteur, effectif, présentation...), direction l'onglet "
-                        "**📇 Fiches entreprises**."
+                        "peuvent valoir une candidature directe."
                     )
                     df_entreprises_affiche = df_entreprises.copy()
                     total_offres_entreprises = df_entreprises_affiche["nombre_offres"].sum()
@@ -595,9 +493,18 @@ with tab_profil:
 
                 # --- Dynamisme géographique : graphe comparatif gradué ---
                 st.markdown("##### 📊 Dynamisme géographique")
-                departements_comparaison = ["75", "13", "93", "23", "974", "06"]
-                if departement_actif not in departements_comparaison:
-                    departements_comparaison = departements_comparaison + [departement_actif]
+                # Comparaison avec des départements tirés au sort (stable tant que le
+                # département actif ne change pas, pour ne pas re-tirer à chaque
+                # interaction) — ton département est TOUJOURS inclus en plus des
+                # départements aléatoires.
+                cle_dep_aleatoires = "dynamisme_departements_aleatoires"
+                if st.session_state.get(f"{cle_dep_aleatoires}_pour") != departement_actif:
+                    autres_departements = [d for d in DEPARTEMENTS_VERS_NOM if d != departement_actif]
+                    st.session_state[cle_dep_aleatoires] = random.sample(
+                        autres_departements, min(5, len(autres_departements))
+                    )
+                    st.session_state[f"{cle_dep_aleatoires}_pour"] = departement_actif
+                departements_comparaison = [departement_actif] + st.session_state[cle_dep_aleatoires]
 
                 resultats_dynamisme = []
                 for dep_comp in departements_comparaison:
@@ -611,15 +518,15 @@ with tab_profil:
                     st.caption(
                         "ℹ️ L'échelle officielle exacte de cet indicateur France Travail (méthode "
                         "IA prospective sur le trimestre à venir) n'est pas documentée publiquement "
-                        "— ce graphique compare ton département à quelques territoires "
-                        "volontairement contrastés (Paris, Bouches-du-Rhône, Seine-Saint-Denis, "
-                        "Creuse, La Réunion, Alpes-Maritimes) pour donner un repère relatif, pas "
-                        "une échelle absolue. Chaque graduation correspond à une valeur observée ; "
-                        "le survol indique quel(s) département(s) s'y trouvent."
+                        "— ce graphique compare ton département à quelques départements tirés au "
+                        "sort pour donner un repère relatif, pas une échelle absolue. Un bloc par "
+                        "valeur observée, les départements qui la partagent sont nommés à "
+                        "l'intérieur du bloc."
                     )
-                    # Même principe graphique que la jauge de salaire : un bloc par valeur
-                    # DISTINCTE observée, triée croissant, avec les départements partageant
-                    # une même valeur regroupés au survol.
+                    # Un bloc par valeur DISTINCTE observée, de largeur ÉGALE (pas proportionnelle
+                    # à l'écart numérique entre valeurs, contrairement à la jauge de salaire — ici
+                    # l'écart entre deux valeurs de dynamisme n'a pas de signification proportionnelle
+                    # connue) — les départements partageant une même valeur sont nommés DANS le bloc.
                     valeurs_par_dep = {}
                     for r in resultats_dynamisme:
                         valeurs_par_dep.setdefault(round(r["valeur"], 1), []).append(r["departement"])
@@ -629,37 +536,34 @@ with tab_profil:
                         st.metric("Valeur observée (identique pour tous les départements comparés)", valeurs_graduees[0])
                     else:
                         palette_dyn = ["#2E86DE", "#10AC84", "#F9A826", "#8854D0", "#EE5A6F", "#01A3A4"]
-                        segments_largeur = [
-                            valeurs_graduees[i + 1] - valeurs_graduees[i]
-                            for i in range(len(valeurs_graduees) - 1)
-                        ]
-                        segments_base = valeurs_graduees[:-1]
-                        couleurs_segments = [
-                            palette_dyn[i % len(palette_dyn)] for i in range(len(segments_largeur))
-                        ]
-                        textes_survol = [
-                            ", ".join(
-                                f"{DEPARTEMENTS_VERS_NOM.get(d, d)} ({d})"
-                                + (" — ton département" if d == departement_actif else "")
+                        nb_blocs = len(valeurs_graduees)
+                        couleurs_blocs = [palette_dyn[i % len(palette_dyn)] for i in range(nb_blocs)]
+                        textes_blocs = [
+                            "<br>".join(
+                                f"{DEPARTEMENTS_VERS_NOM.get(d, d)}"
+                                + (" (toi)" if d == departement_actif else "")
                                 for d in valeurs_par_dep[v]
                             )
-                            for v in valeurs_graduees[1:]
+                            for v in valeurs_graduees
                         ]
                         fig_dyn = go.Figure(
                             go.Bar(
-                                x=segments_largeur,
-                                y=[""] * len(segments_largeur),
-                                base=segments_base,
+                                x=[1] * nb_blocs,
+                                y=[""] * nb_blocs,
+                                base=list(range(nb_blocs)),
                                 orientation="h",
-                                marker=dict(color=couleurs_segments, line=dict(width=1, color="#0e1117")),
-                                hovertext=textes_survol,
-                                hoverinfo="text",
+                                marker=dict(color=couleurs_blocs, line=dict(width=1, color="#0e1117")),
+                                text=textes_blocs,
+                                textposition="inside",
+                                insidetextanchor="middle",
+                                textfont=dict(size=11, color="white"),
+                                hoverinfo="skip",
                             )
                         )
                         fig_dyn.update_xaxes(
                             visible=True,
                             tickmode="array",
-                            tickvals=valeurs_graduees,
+                            tickvals=[i + 0.5 for i in range(nb_blocs)],
                             ticktext=[str(v) for v in valeurs_graduees],
                             tickfont=dict(size=12, color="white"),
                             showgrid=False,
@@ -667,7 +571,7 @@ with tab_profil:
                         )
                         fig_dyn.update_yaxes(visible=False)
                         fig_dyn.update_layout(
-                            height=110, margin=dict(t=20, l=10, r=10, b=30),
+                            height=130, margin=dict(t=20, l=10, r=10, b=30),
                             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                             showlegend=False,
                         )
@@ -724,30 +628,6 @@ with tab_profil:
                 "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
                 "avec prudence si tu cherches un point de comparaison sur ce type de poste."
             )
-
-# ---------------------------------------------------------------------------
-# Onglet "Fiches entreprises" — recherche libre par nom, indépendante du poste
-# sélectionné dans le CV. Utile pour préparer un entretien ou une candidature
-# spontanée sur une entreprise précise, ou pour une agence qui veut qualifier
-# un prospect avant de le démarcher.
-# ---------------------------------------------------------------------------
-with tab_entreprises:
-    st.caption(
-        "Tape le nom d'une entreprise pour voir sa fiche : secteur, taille, adresse, et — si "
-        "elle recrute actuellement sur le poste de ton CV — sa présentation et son domaine "
-        "d'activité tels qu'elle les décrit elle-même."
-    )
-
-    nom_recherche = st.text_input(
-        "Nom de l'entreprise", key="entreprises_nom_recherche", placeholder="ex: Capgemini, Signe+..."
-    )
-    bouton_rechercher_entreprise = st.button("Rechercher")
-
-    if bouton_rechercher_entreprise:
-        if not nom_recherche.strip():
-            st.error("Tape un nom d'entreprise avant de lancer la recherche.")
-        else:
-            _afficher_fiche_entreprise(nom_recherche.strip())
 
 # ---------------------------------------------------------------------------
 # Onglet "KPIs avancés"
@@ -986,3 +866,74 @@ with tab_avance:
                 "employeurs), différent des données d'offres réelles utilisées ailleurs dans "
                 "l'app. Dis-moi si tu veux qu'on l'ajoute."
             )
+
+# ---------------------------------------------------------------------------
+# Onglet "Événements" — forums, salons, ateliers, job dating... via l'API
+# "Mes événements emploi" de France Travail. Utilise le(s) code(s) ROME
+# résolus et le département renseignés dans "Créer mon CV" (comme les autres
+# onglets), pas de champ de recherche séparé.
+# ---------------------------------------------------------------------------
+with tab_evenements:
+    st.caption(
+        "Forums, salons, ateliers et job dating à venir (90 prochains jours), repérés via "
+        "l'API « Mes événements emploi » de France Travail — filtrés sur le grand domaine du "
+        "poste recherché et ton département."
+    )
+
+    postes_cv_evt = st.session_state.get("cv_postes_recherche", [])
+    codes_par_poste_evt = st.session_state.get("cv_codes_par_poste", {})
+    codes_resolus_evt = [c for c in codes_par_poste_evt.values() if c]
+    departement_evt = st.session_state.get("cv_departement") or "13"
+
+    if not postes_cv_evt:
+        st.info(
+            "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV** pour voir les "
+            "événements pertinents."
+        )
+    else:
+        with st.spinner("Recherche d'événements en cours..."):
+            evenements = rechercher_evenements_emploi(codes_resolus_evt, departement_evt)
+
+        if evenements is None:
+            st.info(
+                "Aucune donnée disponible — l'appel API a échoué (voir le diagnostic "
+                "ci-dessous pour le détail)."
+            )
+        elif not evenements:
+            st.info(
+                "Aucun événement à venir trouvé pour ce poste et ce département dans les 90 "
+                "prochains jours."
+            )
+        else:
+            df_evenements = pd.DataFrame(
+                [
+                    {
+                        "Titre": e.get("titre") or "N/C",
+                        "Date": (e.get("dateEvenement") or "")[:10],
+                        "Ville": e.get("ville") or "N/C",
+                        "Type": e.get("type") or "N/C",
+                        "Modalités": ", ".join(e.get("modalites") or []) or "N/C",
+                        "Lien": e.get("urlDetailEvenement") or "",
+                    }
+                    for e in evenements
+                ]
+            )
+            st.dataframe(
+                df_evenements,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Lien": st.column_config.LinkColumn("Lien", display_text="Voir la fiche")
+                },
+            )
+
+        with st.expander("🔧 Diagnostic technique Événements emploi (temporaire)"):
+            st.caption(
+                "Teste directement l'appel API pour le poste et le département actuellement "
+                "sélectionnés, et affiche la vraie réponse brute — utile pour vérifier "
+                "pourquoi une liste reste vide ou pour confirmer que l'intégration répond bien."
+            )
+            if st.button("Lancer le diagnostic", key="btn_diagnostic_evenements"):
+                with st.spinner("Test de l'appel Événements en cours..."):
+                    resultats_diag_evt = diagnostiquer_evenements(codes_resolus_evt, departement_evt)
+                st.json(resultats_diag_evt)
