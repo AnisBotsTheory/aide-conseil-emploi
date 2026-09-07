@@ -1064,11 +1064,14 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     st.markdown(
         "**Le parcours complet de l'application :**\n"
         "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
-        "que vous visez.\n"
+        "que vous visez (renseignez d'abord votre département, puis le poste).\n"
         "2. 🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
-        "renseigné : tension du marché, villes qui recrutent, top recruteurs à démarcher.\n"
-        "3. 📊 **Compléments d'analyse** — pour aller plus loin : évolution du marché, salaires, types "
-        "de contrat."
+        "renseigné : Top Recruteurs à démarcher, compétences et savoir-être les plus demandés, "
+        "dynamisme du département.\n"
+        "3. 📊 **Compléments d'analyse** — pour aller plus loin : types de contrat, fourchette "
+        "de salaire, niveau d'expérience demandé.\n"
+        "4. 📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
+        "département."
     )
 
     theme_choisi = st.radio(
