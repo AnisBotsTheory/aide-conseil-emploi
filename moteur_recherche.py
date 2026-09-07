@@ -982,24 +982,23 @@ FICHE_METIER_ENDPOINT = "https://api.francetravail.io/partenaire/rome-metiers/v1
 def recuperer_fiche_metier(code_rome):
     """
     Récupère la fiche métier officielle ROME 4.0 pour un code ROME donné :
-    compétences (fusionne CompetenceDetaillee ET MacroSavoirFaire — les deux
-    représentent un savoir pratique/technique, distinction jugée trop fine
-    pour un candidat), savoir-être professionnel et savoirs — un référentiel
-    OFFICIEL du métier, complémentaire (pas un remplacement) des "Compétences
-    les plus demandées" tirées des offres réelles (celui-ci décrit le métier
-    par définition, l'autre ce que les recruteurs demandent concrètement là
-    maintenant).
+    compétences détaillées, savoir-faire, savoir-être professionnel et savoirs
+    — les 4 dimensions TELLES QUE DÉFINIES par le référentiel officiel, gardées
+    SÉPARÉES (pas de fusion) pour rester cohérent avec ce que l'app annonce à
+    l'utilisateur. Complémentaire (pas un remplacement) des "Savoir-faire/
+    Savoir-être les plus demandés" tirés des offres réelles (celui-ci décrit
+    le métier par définition officielle, l'autre ce que les recruteurs
+    demandent concrètement là maintenant).
 
     Les 3 variantes renvoyées par l'API (mobilisées / émergentes / principales)
     sont fusionnées. Déduplication GLOBALE par libellé (pas seulement au sein
     d'une même catégorie) : un même libellé ne peut apparaître que dans une
-    seule des catégories retournées, même s'il ressort avec un type différent
-    selon la variante source — évite un doublon visible entre "Compétences" et
-    "Savoir-être" par exemple.
+    seule des 4 catégories retournées, même s'il ressort avec un type
+    différent selon la variante source.
 
-    Retourne un dict {"competences": [...], "savoir_etre": [...],
-    "savoirs": [...]} (listes de libellés, potentiellement vides) ou None en
-    cas d'échec ou si rien d'exploitable n'est renvoyé.
+    Retourne un dict {"competences": [...], "savoir_faire": [...],
+    "savoir_etre": [...], "savoirs": [...]} (listes de libellés, potentiellement
+    vides) ou None en cas d'échec ou si rien d'exploitable n'est renvoyé.
     """
     try:
         token = get_token(FICHES_METIERS_SCOPE)
@@ -1019,7 +1018,7 @@ def recuperer_fiche_metier(code_rome):
     except ValueError:
         return None
 
-    resultat = {"competences": [], "savoir_etre": [], "savoirs": []}
+    resultat = {"competences": [], "savoir_faire": [], "savoir_etre": [], "savoirs": []}
     libelles_vus = set()  # dédoublonnage GLOBAL, toutes catégories confondues
 
     def _ranger_items(items):
@@ -1030,13 +1029,16 @@ def recuperer_fiche_metier(code_rome):
             if not libelle or libelle in libelles_vus:
                 continue
             type_item = (item.get("type") or "").upper()
-            if "SAVOIR-ETRE" in type_item or "SAVOIR-ÊTRE" in type_item:
+            if "SAVOIR-FAIRE" in type_item:
+                cible = resultat["savoir_faire"]
+            elif "SAVOIR-ETRE" in type_item or "SAVOIR-ÊTRE" in type_item:
                 cible = resultat["savoir_etre"]
             elif type_item == "SAVOIR":
                 cible = resultat["savoirs"]
             else:
-                # COMPETENCE-DETAILLEE et MACRO-SAVOIR-FAIRE fusionnés ici —
-                # tous deux relèvent d'un savoir pratique/technique.
+                # COMPETENCE-DETAILLEE — compétence générique, distincte du
+                # savoir-faire (MACRO-SAVOIR-FAIRE) depuis la séparation des
+                # 4 catégories.
                 cible = resultat["competences"]
             cible.append(libelle)
             libelles_vus.add(libelle)
