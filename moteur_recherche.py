@@ -250,14 +250,14 @@ def calculer_correspondance_recruteur(
     return score_global, detail
 
 
-@st.cache_data(ttl=1800)
-def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
+def _agreger_competences(toutes_offres):
     """
-    Récupère les offres (même logique de filtrage que le reste de l'app) et
-    extrait leurs champs 'competences' et 'qualitesProfessionnelles' pour bâtir
-    5 listes de suggestions (compétences génériques / outils informatiques /
-    langages informatiques / certifications / savoir-être), chacune avec un %
-    d'offres qui la mentionne.
+    Agrège une liste d'offres déjà récupérées en 5 listes de suggestions
+    (compétences génériques / outils informatiques / langages informatiques /
+    certifications / savoir-être), chacune avec un % d'offres qui la mentionne
+    — logique extraite de analyser_competences() pour être réutilisable sur une
+    liste d'offres obtenue autrement (ex: fusion code(s) ROME + mots-clés dans
+    analyser_competences_elargi()).
 
     NB certifications : France Travail n'a pas de champ API dédié aux certifications
     (le schéma expose "formations" pour le niveau/domaine d'études requis, pas des
@@ -269,6 +269,82 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
     Le savoir-être (qualitesProfessionnelles), lui, EST un champ structuré dédié de
     l'API Offres d'emploi — pas de repérage par mot-clé nécessaire, contrairement
     aux certifications.
+    """
+    nb_total_offres = len(toutes_offres)
+    compteurs = {
+        "competence": Counter(), "outil": Counter(), "langage": Counter(),
+        "certification": Counter(), "savoir_etre": Counter(),
+    }
+
+    for offre in toutes_offres:
+        # "or []" et non ", []" en deuxième argument de .get() : l'API renvoie
+        # parfois explicitement "competences": null (une clé PRÉSENTE avec une
+        # valeur null, pas une clé absente) — dict.get(cle, defaut) ne retombe
+        # sur son défaut QUE si la clé est absente, jamais si sa valeur vaut déjà
+        # None. Sans le "or []", cela provoquait un TypeError (None non itérable)
+        # dès la première offre concernée, empêchant tout calcul de suggestions
+        # de se terminer (constaté en usage réel avec "qualitesProfessionnelles").
+        competences_offre = offre.get("competences") or []
+        libelles_vus = set()  # évite un double comptage si dupliqué dans la même offre
+        for comp in competences_offre:
+            libelle = (comp.get("libelle") or "").strip()
+            if not libelle or libelle in libelles_vus:
+                continue
+            libelles_vus.add(libelle)
+            categorie = _classifier_competence(libelle)
+            compteurs[categorie][libelle] += 1
+
+        # Certifications aussi repérées dans le texte complet de la fiche de poste
+        # (intitulé + description rédigée par le recruteur), pas seulement dans le
+        # champ structuré "competences" — une certification est souvent mentionnée
+        # en phrase libre ("Certification PMP appréciée", "CACES R489 requis")
+        # plutôt que comme un tag structuré.
+        texte_fiche_poste = f"{offre.get('intitule', '')} {offre.get('description', '')}".lower()
+        if texte_fiche_poste.strip():
+            for terme_certif in _REF_CERTIFICATIONS:
+                if terme_certif in texte_fiche_poste:
+                    libelle_certif = terme_certif.upper() if (" " not in terme_certif and len(terme_certif) <= 6) else terme_certif.title()
+                    compteurs["certification"][libelle_certif] += 1
+
+        # Savoir-être : champ structuré dédié, contrairement aux certifications.
+        # Même correctif "or []" que ci-dessus — champ fréquemment null en pratique
+        # (constaté : plus de la moitié des offres d'un échantillon réel).
+        for qualite in offre.get("qualitesProfessionnelles") or []:
+            libelle_qualite = (qualite.get("libelle") or "").strip()
+            if libelle_qualite:
+                compteurs["savoir_etre"][libelle_qualite] += 1
+
+    def _construire_df(compteur):
+        if nb_total_offres == 0:
+            return pd.DataFrame(columns=["libelle", "nombre_offres", "pourcentage"])
+        lignes = [
+            {"libelle": lib, "nombre_offres": n, "pourcentage": round(100 * n / nb_total_offres)}
+            for lib, n in compteur.most_common(15)
+        ]
+        # Colonnes explicites : pd.DataFrame([]) sans "columns=" ne crée AUCUNE colonne
+        # quand lignes est vide (ex: des offres ont été trouvées mais aucune ne mentionne
+        # de compétence dans cette catégorie précise) — provoquait un KeyError("libelle")
+        # plus loin sur df["libelle"] au lieu d'un DataFrame vide exploitable normalement.
+        return pd.DataFrame(lignes, columns=["libelle", "nombre_offres", "pourcentage"])
+
+    return (
+        _construire_df(compteurs["competence"]),
+        _construire_df(compteurs["outil"]),
+        _construire_df(compteurs["langage"]),
+        _construire_df(compteurs["certification"]),
+        _construire_df(compteurs["savoir_etre"]),
+        nb_total_offres,
+    )
+
+
+@st.cache_data(ttl=1800)
+def analyser_competences(code_rome, departement, mots_cles=None, secteur_activite=None, jours_max=None, max_pages=5):
+    """
+    Récupère les offres (même logique de filtrage que le reste de l'app) pour un
+    SEUL code ROME (ou "TOUS" + mots-clés), puis délègue l'agrégation à
+    _agreger_competences(). Conservée pour compatibilité — analyser_competences_elargi()
+    ci-dessous est la version recommandée dès qu'un ou plusieurs codes ROME résolus
+    sont disponibles (utilisée par "Créer mon CV").
     """
     token = get_token(SCOPE_OFFRES)
     url = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
@@ -295,62 +371,28 @@ def analyser_competences(code_rome, departement, mots_cles=None, secteur_activit
         if len(resultats) < taille_page:
             break
 
-    nb_total_offres = len(toutes_offres)
-    compteurs = {
-        "competence": Counter(), "outil": Counter(), "langage": Counter(),
-        "certification": Counter(), "savoir_etre": Counter(),
-    }
+    return _agreger_competences(toutes_offres)
 
-    for offre in toutes_offres:
-        competences_offre = offre.get("competences", [])
-        libelles_vus = set()  # évite un double comptage si dupliqué dans la même offre
-        for comp in competences_offre:
-            libelle = (comp.get("libelle") or "").strip()
-            if not libelle or libelle in libelles_vus:
-                continue
-            libelles_vus.add(libelle)
-            categorie = _classifier_competence(libelle)
-            compteurs[categorie][libelle] += 1
 
-        # Certifications aussi repérées dans le texte complet de la fiche de poste
-        # (intitulé + description rédigée par le recruteur), pas seulement dans le
-        # champ structuré "competences" — une certification est souvent mentionnée
-        # en phrase libre ("Certification PMP appréciée", "CACES R489 requis")
-        # plutôt que comme un tag structuré.
-        texte_fiche_poste = f"{offre.get('intitule', '')} {offre.get('description', '')}".lower()
-        if texte_fiche_poste.strip():
-            for terme_certif in _REF_CERTIFICATIONS:
-                if terme_certif in texte_fiche_poste:
-                    libelle_certif = terme_certif.upper() if (" " not in terme_certif and len(terme_certif) <= 6) else terme_certif.title()
-                    compteurs["certification"][libelle_certif] += 1
+def analyser_competences_elargi(codes_rome, mots_cles_libres, departement, jours_max=None, max_pages=3):
+    """
+    Version "élargie" (code(s) ROME résolus + mots-clés libres fusionnés, même
+    principe que rechercher_offres_completes_elargi) de analyser_competences().
 
-        # Savoir-être : champ structuré dédié, contrairement aux certifications.
-        for qualite in offre.get("qualitesProfessionnelles", []):
-            libelle_qualite = (qualite.get("libelle") or "").strip()
-            if libelle_qualite:
-                compteurs["savoir_etre"][libelle_qualite] += 1
-
-    def _construire_df(compteur):
-        if nb_total_offres == 0:
-            return pd.DataFrame(columns=["libelle", "nombre_offres", "pourcentage"])
-        lignes = [
-            {"libelle": lib, "nombre_offres": n, "pourcentage": round(100 * n / nb_total_offres)}
-            for lib, n in compteur.most_common(15)
-        ]
-        # Colonnes explicites : pd.DataFrame([]) sans "columns=" ne crée AUCUNE colonne
-        # quand lignes est vide (ex: des offres ont été trouvées mais aucune ne mentionne
-        # de compétence dans cette catégorie précise) — provoquait un KeyError("libelle")
-        # plus loin sur df["libelle"] au lieu d'un DataFrame vide exploitable normalement.
-        return pd.DataFrame(lignes, columns=["libelle", "nombre_offres", "pourcentage"])
-
-    return (
-        _construire_df(compteurs["competence"]),
-        _construire_df(compteurs["outil"]),
-        _construire_df(compteurs["langage"]),
-        _construire_df(compteurs["certification"]),
-        _construire_df(compteurs["savoir_etre"]),
-        nb_total_offres,
+    Corrige un défaut de fond : l'ancien point d'appel (dans "Créer mon CV")
+    n'utilisait JAMAIS les codes ROME pourtant déjà résolus pour le(s) poste(s)
+    choisis — seulement une recherche libre (motsCles="TOUS") sur le LIBELLÉ
+    complet de la suggestion cliquée, souvent verbeux et bruité (parenthèses,
+    "(H/F)", variante de genre ROME, ex: "Chef de projet / Cheffe de projet
+    (Project Management Officer) (H/F)"). Une recherche par code ROME précis
+    remonte des offres bien plus pertinentes qu'une recherche libre sur un tel
+    intitulé — même logique que la correction de sous-comptage déjà appliquée
+    à "Tendance par profil" et "KPIs avancés".
+    """
+    toutes_offres = rechercher_offres_completes_elargi(
+        codes_rome, mots_cles_libres, departement, max_pages=max_pages, jours_max=jours_max
     )
+    return _agreger_competences(toutes_offres)
 
 
 @st.cache_data(ttl=3600)
@@ -869,15 +911,27 @@ def diagnostiquer_marche_travail(code_rome="M1805", departement="13"):
 # du métier (par poste, pas fusionné en multi-poste). URL de base confirmée,
 # scope confirmé via la même source tierce que ROMEO ; chemin exact de
 # l'endpoint et forme précise de la réponse (les 4 types mélangés dans
-# "competences") pas confirmés — diagnostic d'abord.
+# "competences") TOUJOURS PAS confirmés en pratique — diagnostic en cours réel
+# (04/09/2026) : les 2 premiers candidats renvoient 404 (route inexistante,
+# pas juste "vide"), le 3e renvoie 429. L'ancien commentaire "429 = route
+# existante" sur le premier candidat était une supposition erronée — un 429
+# peut être une limite de débit générique appliquée au niveau de la passerelle,
+# pas la preuve qu'une route précise existe. Aucun des 3 candidats n'est donc
+# confirmé fonctionnel à ce stade ; endpoints supplémentaires ajoutés ci-dessous
+# à tester, sans certitude non plus — le chemin exact reste à vérifier via le
+# Swagger officiel francetravail.io si disponible pour ce scope.
 # ---------------------------------------------------------------------------
 FICHES_METIERS_SCOPE = "api_rome-fiches-metiersv1 nomenclatureRome"  # confirmé via la même source que ROMEO
 
 _CANDIDATS_ENDPOINT_FICHE_METIER = [
-    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiche-metier/{code}",  # confirmé (429 = route existante)
+    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiche-metier/{code}",
     "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiches-metiers/{code}",
     "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/metiers/{code}/fiche",
+    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiches/{code}",
+    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/rome/{code}",
+    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/{code}",
 ]
+
 
 
 @st.cache_data(ttl=86400)
@@ -908,16 +962,27 @@ def recuperer_fiche_metier(code_rome):
         return None
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    endpoint = _CANDIDATS_ENDPOINT_FICHE_METIER[0].format(code=code_rome)
-    try:
-        r = requests.get(endpoint, headers=headers, timeout=8)
-    except requests.RequestException:
-        return None
-    if r.status_code not in (200, 206):
-        return None
-    try:
-        data = r.json()
-    except ValueError:
+    # Essaie chaque endpoint candidat jusqu'au premier qui répond 200/206 —
+    # corrige un bug de fond : cette fonction ne testait jusqu'ici QUE le tout
+    # premier candidat de la liste (index 0), jamais les autres, même si un
+    # candidat suivant s'avérait le bon. Aucun candidat n'est confirmé fonctionnel
+    # à ce stade (voir commentaire au-dessus de _CANDIDATS_ENDPOINT_FICHE_METIER) —
+    # cette boucle permet au moins de ne pas rater le bon si l'un d'eux répond.
+    data = None
+    for endpoint_gabarit in _CANDIDATS_ENDPOINT_FICHE_METIER:
+        endpoint = endpoint_gabarit.format(code=code_rome)
+        try:
+            r = requests.get(endpoint, headers=headers, timeout=8)
+        except requests.RequestException:
+            continue
+        if r.status_code not in (200, 206):
+            continue
+        try:
+            data = r.json()
+        except ValueError:
+            continue
+        break
+    if data is None:
         return None
 
     resultat = {"competences": [], "savoir_faire": [], "savoir_etre": [], "savoirs": []}
@@ -2845,6 +2910,41 @@ def repartition_contrats_et_salaires_elargi(codes_rome, mots_cles_libres, depart
     return _agreger_contrats_et_salaires(toutes_offres)
 
 
+def _extraire_bornes_salaire(libelle_salaire):
+    """
+    Extrait les bornes numériques (min, max) d'un libellé de salaire en texte
+    libre (ex: "Annuel de 36000.0 Euros à 45000.0 Euros", "35 000 € par an") —
+    France Travail et Adzuna ne renvoient pas de champ salaire structuré en
+    montants séparés, seulement ce libellé déjà formaté pour l'affichage.
+    Best-effort : prend tous les nombres trouvés dans le texte et retourne
+    (min(nombres), max(nombres)) — pour un libellé à une seule valeur, min et
+    max seront identiques. Retourne (None, None) si aucun nombre n'est trouvé.
+    """
+    if not libelle_salaire:
+        return None, None
+    nombres_bruts = re.findall(r"\d[\d\s\u2009.,]*\d|\d", libelle_salaire)
+    valeurs = []
+    for brut in nombres_bruts:
+        nettoye = brut.replace("\u2009", "").replace(" ", "").replace(",", ".")
+        morceaux = nettoye.split(".")
+        # Plusieurs points dans un même nombre (ex: séparateur de milliers "36.000.00")
+        # : on ne garde le dernier "." comme séparateur décimal que s'il isole 1 ou 2
+        # chiffres (cas d'un vrai décimal) ; sinon tous les points sont des séparateurs
+        # de milliers à retirer.
+        if len(morceaux) > 2:
+            if len(morceaux[-1]) <= 2:
+                nettoye = "".join(morceaux[:-1]) + "." + morceaux[-1]
+            else:
+                nettoye = "".join(morceaux)
+        try:
+            valeurs.append(float(nettoye))
+        except ValueError:
+            continue
+    if not valeurs:
+        return None, None
+    return min(valeurs), max(valeurs)
+
+
 def calculer_tension(nb_offres, nb_demandeurs):
     if not nb_demandeurs or nb_demandeurs == 0:
         return None
@@ -2962,6 +3062,8 @@ __all__ = [
     "calculer_correspondance_offre",
     "calculer_correspondance_recruteur",
     "analyser_competences",
+    "analyser_competences_elargi",
+    "_agreger_competences",
     "get_secteurs_activite",
     "get_referentiel_appellations",
     "_extraire_code_rome",
@@ -3044,6 +3146,7 @@ __all__ = [
     "_agreger_contrats_et_salaires",
     "repartition_contrats_et_salaires",
     "repartition_contrats_et_salaires_elargi",
+    "_extraire_bornes_salaire",
     "calculer_tension",
     "interpreter_tension",
     "conseils_tension",
