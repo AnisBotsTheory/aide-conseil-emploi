@@ -3289,14 +3289,26 @@ def rechercher_evenements_emploi(
     d'autres événements à des dates différentes existent plus loin dans les
     résultats.
 
-    Renvoie une liste de dicts (contenu brut de l'API, potentiellement vide)
-    ou None en cas d'échec — dégradation silencieuse, comme partout ailleurs
-    dans ce module.
+    Retourne un tuple (evenements, total_grand_domaine, nb_avant_filtre_rome) :
+    - evenements : liste finale affichée (potentiellement filtrée par code ROME
+      précis), ou None en cas d'échec.
+    - total_grand_domaine : nombre TOTAL d'événements pour ce grand domaine ROME
+      et ce département sur la période (champ "totalElements" de l'API, avant
+      toute pagination) — permet d'expliquer un résultat final "maigre" malgré
+      un grand domaine actif : le grand domaine (une lettre, ex: "M" pour
+      "Support à l'entreprise") couvre de nombreux métiers différents du
+      poste précis recherché, le filtrage client par code ROME peut donc
+      légitimement réduire beaucoup le nombre final affiché.
+    - nb_avant_filtre_rome : nombre d'événements récupérés sur CETTE page
+      (avant filtrage par code ROME précis, donc <= total_grand_domaine).
+
+    Dégradation silencieuse (None, None, None) en cas d'échec, comme partout
+    ailleurs dans ce module.
     """
     try:
         token = _get_token_evenements(EVENEMENTS_SCOPE)
     except Exception:
-        return None
+        return None, None, None
 
     codes = [c for c in (codes_rome or []) if c]
     grand_domaine = _grand_domaine_depuis_code_rome(codes[0]) if codes else None
@@ -3325,15 +3337,17 @@ def rechercher_evenements_emploi(
             EVENEMENTS_RECHERCHE_URL, headers=headers, params=params, json=corps, timeout=10
         )
     except requests.RequestException:
-        return None
+        return None, None, None
     if r.status_code not in (200, 206):
-        return None
+        return None, None, None
     try:
         data = r.json()
     except ValueError:
-        return None
+        return None, None, None
 
+    total_grand_domaine = data.get("totalElements")
     evenements = data.get("content") or []
+    nb_avant_filtre_rome = len(evenements)
     if codes:
         # Filtrage client : le grand domaine (lettre) est large, on affine sur
         # les événements dont "codesRome" recoupe réellement un code recherché.
@@ -3346,7 +3360,7 @@ def rechercher_evenements_emploi(
         # un peu large qu'aucune piste du tout.
         if evenements_filtres:
             evenements = evenements_filtres
-    return evenements
+    return evenements, total_grand_domaine, nb_avant_filtre_rome
 
 
 def diagnostiquer_evenements(codes_rome=None, departement="13"):
