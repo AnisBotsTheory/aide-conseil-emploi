@@ -132,16 +132,24 @@ _REF_CERTIFICATIONS = {
 def _classifier_competence(libelle):
     """Classe un libellé de compétence en 'langage', 'outil', 'certification' ou
     'competence' (générique). Certification vérifiée en premier : certains sigles
-    (ex: "AWS Certified...") contiennent aussi un nom d'outil ("aws")."""
+    (ex: "AWS Certified...") contiennent aussi un nom d'outil ("aws").
+
+    Correspondance en MOT ENTIER (via _mot_entier_dans_texte), pas en simple
+    sous-chaîne — bug réel corrigé ici : "adr" (certification transport de
+    matières dangereuses) matchait à l'intérieur de "cadre", "encadrement",
+    "encadrer"... des mots omniprésents dans des offres de management/PMO,
+    faisant remonter "ADR" comme certification la plus demandée alors qu'elle
+    n'avait aucun rapport avec le poste recherché.
+    """
     l = f" {libelle.lower().strip()} "
     for certif in _REF_CERTIFICATIONS:
-        if certif in l:
+        if _mot_entier_dans_texte(certif, l):
             return "certification"
     for lang in _REF_LANGAGES_INFORMATIQUES:
         if f" {lang.strip()} " in l:
             return "langage"
     for outil in _REF_OUTILS_INFORMATIQUES:
-        if outil in l:
+        if _mot_entier_dans_texte(outil, l):
             return "outil"
     return "competence"
 
@@ -299,10 +307,14 @@ def _agreger_competences(toutes_offres):
         # champ structuré "competences" — une certification est souvent mentionnée
         # en phrase libre ("Certification PMP appréciée", "CACES R489 requis")
         # plutôt que comme un tag structuré.
+        # Correspondance en MOT ENTIER (pas en simple sous-chaîne) — bug réel
+        # corrigé ici : "adr" matchait à l'intérieur de "cadre"/"encadrement",
+        # gonflant artificiellement son score pour des postes de management
+        # n'ayant aucun rapport avec le transport de matières dangereuses.
         texte_fiche_poste = f"{offre.get('intitule', '')} {offre.get('description', '')}".lower()
         if texte_fiche_poste.strip():
             for terme_certif in _REF_CERTIFICATIONS:
-                if terme_certif in texte_fiche_poste:
+                if _mot_entier_dans_texte(terme_certif, texte_fiche_poste):
                     libelle_certif = terme_certif.upper() if (" " not in terme_certif and len(terme_certif) <= 6) else terme_certif.title()
                     compteurs["certification"][libelle_certif] += 1
 
@@ -1124,6 +1136,49 @@ def diagnostiquer_savoir_etre(code_rome, departement=None, mots_cles=None):
         }
         for o in resultats[:10]
     ]
+
+
+def diagnostiquer_terme_certification(terme, codes_rome, departement=None, mots_cles_libres=None, max_offres=200):
+    """
+    Outil de DIAGNOSTIC : pour un terme de certification donné (ex: "adr"),
+    montre les offres réelles où ce terme matche actuellement, avec un
+    extrait de texte autour de chaque occurrence — permet de vérifier si un
+    résultat suspect (ex: "ADR" remontant très souvent pour des postes de
+    management) est un vrai signal ou un faux positif de correspondance en
+    sous-chaîne (ex: "adr" à l'intérieur de "cadre"). Utile pour repérer
+    d'éventuels futurs cas similaires même après le correctif de mot entier
+    déjà appliqué à _classifier_competence()/_agreger_competences(). Pas
+    utilisé par le flux normal de l'app.
+
+    Retourne une liste de dicts {"intitule_offre":..., "extrait":...} (jusqu'à
+    30 occurrences) ou une liste avec un message d'info/erreur.
+    """
+    toutes_offres = rechercher_offres_completes_elargi(
+        codes_rome, mots_cles_libres, departement, max_pages=3
+    )
+    if not toutes_offres:
+        return [{"info": "Aucune offre trouvée pour ces critères."}]
+
+    terme_normalise = terme.strip().lower()
+    correspondances = []
+    for offre in toutes_offres[:max_offres]:
+        texte = f"{offre.get('intitule', '')} {offre.get('description', '')}".lower()
+        for m in re.finditer(re.escape(terme_normalise), texte):
+            debut = max(0, m.start() - 25)
+            fin = min(len(texte), m.end() + 25)
+            car_avant = texte[m.start() - 1] if m.start() > 0 else " "
+            car_apres = texte[m.end()] if m.end() < len(texte) else " "
+            mot_entier = not car_avant.isalnum() and not car_apres.isalnum()
+            correspondances.append({
+                "intitule_offre": offre.get("intitule"),
+                "extrait": "..." + texte[debut:fin] + "...",
+                "mot_entier": mot_entier,
+            })
+            if len(correspondances) >= 30:
+                return correspondances
+    if not correspondances:
+        return [{"info": f"Aucune occurrence de « {terme} » trouvée dans cet échantillon."}]
+    return correspondances
 
 
 @st.cache_data(ttl=1800)
@@ -3343,6 +3398,7 @@ __all__ = [
     "FICHE_METIER_ENDPOINT",
     "diagnostiquer_fiche_metier",
     "diagnostiquer_savoir_etre",
+    "diagnostiquer_terme_certification",
     "recuperer_fiche_metier",
     "suggerer_postes",
     "chercher_offres",
