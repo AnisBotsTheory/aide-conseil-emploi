@@ -34,7 +34,7 @@ st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 st.divider()
 
 tab_cv, tab_profil, tab_avance, tab_evenements = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance par profil", "📊 Compléments d'analyse", "📅 Événements"]
+    ["🧾 Créer mon CV", "🎯 Tendance", "📊 Compléments d'analyse", "📅 Événements"]
 )
 
 
@@ -416,7 +416,7 @@ with tab_profil:
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
                 else:
-                    _, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
+                    df_comp, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
                     st.caption(
                         "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
                         "Travail pour le(s) poste(s) sélectionné(s)."
@@ -427,6 +427,43 @@ with tab_profil:
                         st.dataframe(
                             df_certifs.drop(columns=["pourcentage"]).rename(
                                 columns={"libelle": "Certification", "nombre_offres": "Occurrences"}
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                    with st.expander("🔧 Vérifier un résultat suspect (temporaire)"):
+                        st.caption(
+                            "Si une certification semble déplacée pour ce métier (ex: « ADR » sur "
+                            "un poste de management), tape son terme exact ci-dessous — affiche les "
+                            "extraits de texte réels où il matche, pour distinguer un vrai signal "
+                            "d'un faux positif (ex: « adr » à l'intérieur de « cadre »)."
+                        )
+                        terme_a_verifier = st.text_input(
+                            "Terme à vérifier (ex: adr)", key="terme_diagnostic_certif"
+                        )
+                        if st.button("Vérifier", key="btn_diagnostic_terme_certif") and terme_a_verifier.strip():
+                            with st.spinner("Recherche des occurrences en cours..."):
+                                resultats_verif = diagnostiquer_terme_certification(
+                                    terme_a_verifier.strip(), codes_resolus_cv, departement_actif,
+                                    mots_cles_libres=titre_libre_cv,
+                                )
+                            st.json(resultats_verif)
+
+                    st.divider()
+                    st.markdown("##### 🛠️ Savoir-faire les plus demandés")
+                    st.caption(
+                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
+                        "Travail pour le(s) poste(s) sélectionné(s) — compétences pratiques/"
+                        "techniques mentionnées (hors outils, langages et certifications, "
+                        "affichés séparément)."
+                    )
+                    if df_comp.empty:
+                        st.info("Aucun savoir-faire identifié dans les offres de cet échantillon.")
+                    else:
+                        st.dataframe(
+                            df_comp.drop(columns=["pourcentage"]).rename(
+                                columns={"libelle": "Savoir-faire", "nombre_offres": "Occurrences"}
                             ),
                             use_container_width=True,
                             hide_index=True,
@@ -560,7 +597,7 @@ with tab_profil:
                     # que par un texte type "(toi)", jugé peu professionnel pour cet usage.
                     textes_blocs = [
                         "<br>".join(
-                            f'<span style="color:#C084FC"><b>{DEPARTEMENTS_VERS_NOM.get(d, d)}</b></span>'
+                            f'<span style="color:#5B21B6"><b>{DEPARTEMENTS_VERS_NOM.get(d, d)}</b></span>'
                             if d == departement_actif else DEPARTEMENTS_VERS_NOM.get(d, d)
                             for d in valeurs_par_dep[v]
                         )
@@ -647,7 +684,7 @@ with tab_avance:
     if "code_rome_choisi" not in st.session_state:
         st.info(
             "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les Compléments d'analyse "
-            "s'appuient sur l'analyse automatique de l'onglet Tendance par profil."
+            "s'appuient sur l'analyse automatique de l'onglet Tendance."
         )
     else:
         code_rome_actif = st.session_state["code_rome_choisi"]
@@ -691,19 +728,26 @@ with tab_avance:
                 couleurs_contrats = [
                     palette_contrats[i % len(palette_contrats)] for i in range(len(df_contrats_tri))
                 ]
+                # Taille basée sur la racine carrée du nombre d'offres (pas la valeur brute) :
+                # compresse l'écart entre le plus petit et le plus grand contrat (ex: 12 vs 129)
+                # pour que même la plus petite sphère reste assez grande pour contenir son
+                # étiquette proprement — avec la valeur brute, l'écart de taille entre CDI et
+                # Intérim faisait déborder le texte hors de la petite sphère.
+                tailles_base = df_contrats_tri["nombre_offres"] ** 0.5
                 fig_contrats = go.Figure(
                     go.Scatter(
                         x=list(range(len(df_contrats_tri))),
                         y=[0] * len(df_contrats_tri),
                         mode="markers+text",
                         marker=dict(
-                            # sizemode="area" + cette formule standard Plotly rend l'AIRE du
-                            # cercle proportionnelle à nombre_offres (pas le diamètre, qui
-                            # exagérerait visuellement les écarts entre types de contrat).
-                            size=df_contrats_tri["nombre_offres"],
+                            # sizemode="area" + cette formule rend l'AIRE du cercle proportionnelle
+                            # à tailles_base — le diamètre cible maximal est relevé (110 -> 160) pour
+                            # que l'ensemble des sphères soit plus grand, et sizemin relevé (18 -> 55)
+                            # pour garantir un plancher suffisant à la plus petite d'entre elles.
+                            size=tailles_base,
                             sizemode="area",
-                            sizeref=2.0 * df_contrats_tri["nombre_offres"].max() / (110.0 ** 2),
-                            sizemin=18,
+                            sizeref=2.0 * tailles_base.max() / (160.0 ** 2),
+                            sizemin=55,
                             color=couleurs_contrats,
                             line=dict(width=2, color="white"),
                         ),
@@ -717,9 +761,9 @@ with tab_avance:
                     )
                 )
                 fig_contrats.update_xaxes(visible=False, range=[-1, len(df_contrats_tri)])
-                fig_contrats.update_yaxes(visible=False, range=[-1.2, 1.2])
+                fig_contrats.update_yaxes(visible=False, range=[-1.3, 1.3])
                 fig_contrats.update_layout(
-                    height=280, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
+                    height=320, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
                     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 )
                 st.plotly_chart(fig_contrats, use_container_width=True)
@@ -822,13 +866,12 @@ with tab_avance:
                     # Repère de fiabilité déplacé ici en simple mention de source (au lieu
                     # d'un gros st.metric qui lui donnait plus de poids visuel que ce n'est
                     # qu'un indicateur de taille d'échantillon).
-                    pct = round(100 * nb_avec_salaire / nb_total_offres)
                     st.caption(
                         f"📎 Source : {nb_avec_salaire} offre(s) sur {nb_total_offres} indiquent un "
-                        f"salaire ({pct}%, tous types de contrat confondus) — jauge ci-dessus "
-                        "calculée uniquement sur les offres CDI parmi elles, montants annualisés "
-                        "(un salaire mensuel est multiplié par 12 ; un salaire horaire est exclu, "
-                        "faute de pouvoir le convertir en annuel de façon fiable)."
+                        "salaire, tous types de contrat confondus — jauge ci-dessus calculée "
+                        "uniquement sur les offres CDI parmi elles, montants annualisés (un salaire "
+                        "mensuel est multiplié par 12 ; un salaire horaire est exclu, faute de "
+                        "pouvoir le convertir en annuel de façon fiable)."
                     )
 
             st.divider()
