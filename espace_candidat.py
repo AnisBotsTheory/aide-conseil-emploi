@@ -498,11 +498,7 @@ with tab_profil:
                     st.info("Aucune suggestion disponible pour l'instant.")
                 else:
                     _, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
-                    st.caption(
-                        "ℹ️ France Travail n'a pas de champ dédié aux certifications — repérées par "
-                        "mot-clé dans les offres réelles (même échantillon que les suggestions de "
-                        "compétences de « Créer mon CV »), couverture partielle par construction."
-                    )
+                    st.caption("ℹ️ Certifications identifiées dans des offres réelles publiées sur France Travail.")
                     if df_certifs.empty:
                         st.info("Aucune certification identifiée dans les offres de cet échantillon.")
                     else:
@@ -516,10 +512,7 @@ with tab_profil:
 
                     st.divider()
                     st.markdown("##### 🤝 Savoir-être les plus demandés")
-                    st.caption(
-                        "ℹ️ Champ structuré dédié de l'API Offres d'emploi (qualitesProfessionnelles) — "
-                        "pas un repérage par mot-clé, contrairement aux certifications."
-                    )
+                    st.caption("ℹ️ Savoir-être identifiés dans des offres réelles publiées sur France Travail.")
                     if df_savoir_etre.empty:
                         st.info("Aucun savoir-être identifié dans les offres de cet échantillon.")
                     else:
@@ -599,18 +592,26 @@ with tab_profil:
                             "trimestre à venir), pas spécifique au poste recherché."
                         ),
                     )
+                    st.caption(
+                        "ℹ️ L'échelle exacte de cet indicateur (valeur minimale/maximale, ce qui "
+                        "constitue un score \"élevé\" ou \"faible\") n'est pas confirmée par une "
+                        "documentation publique — France Travail ne détaille pas ce point pour cette "
+                        "API. À interpréter comme une comparaison relative entre départements/périodes "
+                        "plutôt qu'une valeur absolue dont on connaîtrait le sens précis."
+                    )
 
                 with st.spinner("Récupération des offres par ville..."):
                     df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_elargi(
                         codes_resolus_cv, titre_libre_cv, departement_actif,
                         jours_max=jours_max_periode_offres,
                     )
-                st.metric("Total offres dans la région", total_region)
                 # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
                 # donnent la plage de publication réelle des offres renvoyées par l'API —
                 # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
                 # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
-                # offres sont simplement celles encore actives aujourd'hui.
+                # offres sont simplement celles encore actives aujourd'hui. total_region reste
+                # utilisé plus bas pour calculer le % par ville sur la carte, même si le total
+                # brut n'est plus affiché ici (à la demande).
                 if df_villes.empty:
                     st.info("Aucune offre trouvée pour ces critères.")
                 else:
@@ -652,18 +653,19 @@ with tab_profil:
                         )
                         # Étiquette texte affichée directement sur chaque point de la carte
                         # (en plus du détail au survol) — évite d'avoir à survoler chaque
-                        # point pour connaître son poids relatif.
-                        df_carte["etiquette_pourcentage"] = df_carte["pourcentage"].map(lambda x: f"{x:.1f}%")
-                        # Taille de pastille dédiée à l'affichage (plancher à 4 offres
-                        # équivalentes) : les points à 1 ou 2 offres étaient auparavant
-                        # quasi invisibles sur la carte, sans changer la valeur réelle
-                        # affichée dans l'étiquette/l'infobulle.
-                        df_carte["taille_carte"] = df_carte["nombre_offres"].clip(lower=4)
+                        # point pour connaître son poids relatif. Balise <b> pour la mettre
+                        # en gras (supportée par Plotly sur ce type de trace).
+                        df_carte["etiquette_pourcentage"] = df_carte["pourcentage"].map(lambda x: f"<b>{x:.1f}%</b>")
+                        # Taille de pastille dédiée à l'affichage (plancher à 6 offres
+                        # équivalentes, size_max relevé à 70) : les points à 1 ou 2 offres
+                        # étaient auparavant quasi invisibles sur la carte, sans changer la
+                        # valeur réelle affichée dans l'étiquette/l'infobulle.
+                        df_carte["taille_carte"] = df_carte["nombre_offres"].clip(lower=6)
                         try:
                             fig_carte = px.scatter_mapbox(
                                 df_carte,
                                 lat="latitude", lon="longitude",
-                                size="taille_carte", size_max=55,
+                                size="taille_carte", size_max=70,
                                 color="approximatif",
                                 color_discrete_map={False: "#0066cc", True: "#e67e22"},
                                 hover_name="ville",
@@ -688,7 +690,8 @@ with tab_profil:
                             fig_carte.update_traces(
                                 mode="markers+text",
                                 textposition="top center",
-                                textfont=dict(size=13, color="white"),
+                                textfont=dict(size=14, color="white"),
+                                marker=dict(line=dict(width=1.5, color="white")),
                             )
                             fig_carte.update_layout(
                                 mapbox_style="carto-darkmatter",
@@ -853,38 +856,61 @@ with tab_avance:
                 if df_salaires_cdi.empty:
                     st.info("Aucune offre en CDI avec salaire indiqué pour ces critères.")
                 else:
-                    # Jauge visuelle (min -> max), sans détail par poste ni par entreprise —
-                    # juste la fourchette globale des salaires CDI indiqués dans l'échantillon.
+                    # Jauge graduée : un bloc par valeur DISTINCTE trouvée dans l'échantillon
+                    # (arrondie au millier près pour regrouper des valeurs quasi identiques),
+                    # triées croissant — pas une simple barre continue du minimum absolu au
+                    # maximum absolu, mais une graduation qui matérialise les paliers réels
+                    # observés (ex: 30 000 € puis 50 000 € puis 60 000 € puis 80 000 €).
                     bornes = [_extraire_bornes_salaire(s) for s in df_salaires_cdi["Salaire indiqué"]]
-                    valeurs_min = [b[0] for b in bornes if b[0] is not None]
-                    valeurs_max = [b[1] for b in bornes if b[1] is not None]
-                    if not valeurs_min or not valeurs_max:
+                    toutes_valeurs = []
+                    for borne_min, borne_max in bornes:
+                        if borne_min is not None:
+                            toutes_valeurs.append(borne_min)
+                        if borne_max is not None:
+                            toutes_valeurs.append(borne_max)
+
+                    if not toutes_valeurs:
                         st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
                     else:
-                        borne_basse = min(valeurs_min)
-                        borne_haute = max(valeurs_max)
-                        fig_jauge = go.Figure(
-                            go.Bar(
-                                x=[borne_haute - borne_basse],
-                                y=[""],
-                                base=[borne_basse],
-                                orientation="h",
-                                marker=dict(color="#2E86DE"),
-                                text=[f"{borne_basse:,.0f} € — {borne_haute:,.0f} € / an".replace(",", " ")],
-                                textposition="inside",
-                                insidetextanchor="middle",
-                                textfont=dict(size=15, color="white"),
-                                hoverinfo="skip",
+                        valeurs_graduees = sorted({round(v / 1000) * 1000 for v in toutes_valeurs})
+                        if len(valeurs_graduees) == 1:
+                            st.metric("Salaire annuel indiqué", f"{valeurs_graduees[0]:,.0f} €".replace(",", " "))
+                        else:
+                            palette_jauge = ["#2E86DE", "#10AC84", "#F9A826", "#8854D0", "#EE5A6F", "#01A3A4"]
+                            segments_largeur = [
+                                valeurs_graduees[i + 1] - valeurs_graduees[i]
+                                for i in range(len(valeurs_graduees) - 1)
+                            ]
+                            segments_base = valeurs_graduees[:-1]
+                            couleurs_segments = [
+                                palette_jauge[i % len(palette_jauge)] for i in range(len(segments_largeur))
+                            ]
+                            fig_jauge = go.Figure(
+                                go.Bar(
+                                    x=segments_largeur,
+                                    y=[""] * len(segments_largeur),
+                                    base=segments_base,
+                                    orientation="h",
+                                    marker=dict(color=couleurs_segments, line=dict(width=1, color="#0e1117")),
+                                    hoverinfo="skip",
+                                )
                             )
-                        )
-                        fig_jauge.update_xaxes(visible=False)
-                        fig_jauge.update_yaxes(visible=False)
-                        fig_jauge.update_layout(
-                            height=90, margin=dict(t=10, l=10, r=10, b=10),
-                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                            showlegend=False,
-                        )
-                        st.plotly_chart(fig_jauge, use_container_width=True)
+                            fig_jauge.update_xaxes(
+                                visible=True,
+                                tickmode="array",
+                                tickvals=valeurs_graduees,
+                                ticktext=[f"{v:,.0f} €".replace(",", " ") for v in valeurs_graduees],
+                                tickfont=dict(size=12, color="white"),
+                                showgrid=False,
+                                zeroline=False,
+                            )
+                            fig_jauge.update_yaxes(visible=False)
+                            fig_jauge.update_layout(
+                                height=110, margin=dict(t=25, l=10, r=10, b=10),
+                                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                                showlegend=False,
+                            )
+                            st.plotly_chart(fig_jauge, use_container_width=True)
 
                     # Repère de fiabilité déplacé ici en simple mention de source (au lieu
                     # d'un gros st.metric qui lui donnait plus de poids visuel que ce n'est
@@ -892,8 +918,10 @@ with tab_avance:
                     pct = round(100 * nb_avec_salaire / nb_total_offres)
                     st.caption(
                         f"📎 Source : {nb_avec_salaire} offre(s) sur {nb_total_offres} indiquent un "
-                        f"salaire ({pct}%, tous types de contrat confondus) — fourchette ci-dessus "
-                        "calculée uniquement sur les offres CDI parmi elles."
+                        f"salaire ({pct}%, tous types de contrat confondus) — jauge ci-dessus "
+                        "calculée uniquement sur les offres CDI parmi elles, montants annualisés "
+                        "(un salaire mensuel est multiplié par 12 ; un salaire horaire est exclu, "
+                        "faute de pouvoir le convertir en annuel de façon fiable)."
                     )
 
             st.divider()
@@ -901,7 +929,13 @@ with tab_avance:
             if df_experience.empty:
                 st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
             else:
-                df_experience_tri = df_experience.sort_values("nombre_offres", ascending=False)
+                # Catégorie "Expérience exigée" retirée à la demande : trop vague pour être
+                # exploitable (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit
+                # rien de la durée réellement demandée).
+                df_experience_tri = (
+                    df_experience[df_experience["experience"] != "Expérience exigée"]
+                    .sort_values("nombre_offres", ascending=False)
+                )
                 try:
                     fig_experience = px.treemap(
                         df_experience_tri,
@@ -913,6 +947,10 @@ with tab_avance:
                     fig_experience.update_traces(
                         textinfo="label+value", texttemplate="%{label}<br>%{value}",
                         marker=dict(line=dict(width=2, color="#0e1117")),
+                        # Infobulle réduite au strict nécessaire (libellé + nombre d'offres) —
+                        # par défaut, un treemap Plotly affiche aussi le % du parent, le % de
+                        # la racine et le chemin complet au survol, jugé trop chargé ici.
+                        hovertemplate="%{label}<br>%{value} offre(s)<extra></extra>",
                     )
                     fig_experience.update_layout(
                         height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
