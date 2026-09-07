@@ -19,7 +19,7 @@ import pandas as pd
 import re
 import random
 from collections import Counter
-from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
+from datetime import datetime  # noqa: F401 — utilisé dans l'onglet Compléments d'analyse ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import plotly.express as px
 import plotly.graph_objects as go
@@ -34,7 +34,7 @@ st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 st.divider()
 
 tab_cv, tab_profil, tab_avance, tab_evenements = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés", "📅 Événements"]
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "📊 Compléments d'analyse", "📅 Événements"]
 )
 
 
@@ -115,7 +115,11 @@ with tab_profil:
                 st.session_state["departement_profil_actif"] = departement_cv
                 st.session_state[cle_auto_signature] = signature_actuelle
 
-    if "df_rome_profil" in st.session_state:
+    # Guard "and departement_cv" : évite d'afficher une analyse en cache (calculée lors
+    # d'un run précédent où le département était bien renseigné) si l'utilisateur a
+    # depuis effacé son département — sinon le message "renseigne ton département"
+    # ci-dessus s'affichait juste au-dessus d'une analyse quand même visible en dessous.
+    if "df_rome_profil" in st.session_state and departement_cv:
         df_rome = st.session_state["df_rome_profil"]
         departement_actif = st.session_state["departement_profil_actif"]
         mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
@@ -399,6 +403,15 @@ with tab_profil:
                             resultats_diag_lbb = diagnostiquer_la_bonne_boite(codes_diag, departement_actif)
                         st.json(resultats_diag_lbb)
 
+                st.divider()
+                st.info(
+                    "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
+                    "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
+                    "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
+                    "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
+                    "avec prudence si tu cherches un point de comparaison sur ce type de poste."
+                )
+
             with sous_tab_certifs:
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
@@ -493,18 +506,21 @@ with tab_profil:
 
                 # --- Dynamisme géographique : graphe comparatif gradué ---
                 st.markdown("##### 📊 Dynamisme géographique")
-                # Comparaison avec des départements tirés au sort (stable tant que le
-                # département actif ne change pas, pour ne pas re-tirer à chaque
-                # interaction) — ton département est TOUJOURS inclus en plus des
-                # départements aléatoires.
+                # Comparaison avec Paris et Lyon (toujours inclus) + des départements tirés
+                # au sort (stable tant que le département actif ne change pas, pour ne pas
+                # re-tirer à chaque interaction) — ton département est TOUJOURS inclus en plus.
                 cle_dep_aleatoires = "dynamisme_departements_aleatoires"
+                departements_fixes = ["75", "69"]  # Paris, Lyon — toujours affichés en comparatif
                 if st.session_state.get(f"{cle_dep_aleatoires}_pour") != departement_actif:
-                    autres_departements = [d for d in DEPARTEMENTS_VERS_NOM if d != departement_actif]
+                    exclus = set(departements_fixes + [departement_actif])
+                    autres_departements = [d for d in DEPARTEMENTS_VERS_NOM if d not in exclus]
                     st.session_state[cle_dep_aleatoires] = random.sample(
-                        autres_departements, min(5, len(autres_departements))
+                        autres_departements, min(3, len(autres_departements))
                     )
                     st.session_state[f"{cle_dep_aleatoires}_pour"] = departement_actif
-                departements_comparaison = [departement_actif] + st.session_state[cle_dep_aleatoires]
+                departements_comparaison = list(dict.fromkeys(
+                    [departement_actif] + departements_fixes + st.session_state[cle_dep_aleatoires]
+                ))
 
                 resultats_dynamisme = []
                 for dep_comp in departements_comparaison:
@@ -518,64 +534,68 @@ with tab_profil:
                     st.caption(
                         "ℹ️ L'échelle officielle exacte de cet indicateur France Travail (méthode "
                         "IA prospective sur le trimestre à venir) n'est pas documentée publiquement "
-                        "— ce graphique compare ton département à quelques départements tirés au "
-                        "sort pour donner un repère relatif, pas une échelle absolue. Un bloc par "
-                        "valeur observée, les départements qui la partagent sont nommés à "
-                        "l'intérieur du bloc."
+                        "— ce graphique compare ton département à Paris, Lyon et quelques "
+                        "départements tirés au sort, pour donner un repère relatif, pas une "
+                        "échelle absolue. Un bloc par valeur (1 à 4, les valeurs observées en "
+                        "pratique jusqu'ici) ; les départements qui la partagent sont nommés à "
+                        "l'intérieur du bloc — le tien apparaît en violet."
                     )
-                    # Un bloc par valeur DISTINCTE observée, de largeur ÉGALE (pas proportionnelle
-                    # à l'écart numérique entre valeurs, contrairement à la jauge de salaire — ici
-                    # l'écart entre deux valeurs de dynamisme n'a pas de signification proportionnelle
-                    # connue) — les départements partageant une même valeur sont nommés DANS le bloc.
-                    valeurs_par_dep = {}
+                    # Blocs FIXES 1 à 4 (plage observée jusqu'ici en pratique), toujours tous
+                    # affichés même si aucun département de l'échantillon actuel ne tombe sur
+                    # une valeur donnée (bloc vide dans ce cas) — plus une éventuelle valeur
+                    # hors plage si jamais observée (défensif, l'échelle réelle n'étant pas
+                    # documentée officiellement).
+                    valeurs_par_dep = {v: [] for v in (1, 2, 3, 4)}
                     for r in resultats_dynamisme:
-                        valeurs_par_dep.setdefault(round(r["valeur"], 1), []).append(r["departement"])
+                        valeurs_par_dep.setdefault(round(r["valeur"]), []).append(r["departement"])
                     valeurs_graduees = sorted(valeurs_par_dep.keys())
 
-                    if len(valeurs_graduees) == 1:
-                        st.metric("Valeur observée (identique pour tous les départements comparés)", valeurs_graduees[0])
-                    else:
-                        palette_dyn = ["#2E86DE", "#10AC84", "#F9A826", "#8854D0", "#EE5A6F", "#01A3A4"]
-                        nb_blocs = len(valeurs_graduees)
-                        couleurs_blocs = [palette_dyn[i % len(palette_dyn)] for i in range(nb_blocs)]
-                        textes_blocs = [
-                            "<br>".join(
-                                f"{DEPARTEMENTS_VERS_NOM.get(d, d)}"
-                                + (" (toi)" if d == departement_actif else "")
-                                for d in valeurs_par_dep[v]
-                            )
-                            for v in valeurs_graduees
-                        ]
-                        fig_dyn = go.Figure(
-                            go.Bar(
-                                x=[1] * nb_blocs,
-                                y=[""] * nb_blocs,
-                                base=list(range(nb_blocs)),
-                                orientation="h",
-                                marker=dict(color=couleurs_blocs, line=dict(width=1, color="#0e1117")),
-                                text=textes_blocs,
-                                textposition="inside",
-                                insidetextanchor="middle",
-                                textfont=dict(size=11, color="white"),
-                                hoverinfo="skip",
-                            )
+                    palette_dyn = ["#2E86DE", "#10AC84", "#F9A826", "#EE5A6F", "#01A3A4"]
+                    nb_blocs = len(valeurs_graduees)
+                    couleurs_blocs = [
+                        palette_dyn[i % len(palette_dyn)] if valeurs_par_dep[v] else "#3A3F4B"
+                        for i, v in enumerate(valeurs_graduees)
+                    ]
+                    # Le département actif est mis en évidence par une COULEUR (violet) plutôt
+                    # que par un texte type "(toi)", jugé peu professionnel pour cet usage.
+                    textes_blocs = [
+                        "<br>".join(
+                            f'<span style="color:#C084FC"><b>{DEPARTEMENTS_VERS_NOM.get(d, d)}</b></span>'
+                            if d == departement_actif else DEPARTEMENTS_VERS_NOM.get(d, d)
+                            for d in valeurs_par_dep[v]
                         )
-                        fig_dyn.update_xaxes(
-                            visible=True,
-                            tickmode="array",
-                            tickvals=[i + 0.5 for i in range(nb_blocs)],
-                            ticktext=[str(v) for v in valeurs_graduees],
-                            tickfont=dict(size=12, color="white"),
-                            showgrid=False,
-                            zeroline=False,
+                        for v in valeurs_graduees
+                    ]
+                    fig_dyn = go.Figure(
+                        go.Bar(
+                            x=[1] * nb_blocs,
+                            y=[""] * nb_blocs,
+                            base=list(range(nb_blocs)),
+                            orientation="h",
+                            marker=dict(color=couleurs_blocs, line=dict(width=1, color="#0e1117")),
+                            text=textes_blocs,
+                            textposition="inside",
+                            insidetextanchor="middle",
+                            textfont=dict(size=11, color="white"),
+                            hoverinfo="skip",
                         )
-                        fig_dyn.update_yaxes(visible=False)
-                        fig_dyn.update_layout(
-                            height=130, margin=dict(t=20, l=10, r=10, b=30),
-                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                            showlegend=False,
-                        )
-                        st.plotly_chart(fig_dyn, use_container_width=True)
+                    )
+                    fig_dyn.update_xaxes(
+                        visible=True,
+                        tickmode="array",
+                        tickvals=[i + 0.5 for i in range(nb_blocs)],
+                        ticktext=[str(v) for v in valeurs_graduees],
+                        tickfont=dict(size=12, color="white"),
+                        showgrid=False,
+                        zeroline=False,
+                    )
+                    fig_dyn.update_yaxes(visible=False)
+                    fig_dyn.update_layout(
+                        height=130, margin=dict(t=20, l=10, r=10, b=30),
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_dyn, use_container_width=True)
 
                 st.divider()
                 # --- Classement des villes (remplace la carte) ---
@@ -620,22 +640,13 @@ with tab_profil:
                         },
                     )
 
-            st.divider()
-            st.info(
-                "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
-                "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
-                "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
-                "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
-                "avec prudence si tu cherches un point de comparaison sur ce type de poste."
-            )
-
 # ---------------------------------------------------------------------------
-# Onglet "KPIs avancés"
+# Onglet "Compléments d'analyse"
 # ---------------------------------------------------------------------------
 with tab_avance:
     if "code_rome_choisi" not in st.session_state:
         st.info(
-            "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
+            "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les Compléments d'analyse "
             "s'appuient sur l'analyse automatique de l'onglet Tendance par profil."
         )
     else:
@@ -859,14 +870,6 @@ with tab_avance:
                         use_container_width=True, hide_index=True,
                     )
 
-            st.divider()
-            st.markdown("#### 🎯 Difficulté de recrutement (BMO)")
-            st.info(
-                "⚠️ Pas encore branché — c'est un indicateur annuel et déclaratif (enquête "
-                "employeurs), différent des données d'offres réelles utilisées ailleurs dans "
-                "l'app. Dis-moi si tu veux qu'on l'ajoute."
-            )
-
 # ---------------------------------------------------------------------------
 # Onglet "Événements" — forums, salons, ateliers, job dating... via l'API
 # "Mes événements emploi" de France Travail. Utilise le(s) code(s) ROME
@@ -883,16 +886,44 @@ with tab_evenements:
     postes_cv_evt = st.session_state.get("cv_postes_recherche", [])
     codes_par_poste_evt = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_evt = [c for c in codes_par_poste_evt.values() if c]
-    departement_evt = st.session_state.get("cv_departement") or "13"
+    departement_evt = st.session_state.get("cv_departement")
 
     if not postes_cv_evt:
         st.info(
             "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV** pour voir les "
             "événements pertinents."
         )
+    elif not departement_evt:
+        st.info(
+            "👉 Ton département de résidence n'est plus renseigné — retourne dans l'onglet "
+            "**🧾 Créer mon CV** pour le sélectionner."
+        )
     else:
+        # Filtres facultatifs — la recherche se lance déjà avec les valeurs par
+        # défaut ci-dessous (90 jours, toutes modalités, tous publics), les
+        # cases permettent d'affiner sans devoir tout reconfigurer.
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            fenetre_jours = st.radio(
+                "Période", [30, 90, 180], index=1,
+                format_func=lambda j: f"{j} jours", horizontal=True, key="evt_fenetre",
+            )
+            debutant_uniquement = st.checkbox(
+                "Ouvert aux débutants/étudiants uniquement", key="evt_debutant",
+                help="Filtre sur le référentiel officiel : \"Ouvert aux jeunes\" + \"Débutant(e) accepté(e)\".",
+            )
+        with col_f2:
+            modalite_choisie = st.radio(
+                "Modalité", ["Toutes", "Présentiel", "Distanciel"], horizontal=True, key="evt_modalite",
+            )
+        modalite_code = {"Présentiel": "ENPHY", "Distanciel": "ADIST"}.get(modalite_choisie)
+        public_cible_codes = [1, 2] if debutant_uniquement else None
+
         with st.spinner("Recherche d'événements en cours..."):
-            evenements = rechercher_evenements_emploi(codes_resolus_evt, departement_evt)
+            evenements = rechercher_evenements_emploi(
+                codes_resolus_evt, departement_evt, jours_max=fenetre_jours,
+                modalite=modalite_code, public_cible=public_cible_codes,
+            )
 
         if evenements is None:
             st.info(
@@ -901,8 +932,7 @@ with tab_evenements:
             )
         elif not evenements:
             st.info(
-                "Aucun événement à venir trouvé pour ce poste et ce département dans les 90 "
-                "prochains jours."
+                f"Aucun événement trouvé pour ces critères dans les {fenetre_jours} prochains jours."
             )
         else:
             df_evenements = pd.DataFrame(
