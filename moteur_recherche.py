@@ -1974,7 +1974,7 @@ def repartition_contrats_et_salaires_multi(codes_rome, departement, jours_max=No
     return df_contrats, df_salaires, nb_avec_salaire, nb_total, df_experience
 
 
-LABEL_ENTREPRISE_ANONYME = "Entreprise non communiquée"
+LABEL_ENTREPRISE_ANONYME = "Nom de l'entreprise anonymisé"
 
 
 def _nom_entreprise_normalise(offre):
