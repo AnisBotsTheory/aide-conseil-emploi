@@ -38,18 +38,44 @@ tab_cv, tab_profil, tab_avance, tab_evenements = st.tabs(
 )
 
 
+_RE_ARRONDISSEMENT_PARIS_LYON_MARSEILLE = re.compile(
+    r"^(paris|lyon|marseille)\b\s*\d{0,2}\s*(er|ème|e)?\s*(arrondissement)?\s*$", re.IGNORECASE
+)
+_RE_ARRONDISSEMENT_GENERIQUE = re.compile(r"\s+\d+\s*(er|e|ème)?\s+arrondissement.*$", re.IGNORECASE)
+_RE_SUFFIXE_DEPARTEMENT = re.compile(r"\s*\((?:dept\.?|dépt\.?|département|departement)\)\s*$", re.IGNORECASE)
+
+
 def _nom_ville_simplifie(libelle_brut):
     """
     Simplifie un libellé de lieu France Travail (souvent "code - Nom commune",
     parfois avec un arrondissement) en un nom de ville regroupable — utilisé
-    pour le classement des villes dans "Dynamisme géographique" : sans ça,
-    "Marseille 1er Arrondissement" et "Marseille 6e Arrondissement" comptaient
-    comme deux villes séparées dans le classement, au lieu d'être regroupées
-    sous "Marseille".
+    pour le classement des villes : sans ça, plusieurs variantes d'un même
+    lieu comptaient comme des villes séparées dans le classement (constaté en
+    usage réel : "Paris", "PARIS", "PARIS 10", "PARIS 15", "PARIS 18" et
+    "Paris (Dept.)" apparaissaient comme 6 lignes distinctes au lieu d'une
+    seule "Paris"). Gère : préfixe "code - ", suffixe "(Dept.)"/"(Département)",
+    arrondissement de Paris/Lyon/Marseille (avec ou sans le mot "Arrondissement"
+    explicite, ex: "PARIS 10" comme "Paris 10ème Arrondissement"), variante
+    générique "Ville Nème Arrondissement" pour tout autre nom de ville, et
+    normalisation de casse pour une ville renvoyée tout en majuscules.
     """
     nom = libelle_brut.split(" - ", 1)[-1].strip() if " - " in libelle_brut else libelle_brut.strip()
-    nom = re.sub(r"\s+\d+\s*(er|e|ème)?\s+arrondissement.*$", "", nom, flags=re.IGNORECASE).strip()
-    return nom or libelle_brut
+    nom = _RE_SUFFIXE_DEPARTEMENT.sub("", nom).strip()
+
+    correspondance_grande_ville = _RE_ARRONDISSEMENT_PARIS_LYON_MARSEILLE.match(nom)
+    if correspondance_grande_ville:
+        return correspondance_grande_ville.group(1).capitalize()
+
+    nom = _RE_ARRONDISSEMENT_GENERIQUE.sub("", nom).strip()
+    if nom.isupper():
+        # Ville renvoyée tout en majuscules (ex: "PARIS") : normalisée en casse standard
+        # pour se regrouper avec sa variante correctement casée ("Paris"). Pas de
+        # capitalisation "intelligente" mot par mot (les particules "sur", "en", "la"
+        # devraient rester en minuscule dans l'orthographe correcte, ce qu'un .title()
+        # ne sait pas faire) — au moins la première lettre de chaque mot est juste pour
+        # les cas simples les plus courants.
+        nom = nom.title()
+    return nom.strip() or libelle_brut
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +169,7 @@ with tab_profil:
             titre_libre_cv = st.session_state.get("cv_titre", "").strip()
 
             sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes, sous_tab_tension = st.tabs(
-                ["🏢 Recruteurs", "🎓 Compétences", "📍 Dynamisme géographique", "⚖️ Tension"]
+                ["🏢 Top Recruteurs", "🎓 Compétences", "📍 Dynamisme géographique", "⚖️ Tension"]
             )
 
             with sous_tab_tension:
@@ -630,9 +656,7 @@ with tab_profil:
                         "embauches et des offres diffusées, anticipée pour le trimestre à venir — un "
                         "petit département peut donc afficher une progression relative forte sur une "
                         "petite base, sans que ça signifie plus d'activité en valeur absolue qu'un "
-                        "grand bassin d'emploi. L'échelle exacte (1 à 4 observés ici) n'est pas "
-                        "documentée publiquement ; ce graphique compare ton département à Paris, "
-                        "Lyon et quelques départements tirés au sort pour donner un repère relatif."
+                        "grand bassin d'emploi."
                     )
                     # Blocs pour les valeurs 1 à 4 (plage observée jusqu'ici en pratique) —
                     # tout palier resté VIDE après l'échantillonnage (aucun département tiré
@@ -761,9 +785,14 @@ with tab_avance:
                 # étiquette proprement — avec la valeur brute, l'écart de taille entre CDI et
                 # Intérim faisait déborder le texte hors de la petite sphère.
                 tailles_base = df_contrats_tri["nombre_offres"] ** 0.5
+                # Écartement horizontal entre sphères (x2, au lieu de positions 0,1,2...) pour
+                # garantir un espace visible entre elles même quand il y a plusieurs types de
+                # contrat — sans ça, des sphères voisines se touchaient ou se chevauchaient
+                # (constaté avec 5 types de contrat affichés simultanément).
+                positions_x = [i * 2.0 for i in range(len(df_contrats_tri))]
                 fig_contrats = go.Figure(
                     go.Scatter(
-                        x=list(range(len(df_contrats_tri))),
+                        x=positions_x,
                         y=[0] * len(df_contrats_tri),
                         mode="markers+text",
                         marker=dict(
@@ -779,7 +808,10 @@ with tab_avance:
                             line=dict(width=2, color="white"),
                         ),
                         text=[
-                            f"{row.type_contrat}<br>{row.nombre_offres}"
+                            # Intitulé en 2 mots (ex: "Profession commerciale") : saut de ligne
+                            # après le premier mot plutôt que de laisser le texte déborder à
+                            # l'horizontale hors de la sphère et chevaucher la voisine.
+                            f"{row.type_contrat.replace(' ', '<br>', 1)}<br>{row.nombre_offres}"
                             for row in df_contrats_tri.itertuples()
                         ],
                         textposition="middle center",
@@ -787,7 +819,7 @@ with tab_avance:
                         hoverinfo="skip",
                     )
                 )
-                fig_contrats.update_xaxes(visible=False, range=[-1, len(df_contrats_tri)])
+                fig_contrats.update_xaxes(visible=False, range=[-1.2, positions_x[-1] + 1.2 if positions_x else 1])
                 fig_contrats.update_yaxes(visible=False, range=[-1.3, 1.3])
                 fig_contrats.update_layout(
                     height=320, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
@@ -839,7 +871,18 @@ with tab_avance:
                     if not toutes_valeurs:
                         st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
                     else:
-                        compteur_valeurs = Counter(round(v / 5000) * 5000 for v in toutes_valeurs)
+                        # Pas d'arrondi calé dynamiquement sur l'étendue réelle des valeurs,
+                        # plutôt qu'un arrondi fixe au 5 000 € — avec beaucoup d'offres, un pas
+                        # fixe pouvait produire des dizaines de graduations illisibles et
+                        # chevauchées (constaté avec 178 offres, plage 5 000 € à 600 000 €).
+                        # Objectif : environ 8 à 10 blocs, quelle que soit l'étendue observée.
+                        plage_valeurs = max(toutes_valeurs) - min(toutes_valeurs)
+                        nb_blocs_cible = 9
+                        if plage_valeurs > 0:
+                            pas_arrondi = max(1000, round(plage_valeurs / nb_blocs_cible / 1000) * 1000)
+                        else:
+                            pas_arrondi = 1000
+                        compteur_valeurs = Counter(round(v / pas_arrondi) * pas_arrondi for v in toutes_valeurs)
                         valeurs_graduees = sorted(compteur_valeurs.keys())
                         if len(valeurs_graduees) == 1:
                             st.metric("Salaire annuel indiqué", f"{valeurs_graduees[0]:,.0f} €".replace(",", " "))
@@ -990,7 +1033,7 @@ with tab_evenements:
         public_cible_codes = [1, 2] if debutant_uniquement else None
 
         with st.spinner("Recherche d'événements en cours..."):
-            evenements = rechercher_evenements_emploi(
+            evenements, total_grand_domaine, nb_avant_filtre_rome = rechercher_evenements_emploi(
                 codes_resolus_evt, departement_evt, jours_max=fenetre_jours,
                 modalite=modalite_code, public_cible=public_cible_codes,
             )
@@ -1005,6 +1048,18 @@ with tab_evenements:
                 f"Aucun événement trouvé pour ces critères dans les {fenetre_jours} prochains jours."
             )
         else:
+            # Transparence sur le filtrage : le grand domaine ROME (une lettre, ex: "M" pour
+            # "Support à l'entreprise") est large et couvre bien plus que le seul poste
+            # recherché — un résultat final réduit après affinage sur le(s) code(s) ROME
+            # précis n'est donc pas anormal, ce message permet de le vérifier soi-même
+            # plutôt que de se demander si l'app "rate" des événements.
+            if total_grand_domaine and len(evenements) < nb_avant_filtre_rome:
+                st.caption(
+                    f"ℹ️ {len(evenements)} événement(s) affiché(s), affinés sur le(s) poste(s) "
+                    f"précis parmi {nb_avant_filtre_rome} récupérés sur cette page — le grand "
+                    f"domaine du poste recherché en compte {total_grand_domaine} au total sur la "
+                    "période, mais couvre bien d'autres métiers que celui recherché."
+                )
             df_evenements = pd.DataFrame(
                 [
                     {
