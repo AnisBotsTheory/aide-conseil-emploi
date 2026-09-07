@@ -1014,6 +1014,33 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         prenom = c1.text_input("Prénom", key="cv_prenom")
         nom = c2.text_input("Nom", key="cv_nom")
 
+        # Département de résidence déplacé ICI, avant le titre de poste et
+        # _selecteur_poste_recherche() — corrige un bug d'ordre d'exécution :
+        # ce sélecteur lisait auparavant st.session_state["cv_departement"]
+        # AVANT que le widget plus bas dans le script n'ait eu l'occasion de
+        # l'écrire pour ce même run. Résultat concret : au moment précis où
+        # l'utilisateur changeait de département, la résolution des codes ROME
+        # de cette exécution utilisait encore l'ANCIENNE valeur (ou le repli
+        # "13" par défaut) — un décalage d'un cycle d'exécution Streamlit qui
+        # se corrigeait seul à la prochaine interaction, mais donnait
+        # l'impression trompeuse que "le code reste bloqué sur le 13".
+        options_departement_cv = ["Non renseigné"] + sorted(
+            f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items()
+        )
+        departement_choisi_cv = st.selectbox(
+            "Département de résidence",
+            options=options_departement_cv,
+            key="cv_departement_label",
+            help=(
+                "N'apparaît pas sur le CV — préremplit automatiquement le département dans "
+                "l'onglet 🎯 Tendance par profil."
+            ),
+        )
+        if departement_choisi_cv != "Non renseigné":
+            st.session_state["cv_departement"] = departement_choisi_cv.split(" - ")[0]
+        else:
+            st.session_state.pop("cv_departement", None)
+
         titre_recherche = st.text_input(
             "Titre du poste recherché (ex: PMO Finance)",
             key="cv_titre",
@@ -1039,13 +1066,14 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
         with st.expander("🔧 Diagnostic technique La Bonne Boîte (temporaire)"):
             st.caption(
-                "Outil de mise au point — teste plusieurs endpoints candidats (l'API était "
-                "publique avant le passage à France Travail, mais l'URL a pu changer) et "
-                "affiche la vraie réponse, pour identifier la bonne configuration."
+                "Outil de mise au point — teste /nombreEntreprise ET /recherche (les deux "
+                "endpoints utilisés par l'app) pour le département actuellement renseigné "
+                "ci-dessus, et affiche la vraie réponse de chacun."
             )
             if st.button("Lancer le diagnostic", key="btn_diagnostic_lbb"):
+                departement_diag_lbb = st.session_state.get("cv_departement") or "13"
                 with st.spinner("Test des endpoints La Bonne Boîte en cours..."):
-                    resultats_diag_lbb = diagnostiquer_la_bonne_boite()
+                    resultats_diag_lbb = diagnostiquer_la_bonne_boite(departement=departement_diag_lbb)
                 st.json(resultats_diag_lbb)
 
         with st.expander("🔧 Diagnostic technique Marché du travail (temporaire)"):
@@ -1074,23 +1102,6 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         adresse = st.text_input(
             "Adresse", key="cv_adresse", placeholder="ex: 6 Calle Cronista Veravens, 3012 Alicante, España"
         )
-
-        options_departement_cv = ["Non renseigné"] + sorted(
-            f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items()
-        )
-        departement_choisi_cv = st.selectbox(
-            "Département de résidence",
-            options=options_departement_cv,
-            key="cv_departement_label",
-            help=(
-                "N'apparaît pas sur le CV — préremplit automatiquement le département dans "
-                "l'onglet 🎯 Tendance par profil."
-            ),
-        )
-        if departement_choisi_cv != "Non renseigné":
-            st.session_state["cv_departement"] = departement_choisi_cv.split(" - ")[0]
-        else:
-            st.session_state.pop("cv_departement", None)
 
         profil = st.text_area(
             "Profil / accroche (2-3 phrases qui résument votre parcours et votre projet)",
