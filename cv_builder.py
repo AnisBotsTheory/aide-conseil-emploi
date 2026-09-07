@@ -938,8 +938,10 @@ def _selecteur_poste_recherche(titre_recherche):
     postes_choisis = st.session_state[cle_selection]
 
     # Résolution des codes ROME (même mécanisme que dans l'Espace Candidat).
+    # Pas de repli "13" : cette fonction n'est appelée que lorsque le
+    # département est déjà renseigné (gardé côté afficher_generateur_cv).
     codes_par_poste = {}
-    departement_pour_resolution = st.session_state.get("cv_departement") or "13"
+    departement_pour_resolution = st.session_state.get("cv_departement")
     for label in postes_choisis:
         item_poste = next((a for a in appellations if a.get("libelle", "").strip() == label), None)
         code = _extraire_code_rome(item_poste) if item_poste else None
@@ -970,7 +972,7 @@ def _section_suggestions_competences(fonction_analyse_competences):
         )
         return
 
-    departement_cv = st.session_state.get("cv_departement") or "13"
+    departement_cv = st.session_state.get("cv_departement")
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
     cle_signature = "cv_suggestions_signature"
@@ -1038,7 +1040,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "que vous visez.\n"
         "2. 🎯 **Tendance par profil** — se lance automatiquement dès que votre poste est "
         "renseigné : tension du marché, villes qui recrutent, top recruteurs à démarcher.\n"
-        "3. 🧩 **KPIs avancés** — pour aller plus loin : évolution du marché, salaires, types "
+        "3. 📊 **Compléments d'analyse** — pour aller plus loin : évolution du marché, salaires, types "
         "de contrat."
     )
 
@@ -1090,12 +1092,12 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             f"{code} - {nom}" for code, nom in DEPARTEMENTS_VERS_NOM.items()
         )
         departement_choisi_cv = st.selectbox(
-            "Département de résidence",
+            "Département de résidence *",
             options=options_departement_cv,
             key="cv_departement_label",
             help=(
-                "N'apparaît pas sur le CV — préremplit automatiquement le département dans "
-                "l'onglet 🎯 Tendance par profil."
+                "Obligatoire avant de renseigner un poste — sert de base à toute l'analyse de "
+                "marché (Tendance par profil, Compléments d'analyse, Événements). N'apparaît pas sur le CV."
             ),
         )
         if departement_choisi_cv != "Non renseigné":
@@ -1103,18 +1105,32 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         else:
             st.session_state.pop("cv_departement", None)
 
+        departement_defini = st.session_state.get("cv_departement") is not None
+
+        # Poste bloqué tant que le département n'est pas renseigné — évite un
+        # repli silencieux sur un département arbitraire (ex: "13" par défaut)
+        # pour des recherches et une analyse de marché qui n'auraient alors
+        # aucun rapport avec la situation réelle de l'utilisateur.
+        if not departement_defini:
+            st.warning(
+                "⚠️ Renseigne d'abord ton département de résidence ci-dessus — il est "
+                "obligatoire avant de choisir un poste, car toute l'analyse de marché plus "
+                "loin dans l'app (Tendance par profil, Compléments d'analyse, Événements) en dépend."
+            )
         titre_recherche = st.text_input(
             "Titre du poste recherché (ex: PMO Finance)",
             key="cv_titre",
+            disabled=not departement_defini,
             help="C'est ce titre qui apparaîtra sur ton CV, sous forme « Prénom NOM – Poste ».",
         )
-        st.caption(
-            "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
-            "Finance senior confirmé »). Ci-dessous, choisis un ou plusieurs intitulés officiels "
-            "France Travail (ROME) proches — ce sont eux qui alimentent l'analyse automatique de "
-            "l'onglet **🎯 Tendance par profil** et les suggestions de compétences plus bas."
-        )
-        _selecteur_poste_recherche(titre_recherche)
+        if departement_defini:
+            st.caption(
+                "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
+                "Finance senior confirmé »). Ci-dessous, choisis un ou plusieurs intitulés officiels "
+                "France Travail (ROME) proches — ce sont eux qui alimentent l'analyse automatique de "
+                "l'onglet **🎯 Tendance par profil** et les suggestions de compétences plus bas."
+            )
+            _selecteur_poste_recherche(titre_recherche)
 
         with st.expander("🔧 Diagnostic technique ROMEO 2 (temporaire)"):
             st.caption(
@@ -1133,10 +1149,13 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "ci-dessus, et affiche la vraie réponse de chacun."
             )
             if st.button("Lancer le diagnostic", key="btn_diagnostic_lbb"):
-                departement_diag_lbb = st.session_state.get("cv_departement") or "13"
-                with st.spinner("Test des endpoints La Bonne Boîte en cours..."):
-                    resultats_diag_lbb = diagnostiquer_la_bonne_boite(departement=departement_diag_lbb)
-                st.json(resultats_diag_lbb)
+                departement_diag_lbb = st.session_state.get("cv_departement")
+                if not departement_diag_lbb:
+                    st.warning("Renseigne d'abord un département de résidence ci-dessus.")
+                else:
+                    with st.spinner("Test des endpoints La Bonne Boîte en cours..."):
+                        resultats_diag_lbb = diagnostiquer_la_bonne_boite(departement=departement_diag_lbb)
+                    st.json(resultats_diag_lbb)
 
         with st.expander("🔧 Diagnostic technique Fiches métiers (temporaire)"):
             st.caption(
