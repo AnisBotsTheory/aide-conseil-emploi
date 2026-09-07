@@ -1038,7 +1038,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "**Le parcours complet de l'application :**\n"
         "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
         "que vous visez.\n"
-        "2. 🎯 **Tendance par profil** — se lance automatiquement dès que votre poste est "
+        "2. 🎯 **Tendance** — se lance automatiquement dès que votre poste est "
         "renseigné : tension du marché, villes qui recrutent, top recruteurs à démarcher.\n"
         "3. 📊 **Compléments d'analyse** — pour aller plus loin : évolution du marché, salaires, types "
         "de contrat."
@@ -1097,7 +1097,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             key="cv_departement_label",
             help=(
                 "Obligatoire avant de renseigner un poste — sert de base à toute l'analyse de "
-                "marché (Tendance par profil, Compléments d'analyse, Événements). N'apparaît pas sur le CV."
+                "marché (Tendance, Compléments d'analyse, Événements). N'apparaît pas sur le CV."
             ),
         )
         if departement_choisi_cv != "Non renseigné":
@@ -1115,7 +1115,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             st.warning(
                 "⚠️ Renseigne d'abord ton département de résidence ci-dessus — il est "
                 "obligatoire avant de choisir un poste, car toute l'analyse de marché plus "
-                "loin dans l'app (Tendance par profil, Compléments d'analyse, Événements) en dépend."
+                "loin dans l'app (Tendance, Compléments d'analyse, Événements) en dépend."
             )
         titre_recherche = st.text_input(
             "Titre du poste recherché (ex: PMO Finance)",
@@ -1128,7 +1128,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
                 "Finance senior confirmé »). Ci-dessous, choisis un ou plusieurs intitulés officiels "
                 "France Travail (ROME) proches — ce sont eux qui alimentent l'analyse automatique de "
-                "l'onglet **🎯 Tendance par profil** et les suggestions de compétences plus bas."
+                "l'onglet **🎯 Tendance** et les suggestions de compétences plus bas."
             )
             _selecteur_poste_recherche(titre_recherche)
 
