@@ -1,23 +1,25 @@
 """
 espace_candidat.py
 --------------------
-Page "Espace Candidat" — 3 onglets (Créer mon CV, Tendance par profil, KPIs
-avancés), accès gratuit et public. Toute la logique de calcul vient de
-moteur_recherche.py (aucune duplication).
+Page "Espace Candidat" — 4 onglets (Créer mon CV, Analyse principale,
+Compléments d'analyse, Événements), accès gratuit et public. Toute la logique
+de calcul vient de moteur_recherche.py (aucune duplication).
 
 L'onglet "Offres d'emploi" a été retiré : lister des offres n'a pas d'avantage
 face aux plateformes dédiées (France Travail, LinkedIn, Indeed...) — pas
 d'alertes, pas de candidature en un clic, pas de sauvegarde de recherche. Ce
-qui reste différenciant, c'est la lecture de marché (tension, évolution,
-répartition contrats/salaires, villes/recruteurs actifs) — pas le listing
-d'offres lui-même. "Villes qui recrutent"/"Top recruteurs" deviennent des
-pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
+qui reste différenciant, c'est la lecture de marché (compétences, salaires,
+répartition contrats/salaires, villes/recruteurs actifs, dynamisme du
+département) — pas le listing d'offres lui-même. "Villes qui recrutent"/"Top
+recruteurs" deviennent des pistes de candidature spontanée ou ciblée plutôt
+qu'un moteur de recherche d'offres.
 """
 
 import streamlit as st
 import pandas as pd
 import re
 import random
+from urllib.parse import quote_plus
 from collections import Counter
 from datetime import datetime  # noqa: F401 — utilisé dans l'onglet Compléments d'analyse ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
@@ -89,12 +91,33 @@ with tab_cv:
 # Onglet 1 : Tendance par profil
 # ---------------------------------------------------------------------------
 with tab_profil:
+    postes_cv = st.session_state.get("cv_postes_recherche", [])
+    mots_cles_lien_ft = quote_plus(" ".join(postes_cv)) if postes_cv else ""
+    lien_recherche_ft = (
+        f"https://candidat.francetravail.fr/offres/recherche?motsCles={mots_cles_lien_ft}"
+        if mots_cles_lien_ft else "https://candidat.francetravail.fr/offres/recherche"
+    )
     st.caption(
-        "Analyse du marché pour le(s) poste(s) sélectionné(s) dans votre CV : où sont les offres "
-        "près de chez vous, le volume national, et le niveau de tension du marché sur ce métier."
+        "Analyse du marché pour le(s) poste(s) sélectionné(s) dans votre CV, basée sur des "
+        "offres réelles publiées sur France Travail : quelles entreprises recrutent près de "
+        "chez vous, quelles compétences et quel savoir-être sont demandés, et le dynamisme "
+        "économique de votre département."
+    )
+    st.info(
+        "💡 Cette application n'a pas vocation à être une plateforme de recrutement — c'est un "
+        "outil de **conseil**, pour vous aider à construire votre stratégie de recherche "
+        "d'emploi. Pour consulter et postuler aux offres correspondant à votre recherche, "
+        f"rendez-vous sur [candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer "
+        "par votre département une fois sur place)."
+    )
+    st.caption(
+        "ℹ️ Le total peut différer de celui du site France Travail (recherche par code ROME "
+        "et période glissante, contre mots-clés libres et offres actives en temps réel)."
     )
 
-    postes_cv = st.session_state.get("cv_postes_recherche", [])
+            "récent."
+        )
+
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
     departement_cv = st.session_state.get("cv_departement")
@@ -156,7 +179,8 @@ with tab_profil:
         if df_rome.empty:
             st.error("Aucune offre trouvée pour ce département. Essaie d'élargir les critères.")
         else:
-            # Tension et villes qui recrutent partagent la même base de temps : depuis
+            # Recruteurs, classement des villes et Compléments d'analyse partagent la même
+            # base de temps : depuis
             # le début du semestre EN COURS (celui qui contient la date d'aujourd'hui).
             aujourdhui = datetime.now()
             if aujourdhui.month <= 6:
@@ -167,14 +191,25 @@ with tab_profil:
                 libelle_periode_offres = f"2e semestre {aujourdhui.year}"
             jours_max_periode_offres = (aujourdhui - debut_periode).days
             titre_libre_cv = st.session_state.get("cv_titre", "").strip()
+            # Mémorisé pour que "Compléments d'analyse" utilise EXACTEMENT la même fenêtre
+            # temporelle — sans ça, cet onglet interrogeait toutes les offres actives sans
+            # filtre de date, donnant un total d'échantillon différent de celui affiché ici
+            # pour la même recherche, malgré la demande d'un total aligné entre les deux.
+            st.session_state["jours_max_periode_offres"] = jours_max_periode_offres
+            st.session_state["libelle_periode_offres"] = libelle_periode_offres
 
             sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
-                ["🏢 Top Recruteurs", "🎓 Compétences", "📍 Dynamisme géographique"]
+                ["🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique"]
             )
 
             with sous_tab_recruteurs:
+                st.markdown(
+                    "Deux façons de repérer une entreprise à contacter pour ce métier : celles "
+                    "qui recrutent **déjà visiblement**, et celles qui ont un **fort potentiel** "
+                    "d'embauche même sans offre publiée."
+                )
                 with st.spinner("Récupération des recruteurs actifs..."):
-                    _, _, _, _, df_entreprises, _ = offres_par_ville_elargi(
+                    _, total_echantillon_recruteurs, _, _, df_entreprises, _ = offres_par_ville_elargi(
                         codes_resolus_cv, titre_libre_cv, departement_actif,
                         jours_max=jours_max_periode_offres,
                     )
@@ -183,7 +218,8 @@ with tab_profil:
                 st.caption(
                     f"ℹ️ Recruteurs actifs {libelle_periode_offres} — ont publié une offre "
                     "récemment sur le métier et le département sélectionnés. Argument de "
-                    "candidature ciblée."
+                    f"candidature ciblée. Échantillon : **{total_echantillon_recruteurs} offre(s)** "
+                    "publiée(s) sur France Travail."
                 )
                 if df_entreprises.empty:
                     st.info(
@@ -300,13 +336,27 @@ with tab_profil:
                 )
 
             with sous_tab_certifs:
+                st.markdown(
+                    "Ce que le marché demande réellement pour ce métier : certifications, "
+                    "savoir-faire et savoir-être les plus cités dans les offres, complétés par "
+                    "le référentiel officiel du métier (ROME)."
+                )
+                st.caption(
+                    "ℹ️ Au sens France Travail : le **savoir-être** représente les soft skills "
+                    "propres à chaque personne (comportement, posture professionnelle) ; le "
+                    "**savoir-faire** correspond aux connaissances techniques nécessaires au "
+                    "poste ; les **compétences** désignent les tâches et missions concrètement "
+                    "liées au poste (à retrouver dans le référentiel officiel du métier, "
+                    "ci-dessous, aux côtés de la liste complète des savoir-faire et savoir-être)."
+                )
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
                 else:
                     df_comp, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
                     st.caption(
                         "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
-                        "Travail pour le(s) poste(s) sélectionné(s)."
+                        f"Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
+                        f"**{nb_total_suggestions} offre(s)**."
                     )
                     if df_certifs.empty:
                         st.info("Aucune certification identifiée dans les offres de cet échantillon.")
@@ -340,10 +390,12 @@ with tab_profil:
                     st.divider()
                     st.markdown("##### 🛠️ Savoir-faire les plus demandés")
                     st.caption(
-                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
-                        "Travail pour le(s) poste(s) sélectionné(s) — compétences pratiques/"
-                        "techniques mentionnées (hors outils, langages et certifications, "
-                        "affichés séparément)."
+                        "ℹ️ Le savoir-faire désigne les connaissances techniques nécessaires au "
+                        "poste. Ces savoir-faire proviennent directement des annonces publiées sur "
+                        "France Travail pour le(s) poste(s) sélectionné(s) dans votre CV, sur le "
+                        "département renseigné (hors outils, langages et certifications, "
+                        "affichés séparément). "
+                        f"Échantillon : **{nb_total_suggestions} offre(s)**."
                     )
                     if df_comp.empty:
                         st.info("Aucun savoir-faire identifié dans les offres de cet échantillon.")
@@ -359,8 +411,11 @@ with tab_profil:
                     st.divider()
                     st.markdown("##### 🤝 Savoir-être les plus demandés")
                     st.caption(
-                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
-                        "Travail pour le(s) poste(s) sélectionné(s)."
+                        "ℹ️ Le savoir-être représente les soft skills propres à chaque personne "
+                        "(comportement, posture professionnelle). Ces savoir-être proviennent "
+                        "directement des annonces publiées sur France Travail pour le(s) poste(s) "
+                        "sélectionné(s) dans votre CV, sur le département renseigné. "
+                        f"Échantillon : **{nb_total_suggestions} offre(s)**."
                     )
                     if df_savoir_etre.empty:
                         st.info("Aucun savoir-être identifié dans les offres de cet échantillon.")
@@ -389,10 +444,15 @@ with tab_profil:
                 st.divider()
                 st.markdown("##### 📖 Référentiel officiel du métier (ROME)")
                 st.caption(
-                    "ℹ️ Compétences et savoir-être TELS QUE DÉFINIS par le répertoire officiel — "
-                    "complémentaire des listes ci-dessus (qui reflètent la demande réelle des "
-                    "recruteurs, là maintenant). Une fiche par poste sélectionné, pas fusionnée "
-                    "en cas de multi-poste."
+                    "ℹ️ Ces fiches résument les compétences (tâches et missions concrètement "
+                    "liées au poste), le savoir-faire (connaissances techniques) et le "
+                    "savoir-être (soft skills) liés au métier, TELS QUE DÉFINIS par le "
+                    "répertoire officiel de France Travail — complémentaire des listes "
+                    "mentionnées précédemment (afin de compléter la vision sur la demande des "
+                    "recruteurs). C'est ici que figure la liste COMPLÈTE des savoir-faire et "
+                    "savoir-être officiels du métier, au-delà de ceux les plus cités dans les "
+                    "offres ci-dessus. Une fiche par poste sélectionné, pas fusionnée en cas de "
+                    "multi-poste."
                 )
                 for label, code in codes_par_poste_cv.items():
                     if not code:
@@ -404,6 +464,8 @@ with tab_profil:
                         else:
                             if fiche_metier["competences"]:
                                 st.markdown("**Compétences :** " + ", ".join(fiche_metier["competences"]))
+                            if fiche_metier["savoir_faire"]:
+                                st.markdown("**Savoir-faire :** " + ", ".join(fiche_metier["savoir_faire"]))
                             if fiche_metier["savoir_etre"]:
                                 st.markdown("**Savoir-être :** " + ", ".join(fiche_metier["savoir_etre"]))
                             if fiche_metier["savoirs"]:
@@ -422,10 +484,9 @@ with tab_profil:
                         st.json(resultats_diag_fm)
 
             with sous_tab_villes:
-                st.caption(
-                    f"ℹ️ Classement {libelle_periode_offres} (même base que la tension et le top "
-                    "recruteurs), et comparaison du dynamisme économique du département avec "
-                    "quelques territoires contrastés."
+                st.markdown(
+                    "Où se trouvent les offres pour ce métier, et comment se porte "
+                    "économiquement votre département par rapport à d'autres."
                 )
 
                 # --- Classement des villes (remplace la carte) ---
@@ -435,11 +496,14 @@ with tab_profil:
                         codes_resolus_cv, titre_libre_cv, departement_actif,
                         jours_max=jours_max_periode_offres,
                     )
+                st.caption(
+                    f"ℹ️ Classement {libelle_periode_offres}. Échantillon : "
+                    f"**{total_region} offre(s)** publiée(s) sur France Travail."
+                )
                 # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
                 # donnent la plage de publication réelle des offres renvoyées par l'API —
                 # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
-                # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
-                # offres sont simplement celles encore actives aujourd'hui.
+                # (format AAAA-MM-JJ)".
                 if df_villes.empty:
                     st.info("Aucune offre trouvée pour ces critères.")
                 else:
@@ -599,22 +663,37 @@ with tab_avance:
             "s'appuient sur l'analyse automatique de l'onglet Analyse principale."
         )
     else:
+        st.caption(
+            "Détails complémentaires sur le même échantillon d'offres que l'onglet Analyse "
+            "principale : répartition par type de contrat, fourchette de salaire, niveau "
+            "d'expérience demandé."
+        )
         code_rome_actif = st.session_state["code_rome_choisi"]
         codes_rome_choisis_avance = st.session_state.get("codes_rome_choisis", [])
         departement_actif = st.session_state["departement_profil_actif"]
         titre_libre_cv_avance = st.session_state.get("cv_titre", "").strip()
+        # Même fenêtre temporelle que "Analyse principale" (mémorisée par cet onglet) — sans
+        # ça, cet onglet interrogeait toutes les offres actives sans filtre de date, donnant
+        # un total d'échantillon différent de l'onglet Analyse principale pour la même
+        # recherche.
+        jours_max_periode_offres_avance = st.session_state.get("jours_max_periode_offres")
+        libelle_periode_offres_avance = st.session_state.get("libelle_periode_offres", "")
 
         # Auto-déclenchement : se relance seul dès que le poste/département actif change
-        # (mis à jour automatiquement par "Tendance par profil"), résultats conservés en
+        # (mis à jour automatiquement par "Analyse principale"), résultats conservés en
         # session pour rester affichés en revenant sur cet onglet.
         cle_signature_avance = "avance_auto_signature"
-        signature_avance_actuelle = (code_rome_actif, tuple(codes_rome_choisis_avance), departement_actif)
+        signature_avance_actuelle = (
+            code_rome_actif, tuple(codes_rome_choisis_avance), departement_actif,
+            jours_max_periode_offres_avance,
+        )
 
         if st.session_state.get(cle_signature_avance) != signature_avance_actuelle:
             with st.spinner("Analyse en cours (contrats, salaires, expérience)..."):
                 df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                     repartition_contrats_et_salaires_elargi(
                         codes_rome_choisis_avance, titre_libre_cv_avance, departement_actif,
+                        jours_max=jours_max_periode_offres_avance,
                     )
                 )
             st.session_state["avance_resultats"] = (
@@ -626,9 +705,15 @@ with tab_avance:
             df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                 st.session_state["avance_resultats"]
             )
+            st.caption(
+                f"ℹ️ Échantillon {libelle_periode_offres_avance} : **{nb_total_offres} offre(s)** "
+                "publiée(s) sur France Travail — identique à l'onglet Analyse principale pour "
+                "cette même recherche."
+            )
 
             st.divider()
             st.markdown("#### 📋 Répartition par type de contrat")
+            st.caption("Quels contrats sont réellement proposés — CDI, CDD, intérim...")
             if df_contrats.empty:
                 st.info("Aucune donnée de type de contrat disponible pour ces critères.")
             else:
@@ -699,6 +784,7 @@ with tab_avance:
 
             st.divider()
             st.markdown("#### 💰 Fourchette de salaire proposée")
+            st.caption("Les montants réellement affichés sur les offres CDI de cet échantillon.")
             if code_rome_actif != "MULTI" and code_rome_actif != "TOUS":
                 valeur_sal, nom_sal, periode_sal, erreur_sal = salaires_officiels_metier(
                     code_rome_actif, code_territoire=departement_actif, code_type_territoire="DEP",
@@ -807,8 +893,8 @@ with tab_avance:
                     # d'un gros st.metric qui lui donnait plus de poids visuel que ce n'est
                     # qu'un indicateur de taille d'échantillon).
                     st.caption(
-                        f"📎 Source : {nb_avec_salaire} offre(s) sur {nb_total_offres} indiquent un "
-                        "salaire, tous types de contrat confondus — jauge ci-dessus calculée "
+                        f"📎 Source : **{nb_avec_salaire} offre(s)** sur {nb_total_offres} indiquent "
+                        "un salaire, tous types de contrat confondus — jauge ci-dessus calculée "
                         "uniquement sur les offres CDI parmi elles, montants annualisés (un salaire "
                         "mensuel est multiplié par 12 ; un salaire horaire est exclu, faute de "
                         "pouvoir le convertir en annuel de façon fiable)."
@@ -816,6 +902,7 @@ with tab_avance:
 
             st.divider()
             st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
+            st.caption("De « Débutant accepté » à plusieurs années requises.")
             if df_experience.empty:
                 st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
             else:
