@@ -3120,6 +3120,170 @@ def estimer_duree_recherche(tension):
     return "environ 14 à 26 semaines (3 à 6 mois)", note_source
 
 
+# ---------------------------------------------------------------------------
+# Mes événements emploi — forums, salons, ateliers, job dating... pour repérer
+# des événements de recrutement pertinents pour le(s) poste(s) recherché(s).
+# Domaine d'authentification différent du reste de l'app (comme La Bonne
+# Boîte), confirmé par la doc officielle. Les endpoints /salonsenligne et
+# /salonsenligne/jeunes sont explicitement DÉPRÉCIÉS par France Travail
+# ("cette ressource est dépréciée et sera bientôt décommissionnée") —
+# volontairement NON intégrés ici : seul l'endpoint de recherche d'événements
+# actif (/mee/evenements) est utilisé.
+#
+# Limite connue : l'API ne propose pas de filtre serveur par code ROME précis,
+# seulement par "grand domaine" ROME (une lettre A à N, un regroupement large
+# de métiers). Le filtre serveur se fait donc sur cette lettre (déduite du
+# premier code ROME résolu), puis un filtrage CLIENT affine sur les
+# événements dont le champ "codesRome" recoupe réellement l'un des codes
+# recherchés.
+# ---------------------------------------------------------------------------
+EVENEMENTS_SCOPE = "api_evenementsv1 evenements"  # les deux scopes sont obligatoires (doc officielle)
+EVENEMENTS_TOKEN_URL = (
+    "https://authentification-partenaire.francetravail.io/connexion/oauth2/access_token?realm=/partenaire"
+)  # domaine différent du reste de l'app, confirmé par la doc officielle (comme La Bonne Boîte)
+EVENEMENTS_RECHERCHE_URL = "https://api.francetravail.io/partenaire/evenements/v1/mee/evenements"
+
+
+def _grand_domaine_depuis_code_rome(code_rome):
+    """
+    Déduit la lettre de grand domaine ROME (A à N) attendue par le paramètre
+    "secteurActivite" de l'API Événements, à partir de la première lettre
+    d'un code ROME (ex: "M1805" -> "M", grand domaine 13 "Support à
+    l'entreprise", qui couvre notamment PMO / chef de projet). Retourne None
+    si le code est vide ou mal formé.
+    """
+    if not code_rome:
+        return None
+    premiere_lettre = code_rome.strip()[0].upper()
+    return premiere_lettre if premiere_lettre.isalpha() else None
+
+
+def _get_token_evenements(scope):
+    """Jeton pour l'API Événements — domaine d'authentification différent
+    (authentification-partenaire.francetravail.io), confirmé par la doc
+    officielle de cette API spécifique. Fonction dédiée plutôt que de modifier
+    get_token(), pour ne pas risquer de casser les autres intégrations."""
+    payload = {
+        "grant_type": "client_credentials", "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET, "scope": scope,
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    r = requests.post(EVENEMENTS_TOKEN_URL, data=payload, headers=headers)
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+def rechercher_evenements_emploi(codes_rome, departement=None, jours_max=90, page_size=20):
+    """
+    Recherche des événements "Mes événements emploi" (forums, salons, ateliers,
+    job dating...) pertinents pour le(s) code(s) ROME donnés, sur les
+    "jours_max" prochains jours (par défaut 90).
+
+    Renvoie une liste de dicts (contenu brut de l'API, potentiellement vide)
+    ou None en cas d'échec — dégradation silencieuse, comme partout ailleurs
+    dans ce module.
+    """
+    try:
+        token = _get_token_evenements(EVENEMENTS_SCOPE)
+    except Exception:
+        return None
+
+    codes = [c for c in (codes_rome or []) if c]
+    grand_domaine = _grand_domaine_depuis_code_rome(codes[0]) if codes else None
+
+    aujourdhui = datetime.now(timezone.utc)
+    corps = {
+        "dateDebut": aujourdhui.strftime("%Y-%m-%d"),
+        "dateFin": (aujourdhui + timedelta(days=jours_max)).strftime("%Y-%m-%d"),
+    }
+    if grand_domaine:
+        corps["secteurActivite"] = grand_domaine
+    if departement:
+        corps["departements"] = [str(departement)]
+
+    headers = {
+        "Authorization": f"Bearer {token}", "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    params = {"size": min(page_size, 100)}
+    try:
+        r = requests.post(
+            EVENEMENTS_RECHERCHE_URL, headers=headers, params=params, json=corps, timeout=10
+        )
+    except requests.RequestException:
+        return None
+    if r.status_code not in (200, 206):
+        return None
+    try:
+        data = r.json()
+    except ValueError:
+        return None
+
+    evenements = data.get("content") or []
+    if codes:
+        # Filtrage client : le grand domaine (lettre) est large, on affine sur
+        # les événements dont "codesRome" recoupe réellement un code recherché.
+        evenements_filtres = [
+            e for e in evenements if set(e.get("codesRome") or []) & set(codes)
+        ]
+        # Si le recoupement précis ne garde rien (grand domaine correct mais
+        # aucun code ROME exact en commun), on préfère renvoyer les résultats
+        # du grand domaine plutôt qu'une liste vide — mieux vaut un résultat
+        # un peu large qu'aucune piste du tout.
+        if evenements_filtres:
+            evenements = evenements_filtres
+    return evenements
+
+
+def diagnostiquer_evenements(codes_rome=None, departement="13"):
+    """
+    Outil de DIAGNOSTIC pour "Mes événements emploi" — affiche la réponse
+    brute (corps envoyé + réponse) pour vérifier le scope et le format en
+    conditions réelles. Pas utilisé par le flux normal de l'app.
+    """
+    try:
+        token = _get_token_evenements(EVENEMENTS_SCOPE)
+    except Exception as e:
+        detail_erreur = str(e)
+        try:
+            r_token = requests.post(
+                EVENEMENTS_TOKEN_URL,
+                data={
+                    "grant_type": "client_credentials", "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET, "scope": EVENEMENTS_SCOPE,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            detail_erreur = f"{r_token.status_code} — {r_token.text[:500]}"
+        except requests.RequestException:
+            pass
+        return [{"etape": "obtention du token (scope api_evenementsv1 + evenements)", "erreur": detail_erreur}]
+
+    codes = [c for c in (codes_rome or []) if c]
+    grand_domaine = _grand_domaine_depuis_code_rome(codes[0]) if codes else None
+    aujourdhui = datetime.now(timezone.utc)
+    corps = {
+        "dateDebut": aujourdhui.strftime("%Y-%m-%d"),
+        "dateFin": (aujourdhui + timedelta(days=90)).strftime("%Y-%m-%d"),
+    }
+    if grand_domaine:
+        corps["secteurActivite"] = grand_domaine
+    if departement:
+        corps["departements"] = [str(departement)]
+
+    headers = {
+        "Authorization": f"Bearer {token}", "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    resultats_diagnostic = [{"etape": "token obtenu", "corps_envoye": corps}]
+    try:
+        r = requests.post(
+            EVENEMENTS_RECHERCHE_URL, headers=headers, params={"size": 10}, json=corps, timeout=10
+        )
+        resultats_diagnostic.append({"status": r.status_code, "reponse": r.text[:1500]})
+    except requests.RequestException as e:
+        resultats_diagnostic.append({"erreur": str(e)})
+    return resultats_diagnostic
 
 
 __all__ = [
@@ -3227,4 +3391,11 @@ __all__ = [
     "interpreter_tension",
     "conseils_tension",
     "estimer_duree_recherche",
+    "EVENEMENTS_SCOPE",
+    "EVENEMENTS_TOKEN_URL",
+    "EVENEMENTS_RECHERCHE_URL",
+    "_grand_domaine_depuis_code_rome",
+    "_get_token_evenements",
+    "rechercher_evenements_emploi",
+    "diagnostiquer_evenements",
 ]
