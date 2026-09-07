@@ -929,7 +929,14 @@ def _selecteur_poste_recherche(titre_recherche):
     # aucune sélection automatique n'est faite ici : les étiquettes sont
     # affichées, mais c'est à l'utilisateur de cliquer sur celle(s) qu'il veut
     # réellement retenir pour l'analyse de marché.
-    suggestions = suggerer_postes(titre_recherche, max_resultats=14) if titre_recherche.strip() else []
+    # Spinner ajouté : cette recherche (référentiel + ROMEO + correspondance floue)
+    # peut prendre quelques secondes, sans indicateur visuel jusqu'ici — donnait
+    # l'impression que l'app était figée pendant le chargement.
+    if titre_recherche.strip():
+        with st.spinner("Recherche des postes correspondants..."):
+            suggestions = suggerer_postes(titre_recherche, max_resultats=14)
+    else:
+        suggestions = []
 
     # Un nouveau terme de recherche efface la sélection précédente : sinon les postes
     # d'une recherche antérieure restent cochés en changeant complètement de sujet.
@@ -1058,7 +1065,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "**Le parcours complet de l'application :**\n"
         "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
         "que vous visez.\n"
-        "2. 🎯 **Tendance** — se lance automatiquement dès que votre poste est "
+        "2. 🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
         "renseigné : tension du marché, villes qui recrutent, top recruteurs à démarcher.\n"
         "3. 📊 **Compléments d'analyse** — pour aller plus loin : évolution du marché, salaires, types "
         "de contrat."
@@ -1117,7 +1124,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             key="cv_departement_label",
             help=(
                 "Obligatoire avant de renseigner un poste — sert de base à toute l'analyse de "
-                "marché (Tendance, Compléments d'analyse, Événements). N'apparaît pas sur le CV."
+                "marché (Analyse principale, Compléments d'analyse, Événements). N'apparaît pas sur le CV."
             ),
         )
         if departement_choisi_cv != "Non renseigné":
@@ -1135,7 +1142,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             st.warning(
                 "⚠️ Renseigne d'abord ton département de résidence ci-dessus — il est "
                 "obligatoire avant de choisir un poste, car toute l'analyse de marché plus "
-                "loin dans l'app (Tendance, Compléments d'analyse, Événements) en dépend."
+                "loin dans l'app (Analyse principale, Compléments d'analyse, Événements) en dépend."
             )
         titre_recherche = st.text_input(
             "Titre du poste recherché (ex: PMO Finance)",
@@ -1148,7 +1155,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "💡 Privilégie un intitulé générique (ex: « Consultant » plutôt que « Consultant PMO "
                 "Finance senior confirmé »). Ci-dessous, choisis un ou plusieurs intitulés officiels "
                 "France Travail (ROME) proches — ce sont eux qui alimentent l'analyse automatique de "
-                "l'onglet **🎯 Tendance** et les suggestions de compétences plus bas."
+                "l'onglet **🎯 Analyse principale** et les suggestions de compétences plus bas."
             )
             _selecteur_poste_recherche(titre_recherche)
 
