@@ -239,7 +239,7 @@ with tab_profil:
             titre_libre_cv = st.session_state.get("cv_titre", "").strip()
 
             sous_tab_tension, sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
-                ["⚖️ Tension", "🏢 Recruteurs", "🎓 Certifications", "📍 Répartition géographique"]
+                ["⚖️ Tension", "🏢 Recruteurs", "🎓 Certifications", "📍 Dynamisme géographique"]
             )
 
             with sous_tab_tension:
@@ -554,10 +554,10 @@ with tab_profil:
                 st.divider()
                 st.markdown("##### 📖 Référentiel officiel du métier (ROME)")
                 st.caption(
-                    "ℹ️ Compétences, savoir-faire et savoir-être TELS QUE DÉFINIS par le "
-                    "répertoire officiel — complémentaire des listes ci-dessus (qui reflètent la "
-                    "demande réelle des recruteurs, là maintenant). Une fiche par poste sélectionné, "
-                    "pas fusionnée en cas de multi-poste."
+                    "ℹ️ Compétences et savoir-être TELS QUE DÉFINIS par le répertoire officiel — "
+                    "complémentaire des listes ci-dessus (qui reflètent la demande réelle des "
+                    "recruteurs, là maintenant). Une fiche par poste sélectionné, pas fusionnée "
+                    "en cas de multi-poste."
                 )
                 for label, code in codes_par_poste_cv.items():
                     if not code:
@@ -569,8 +569,6 @@ with tab_profil:
                         else:
                             if fiche_metier["competences"]:
                                 st.markdown("**Compétences :** " + ", ".join(fiche_metier["competences"]))
-                            if fiche_metier["savoir_faire"]:
-                                st.markdown("**Savoir-faire :** " + ", ".join(fiche_metier["savoir_faire"]))
                             if fiche_metier["savoir_etre"]:
                                 st.markdown("**Savoir-être :** " + ", ".join(fiche_metier["savoir_etre"]))
                             if fiche_metier["savoirs"]:
@@ -590,41 +588,94 @@ with tab_profil:
 
             with sous_tab_villes:
                 st.caption(
-                    f"ℹ️ Répartition {libelle_periode_offres} (même base que la tension et le top "
-                    "recruteurs). Basée sur le lieu tel qu'indiqué par l'offre — la plupart n'ont pas "
-                    "de géolocalisation précise côté France Travail, les positions approximatives "
-                    "sont signalées séparément ci-dessous."
+                    f"ℹ️ Classement {libelle_periode_offres} (même base que la tension et le top "
+                    "recruteurs), et comparaison du dynamisme économique du département avec "
+                    "quelques territoires contrastés."
                 )
 
-                valeur_dyn, nom_dyn, periode_dyn, erreur_dyn = dynamisme_territoire(departement_actif)
-                if not erreur_dyn and valeur_dyn is not None:
-                    st.metric(
-                        f"Dynamisme de l'emploi — département {departement_actif}", valeur_dyn,
-                        help=(
-                            f"{nom_dyn or 'Indicateur de dynamisme'} ({periode_dyn}) — indicateur "
-                            "territorial officiel France Travail (méthode IA prospective sur le "
-                            "trimestre à venir), pas spécifique au poste recherché."
-                        ),
-                    )
-                    st.caption(
-                        "ℹ️ L'échelle exacte de cet indicateur (valeur minimale/maximale, ce qui "
-                        "constitue un score \"élevé\" ou \"faible\") n'est pas confirmée par une "
-                        "documentation publique — France Travail ne détaille pas ce point pour cette "
-                        "API. À interpréter comme une comparaison relative entre départements/périodes "
-                        "plutôt qu'une valeur absolue dont on connaîtrait le sens précis."
-                    )
-                    with st.expander("🔧 Comparer cet indicateur sur plusieurs départements (temporaire)"):
-                        st.caption(
-                            "Interroge l'indicateur pour quelques départements volontairement très "
-                            "contrastés (Paris, Bouches-du-Rhône, Seine-Saint-Denis, la Creuse, la "
-                            "Réunion, les Alpes-Maritimes) — comparer leurs valeurs aide à déduire "
-                            "empiriquement une échelle plausible, faute de documentation officielle."
-                        )
-                        if st.button("Lancer la comparaison", key="btn_diagnostic_echelle_dynamisme"):
-                            with st.spinner("Récupération de l'indicateur pour plusieurs départements..."):
-                                resultats_echelle = diagnostiquer_echelle_dynamisme()
-                            st.json(resultats_echelle)
+                # --- Dynamisme géographique : graphe comparatif gradué ---
+                st.markdown("##### 📊 Dynamisme géographique")
+                departements_comparaison = ["75", "13", "93", "23", "974", "06"]
+                if departement_actif not in departements_comparaison:
+                    departements_comparaison = departements_comparaison + [departement_actif]
 
+                resultats_dynamisme = []
+                for dep_comp in departements_comparaison:
+                    val_dep, _, _, err_dep = dynamisme_territoire(dep_comp)
+                    if not err_dep and val_dep is not None:
+                        resultats_dynamisme.append({"departement": dep_comp, "valeur": val_dep})
+
+                if len(resultats_dynamisme) < 2:
+                    st.info("Comparaison indisponible pour le moment.")
+                else:
+                    st.caption(
+                        "ℹ️ L'échelle officielle exacte de cet indicateur France Travail (méthode "
+                        "IA prospective sur le trimestre à venir) n'est pas documentée publiquement "
+                        "— ce graphique compare ton département à quelques territoires "
+                        "volontairement contrastés (Paris, Bouches-du-Rhône, Seine-Saint-Denis, "
+                        "Creuse, La Réunion, Alpes-Maritimes) pour donner un repère relatif, pas "
+                        "une échelle absolue. Chaque graduation correspond à une valeur observée ; "
+                        "le survol indique quel(s) département(s) s'y trouvent."
+                    )
+                    # Même principe graphique que la jauge de salaire : un bloc par valeur
+                    # DISTINCTE observée, triée croissant, avec les départements partageant
+                    # une même valeur regroupés au survol.
+                    valeurs_par_dep = {}
+                    for r in resultats_dynamisme:
+                        valeurs_par_dep.setdefault(round(r["valeur"], 1), []).append(r["departement"])
+                    valeurs_graduees = sorted(valeurs_par_dep.keys())
+
+                    if len(valeurs_graduees) == 1:
+                        st.metric("Valeur observée (identique pour tous les départements comparés)", valeurs_graduees[0])
+                    else:
+                        palette_dyn = ["#2E86DE", "#10AC84", "#F9A826", "#8854D0", "#EE5A6F", "#01A3A4"]
+                        segments_largeur = [
+                            valeurs_graduees[i + 1] - valeurs_graduees[i]
+                            for i in range(len(valeurs_graduees) - 1)
+                        ]
+                        segments_base = valeurs_graduees[:-1]
+                        couleurs_segments = [
+                            palette_dyn[i % len(palette_dyn)] for i in range(len(segments_largeur))
+                        ]
+                        textes_survol = [
+                            ", ".join(
+                                f"{DEPARTEMENTS_VERS_NOM.get(d, d)} ({d})"
+                                + (" — ton département" if d == departement_actif else "")
+                                for d in valeurs_par_dep[v]
+                            )
+                            for v in valeurs_graduees[1:]
+                        ]
+                        fig_dyn = go.Figure(
+                            go.Bar(
+                                x=segments_largeur,
+                                y=[""] * len(segments_largeur),
+                                base=segments_base,
+                                orientation="h",
+                                marker=dict(color=couleurs_segments, line=dict(width=1, color="#0e1117")),
+                                hovertext=textes_survol,
+                                hoverinfo="text",
+                            )
+                        )
+                        fig_dyn.update_xaxes(
+                            visible=True,
+                            tickmode="array",
+                            tickvals=valeurs_graduees,
+                            ticktext=[str(v) for v in valeurs_graduees],
+                            tickfont=dict(size=12, color="white"),
+                            showgrid=False,
+                            zeroline=False,
+                        )
+                        fig_dyn.update_yaxes(visible=False)
+                        fig_dyn.update_layout(
+                            height=110, margin=dict(t=20, l=10, r=10, b=30),
+                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig_dyn, use_container_width=True)
+
+                st.divider()
+                # --- Classement des villes (remplace la carte) ---
+                st.markdown("##### 🏆 Classement des villes")
                 with st.spinner("Récupération des offres par ville..."):
                     df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_elargi(
                         codes_resolus_cv, titre_libre_cv, departement_actif,
@@ -634,115 +685,36 @@ with tab_profil:
                 # donnent la plage de publication réelle des offres renvoyées par l'API —
                 # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
                 # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
-                # offres sont simplement celles encore actives aujourd'hui. total_region reste
-                # utilisé plus bas pour calculer le % par ville sur la carte, même si le total
-                # brut n'est plus affiché ici (à la demande).
+                # offres sont simplement celles encore actives aujourd'hui.
                 if df_villes.empty:
                     st.info("Aucune offre trouvée pour ces critères.")
                 else:
-                    df_carte = df_villes.dropna(subset=["latitude", "longitude"]).copy()
-                    nb_offres_approx = (
-                        int(df_carte.loc[df_carte["approximatif"], "nombre_offres"].sum())
-                        if not df_carte.empty else 0
+                    # Regroupement des arrondissements/quartiers d'une même ville (ex:
+                    # "Marseille 1er Arrondissement" et "Marseille 6e Arrondissement"
+                    # comptaient jusqu'ici comme deux villes séparées).
+                    df_classement = df_villes.copy()
+                    df_classement["ville"] = df_classement["ville"].map(_nom_ville_simplifie)
+                    df_classement = (
+                        df_classement.groupby("ville", as_index=False)["nombre_offres"].sum()
+                        .sort_values("nombre_offres", ascending=False)
+                        .reset_index(drop=True)
                     )
-                    if not df_carte.empty:
-                        if nb_offres_approx > 0:
-                            st.caption(
-                                f"📍 {nb_offres_approx} offre(s) sur {total_region} n'ont pas de "
-                                "coordonnées GPS précises côté France Travail (lieu renseigné au niveau "
-                                "département seulement, ou télétravail) — positionnées sur la plus "
-                                "grande ville du département, à titre indicatif."
+                    df_classement.insert(0, "Classement", range(1, len(df_classement) + 1))
+                    df_classement["Part des offres"] = (
+                        (100 * df_classement["nombre_offres"] / total_region).round(1) if total_region else 0
+                    )
+                    st.dataframe(
+                        df_classement.rename(columns={"ville": "Ville"})[
+                            ["Classement", "Ville", "Part des offres"]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Part des offres": st.column_config.NumberColumn(
+                                "Part des offres", format="%.1f%%"
                             )
-                        df_carte["latitude"] = df_carte["latitude"].astype(float)
-                        df_carte["longitude"] = df_carte["longitude"].astype(float)
-                        df_carte["approximatif"] = df_carte["approximatif"].astype(bool)
-
-                        # Regroupement des arrondissements/quartiers d'une même ville sous
-                        # un point unique (ex: "Marseille 1er Arrondissement" et "Marseille
-                        # 6e Arrondissement" comptaient jusqu'ici comme deux villes séparées,
-                        # avec chacune un minuscule point) — calculé APRÈS nb_offres_approx
-                        # ci-dessus, qui doit rester basé sur les lieux bruts.
-                        df_carte["ville"] = df_carte["ville"].map(_nom_ville_simplifie)
-                        df_carte = (
-                            df_carte.groupby("ville", as_index=False)
-                            .agg(
-                                nombre_offres=("nombre_offres", "sum"),
-                                latitude=("latitude", "mean"),
-                                longitude=("longitude", "mean"),
-                                approximatif=("approximatif", "min"),
-                            )
-                        )
-
-                        df_carte["pourcentage"] = (
-                            (100 * df_carte["nombre_offres"] / total_region).round(1) if total_region else 0
-                        )
-                        # Taille de pastille en pixels, calculée manuellement (go.Scattermapbox
-                        # ne connaît pas le "sizeref/sizemode" de go.Scatter — sa taille de
-                        # marqueur est un diamètre brut en pixels) : plancher à 28px, jusqu'à
-                        # 65px pour la ville la plus représentée de l'échantillon.
-                        max_offres_ville = df_carte["nombre_offres"].max()
-                        df_carte["taille_px"] = df_carte["nombre_offres"].apply(
-                            lambda n: 28 + (37 * (n / max_offres_ville)) if max_offres_ville else 28
-                        )
-                        df_carte["texte_survol"] = df_carte.apply(
-                            lambda ligne: (
-                                f"<b>{ligne['ville']}</b><br>{int(ligne['nombre_offres'])} offre(s) "
-                                f"— {ligne['pourcentage']:.1f}% du total"
-                            ),
-                            axis=1,
-                        )
-
-                        # go.Scattermapbox utilisé directement (plutôt que px.scatter_mapbox) :
-                        # donne un contrôle total et fiable sur mode="markers+text", contrairement
-                        # à px où le passage par update_traces s'est avéré peu fiable pour faire
-                        # apparaître le texte directement sur la carte (bug constaté : les
-                        # pourcentages restaient invisibles malgré plusieurs tentatives).
-                        try:
-                            fig_carte = go.Figure()
-                            for est_approximatif, sous_df in df_carte.groupby("approximatif"):
-                                couleur = "#F59E0B" if est_approximatif else "#22C55E"  # vert demandé pour les positions précises
-                                fig_carte.add_trace(
-                                    go.Scattermapbox(
-                                        lat=sous_df["latitude"],
-                                        lon=sous_df["longitude"],
-                                        mode="markers+text",
-                                        marker=dict(size=sous_df["taille_px"], color=couleur, opacity=0.9),
-                                        text=sous_df["pourcentage"].map(lambda x: f"{x:.1f}%"),
-                                        textposition="top center",
-                                        textfont=dict(size=15, color="white"),
-                                        hovertext=sous_df["texte_survol"],
-                                        hoverinfo="text",
-                                        name="Position approximative" if est_approximatif else "Position précise",
-                                    )
-                                )
-                            fig_carte.update_layout(
-                                mapbox=dict(
-                                    style="carto-darkmatter",
-                                    center=dict(
-                                        lat=df_carte["latitude"].mean(), lon=df_carte["longitude"].mean()
-                                    ),
-                                    zoom=8,
-                                ),
-                                height=470,
-                                margin=dict(t=0, l=0, r=0, b=0),
-                                showlegend=True,
-                                legend=dict(
-                                    orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
-                                    font=dict(color="white"),
-                                ),
-                            )
-                            st.plotly_chart(fig_carte, use_container_width=True)
-                        except Exception:
-                            # Repli robuste : mieux vaut une carte plus simple qu'une page
-                            # entière qui plante et empêche tout ce qui suit (Recruteurs,
-                            # Fiches entreprises...) de s'afficher. Pas d'étiquette de
-                            # pourcentage possible sur ce repli (st.map ne le permet pas).
-                            st.map(
-                                df_carte, latitude="latitude", longitude="longitude",
-                                size="nombre_offres", color="#22C55E",
-                            )
-                    else:
-                        st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
+                        },
+                    )
 
             st.divider()
             st.info(
