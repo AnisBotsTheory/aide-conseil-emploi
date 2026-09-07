@@ -909,14 +909,21 @@ def _section_suggestions_competences(fonction_analyse_competences):
         return
 
     departement_cv = st.session_state.get("cv_departement") or "13"
+    codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
+    codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
     cle_signature = "cv_suggestions_signature"
-    signature_actuelle = (tuple(postes_choisis), departement_cv)
+    signature_actuelle = (tuple(postes_choisis), tuple(codes_resolus_cv), departement_cv)
 
     if st.session_state.get(cle_signature) != signature_actuelle:
         with st.spinner("Analyse des offres en cours..."):
             mots_cles_larges = " ".join(postes_choisis)
+            # Codes ROME résolus transmis en plus des mots-clés (au lieu de
+            # motsCles seul sur "TOUS") : un intitulé de suggestion complet
+            # (ex: "Chef de projet / Cheffe de projet (Project Management
+            # Officer) (H/F)") est bruité pour une recherche libre — le code
+            # ROME précis remonte des offres bien plus pertinentes.
             df_comp, df_outils, df_langages, df_certifs, df_savoir_etre, nb_total = fonction_analyse_competences(
-                "TOUS", departement_cv, mots_cles=mots_cles_larges,
+                codes_rome=codes_resolus_cv, mots_cles_libres=mots_cles_larges, departement=departement_cv,
             )
         for cle_options, df in [
             ("cv_competences_options", df_comp),
