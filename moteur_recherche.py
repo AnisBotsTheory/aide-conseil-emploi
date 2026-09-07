@@ -944,32 +944,26 @@ def diagnostiquer_marche_travail(code_rome="M1805", departement="13"):
 
 
 # ---------------------------------------------------------------------------
-# ROME 4.0 – Fiches métiers : compétences détaillées, macro savoir-faire,
-# macro savoir-être, savoirs — pour donner au candidat un référentiel officiel
-# du métier (par poste, pas fusionné en multi-poste). URL de base confirmée,
-# scope confirmé via la même source tierce que ROMEO ; chemin exact de
-# l'endpoint et forme précise de la réponse (les 4 types mélangés dans
-# "competences") TOUJOURS PAS confirmés en pratique — diagnostic en cours réel
-# (04/09/2026) : les 2 premiers candidats renvoient 404 (route inexistante,
-# pas juste "vide"), le 3e renvoie 429. L'ancien commentaire "429 = route
-# existante" sur le premier candidat était une supposition erronée — un 429
-# peut être une limite de débit générique appliquée au niveau de la passerelle,
-# pas la preuve qu'une route précise existe. Aucun des 3 candidats n'est donc
-# confirmé fonctionnel à ce stade ; endpoints supplémentaires ajoutés ci-dessous
-# à tester, sans certitude non plus — le chemin exact reste à vérifier via le
-# Swagger officiel francetravail.io si disponible pour ce scope.
+# ROME 4.0 – Métiers : compétences détaillées, macro savoir-faire, macro
+# savoir-être, savoirs — référentiel officiel du métier (par poste, pas
+# fusionné en multi-poste). Endpoint CONFIRMÉ le 07/09/2026 via la doc
+# officielle francetravail.io — la ressource s'appelle "rome-metiers" (SANS
+# "fiches"), ce qui explique les 404 systématiques des 6 candidats précédents
+# construits sur "rome-fiches-metiers" : mauvaise famille de ressource depuis
+# le début, pas juste un mauvais chemin à l'intérieur de la bonne famille.
+#
+# Sans le paramètre "champs", la réponse par défaut contient déjà tout ce
+# dont l'app a besoin : "competencesMobilisees", "competencesMobiliseesEmergentes"
+# et "competencesMobiliseesPrincipales" — trois tableaux PLATS (pas de
+# structure imbriquée "groupes" comme on l'avait deviné), chacun mélangeant 4
+# types distincts (CompetenceDetaillee, MacroSavoirFaire,
+# MacroSavoirEtreProfessionnel, Savoir) discriminés par le champ "type"
+# ("COMPETENCE-DETAILLEE", "MACRO-SAVOIR-FAIRE", "MACRO-SAVOIR-ETRE-
+# PROFESSIONNEL", "SAVOIR" — confirmés pour les deux premiers via la doc du
+# schéma, déduits pour les deux derniers par symétrie de nommage).
 # ---------------------------------------------------------------------------
-FICHES_METIERS_SCOPE = "api_rome-fiches-metiersv1 nomenclatureRome"  # confirmé via la même source que ROMEO
-
-_CANDIDATS_ENDPOINT_FICHE_METIER = [
-    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiche-metier/{code}",
-    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiches-metiers/{code}",
-    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/metiers/{code}/fiche",
-    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/fiches/{code}",
-    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/rome/{code}",
-    "https://api.francetravail.io/partenaire/rome-fiches-metiers/v1/{code}",
-]
-
+FICHES_METIERS_SCOPE = "api_rome-metiersv1 nomenclatureRome"  # les deux scopes sont obligatoires (doc officielle)
+FICHE_METIER_ENDPOINT = "https://api.francetravail.io/partenaire/rome-metiers/v1/metiers/metier/{code}"
 
 
 @st.cache_data(ttl=86400)
@@ -982,17 +976,13 @@ def recuperer_fiche_metier(code_rome):
     (celui-ci décrit le métier par définition, l'autre ce que les recruteurs
     demandent concrètement là maintenant).
 
-    Le schéma mélange 4 types dans "groupesCompetencesMobilisees[].competences"
-    (CompetenceDetaillee, MacroSavoirEtreProfessionnel, MacroSavoirFaire, Savoir)
-    sans étiquette de discrimination confirmée dans la doc — on se base sur le
-    champ "type" observé sur certains de ces schémas (ex: "MACRO-SAVOIR-FAIRE",
-    "SAVOIR") pour les répartir ; à ajuster si le vrai contenu diverge une fois
-    testé en conditions réelles.
+    Les 3 variantes renvoyées par l'API (mobilisées / émergentes / principales)
+    sont fusionnées et dédupliquées par libellé — l'app affiche un référentiel
+    global du métier, pas cette distinction fine entre les trois.
 
     Retourne un dict {"competences": [...], "savoir_faire": [...],
     "savoir_etre": [...], "savoirs": [...]} (listes de libellés, potentiellement
-    vides) ou None en cas d'échec (endpoint non confirmé à 100%, scope à revoir
-    si jamais invalide).
+    vides) ou None en cas d'échec ou si rien d'exploitable n'est renvoyé.
     """
     try:
         token = get_token(FICHES_METIERS_SCOPE)
@@ -1000,33 +990,22 @@ def recuperer_fiche_metier(code_rome):
         return None
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    # Essaie chaque endpoint candidat jusqu'au premier qui répond 200/206 —
-    # corrige un bug de fond : cette fonction ne testait jusqu'ici QUE le tout
-    # premier candidat de la liste (index 0), jamais les autres, même si un
-    # candidat suivant s'avérait le bon. Aucun candidat n'est confirmé fonctionnel
-    # à ce stade (voir commentaire au-dessus de _CANDIDATS_ENDPOINT_FICHE_METIER) —
-    # cette boucle permet au moins de ne pas rater le bon si l'un d'eux répond.
-    data = None
-    for endpoint_gabarit in _CANDIDATS_ENDPOINT_FICHE_METIER:
-        endpoint = endpoint_gabarit.format(code=code_rome)
-        try:
-            r = requests.get(endpoint, headers=headers, timeout=8)
-        except requests.RequestException:
-            continue
-        if r.status_code not in (200, 206):
-            continue
-        try:
-            data = r.json()
-        except ValueError:
-            continue
-        break
-    if data is None:
+    endpoint = FICHE_METIER_ENDPOINT.format(code=code_rome)
+    try:
+        r = requests.get(endpoint, headers=headers, timeout=8)
+    except requests.RequestException:
+        return None
+    if r.status_code not in (200, 206):
+        return None
+    try:
+        data = r.json()
+    except ValueError:
         return None
 
     resultat = {"competences": [], "savoir_faire": [], "savoir_etre": [], "savoirs": []}
 
-    for groupe in data.get("groupesCompetencesMobilisees", []) or []:
-        for item in groupe.get("competences", []) or []:
+    def _ranger_items(items):
+        for item in items or []:
             if not isinstance(item, dict):
                 continue
             libelle = (item.get("libelle") or "").strip()
@@ -1034,20 +1013,19 @@ def recuperer_fiche_metier(code_rome):
                 continue
             type_item = (item.get("type") or "").upper()
             if "SAVOIR-FAIRE" in type_item:
-                resultat["savoir_faire"].append(libelle)
+                cible = resultat["savoir_faire"]
             elif "SAVOIR-ETRE" in type_item or "SAVOIR-ÊTRE" in type_item:
-                resultat["savoir_etre"].append(libelle)
+                cible = resultat["savoir_etre"]
             elif type_item == "SAVOIR":
-                resultat["savoirs"].append(libelle)
+                cible = resultat["savoirs"]
             else:
-                resultat["competences"].append(libelle)
+                cible = resultat["competences"]
+            if libelle not in cible:
+                cible.append(libelle)
 
-    for groupe_savoir in data.get("groupesSavoirs", []) or []:
-        for savoir in groupe_savoir.get("savoirs", []) or []:
-            if isinstance(savoir, dict):
-                libelle = (savoir.get("libelle") or "").strip()
-                if libelle and libelle not in resultat["savoirs"]:
-                    resultat["savoirs"].append(libelle)
+    _ranger_items(data.get("competencesMobilisees"))
+    _ranger_items(data.get("competencesMobiliseesEmergentes"))
+    _ranger_items(data.get("competencesMobiliseesPrincipales"))
 
     if not any(resultat.values()):
         return None
@@ -1056,10 +1034,11 @@ def recuperer_fiche_metier(code_rome):
 
 def diagnostiquer_fiche_metier(code_rome="M1805"):
     """
-    Outil de DIAGNOSTIC pour "ROME 4.0 - Fiches métiers" — même principe que les
-    autres diagnostics : teste plusieurs chemins d'endpoint candidats avec un
-    code ROME réel, renvoie le détail brut de chaque tentative. Pas utilisé par
-    le flux normal de l'app.
+    Outil de DIAGNOSTIC pour "ROME 4.0 - Métiers" — endpoint désormais confirmé
+    par la doc officielle (rome-metiers), donc ce diagnostic sert surtout à
+    vérifier que ça répond bien en conditions réelles et à inspecter la forme
+    exacte de la réponse, plutôt qu'à tester des candidats à l'aveugle comme
+    avant. Pas utilisé par le flux normal de l'app.
     """
     try:
         token = get_token(FICHES_METIERS_SCOPE)
@@ -1077,19 +1056,16 @@ def diagnostiquer_fiche_metier(code_rome="M1805"):
             detail_erreur = f"{r_token.status_code} — {r_token.text[:500]}"
         except requests.RequestException:
             pass
-        return [{"etape": "obtention du token (scope fiches-metiersv1)", "erreur": detail_erreur}]
+        return [{"etape": "obtention du token (scopes api_rome-metiersv1 + nomenclatureRome)", "erreur": detail_erreur}]
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    endpoint = FICHE_METIER_ENDPOINT.format(code=code_rome)
     resultats_diagnostic = [{"etape": "token obtenu"}]
-    for endpoint_gabarit in _CANDIDATS_ENDPOINT_FICHE_METIER:
-        endpoint = endpoint_gabarit.format(code=code_rome)
-        try:
-            r = requests.get(endpoint, headers=headers, timeout=8)
-            resultats_diagnostic.append(
-                {"endpoint": endpoint, "status": r.status_code, "reponse": r.text[:500]}
-            )
-        except requests.RequestException as e:
-            resultats_diagnostic.append({"endpoint": endpoint, "erreur": str(e)})
+    try:
+        r = requests.get(endpoint, headers=headers, timeout=8)
+        resultats_diagnostic.append({"endpoint": endpoint, "status": r.status_code, "reponse": r.text[:1500]})
+    except requests.RequestException as e:
+        resultats_diagnostic.append({"endpoint": endpoint, "erreur": str(e)})
     return resultats_diagnostic
 
 
@@ -3173,6 +3149,7 @@ __all__ = [
     "diagnostiquer_la_bonne_boite",
     "diagnostiquer_marche_travail",
     "FICHES_METIERS_SCOPE",
+    "FICHE_METIER_ENDPOINT",
     "diagnostiquer_fiche_metier",
     "diagnostiquer_savoir_etre",
     "recuperer_fiche_metier",
