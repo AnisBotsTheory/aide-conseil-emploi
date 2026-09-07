@@ -17,6 +17,7 @@ pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
 import streamlit as st
 import pandas as pd
 import re
+from collections import Counter
 from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import plotly.express as px
@@ -427,11 +428,17 @@ with tab_profil:
                     "sur l'historique de recrutement). Source : La Bonne Boîte (France Travail). "
                     "Argument de candidature spontanée, à ne pas confondre avec le tableau ci-dessus."
                 )
-                if len(codes_resolus_cv) != 1:
-                    st.info("Disponible pour un seul poste sélectionné à la fois.")
+                if not codes_resolus_cv:
+                    st.info("Sélectionne au moins un poste ci-dessus.")
                 else:
+                    # Un ou plusieurs postes désormais acceptés en un seul appel (le
+                    # paramètre "rome" de l'API est déjà un tableau) — l'ancienne
+                    # restriction "un seul poste à la fois" bloquait l'affichage même
+                    # quand l'API avait bel et bien des résultats pour le premier poste
+                    # sélectionné (constaté : le diagnostic, qui ignorait cette règle,
+                    # montrait des hits alors que l'écran principal restait bloqué).
                     entreprises_potentiel = rechercher_entreprises_potentiel_embauche(
-                        codes_resolus_cv[0], departement_actif
+                        codes_resolus_cv, departement_actif
                     )
                     # Repli national : un "hits":0 / une liste vide au niveau département
                     # est une réponse VALIDE de La Bonne Boîte (son modèle prédictif n'a
@@ -441,7 +448,7 @@ with tab_profil:
                     recherche_nationale_repli = False
                     if entreprises_potentiel is not None and not entreprises_potentiel:
                         entreprises_potentiel_nationales = rechercher_entreprises_potentiel_embauche(
-                            codes_resolus_cv[0], None
+                            codes_resolus_cv, None
                         )
                         if entreprises_potentiel_nationales:
                             entreprises_potentiel = entreprises_potentiel_nationales
@@ -454,16 +461,16 @@ with tab_profil:
                         )
                     elif not entreprises_potentiel:
                         st.info(
-                            "Aucune entreprise à fort potentiel identifiée pour ce métier, ni dans "
-                            "ce département ni à l'échelle nationale — La Bonne Boîte n'a pas "
+                            "Aucune entreprise à fort potentiel identifiée pour ce(s) métier(s), ni "
+                            "dans ce département ni à l'échelle nationale — La Bonne Boîte n'a pas "
                             "toujours de données prédictives pour tous les métiers (ce n'est pas "
                             "une erreur de l'app, juste une absence de données pour ce cas précis)."
                         )
                     else:
                         if recherche_nationale_repli:
                             st.caption(
-                                "ℹ️ Aucun résultat dans le département sélectionné pour ce métier — "
-                                "liste ci-dessous à l'échelle nationale à la place."
+                                "ℹ️ Aucun résultat dans le département sélectionné pour ce(s) "
+                                "métier(s) — liste ci-dessous à l'échelle nationale à la place."
                             )
                         df_potentiel = pd.DataFrame(
                             [
@@ -483,14 +490,15 @@ with tab_profil:
 
                 with st.expander("🔧 Diagnostic technique La Bonne Boîte (temporaire)"):
                     st.caption(
-                        "Teste directement l'appel API pour le poste et le département actuellement "
-                        "sélectionnés, et affiche la vraie réponse brute — utile pour vérifier "
-                        "pourquoi une liste reste vide ou pour confirmer que l'intégration répond bien."
+                        "Teste directement l'appel API pour le(s) poste(s) et le département "
+                        "actuellement sélectionnés, et affiche la vraie réponse brute des deux "
+                        "endpoints (nombreEntreprise et recherche) — utile pour vérifier pourquoi "
+                        "une liste reste vide ou pour confirmer que l'intégration répond bien."
                     )
                     if st.button("Lancer le diagnostic", key="btn_diagnostic_lbb_tendance"):
-                        code_diag = codes_resolus_cv[0] if codes_resolus_cv else "M1805"
+                        codes_diag = codes_resolus_cv if codes_resolus_cv else ["M1805"]
                         with st.spinner("Test de l'appel La Bonne Boîte en cours..."):
-                            resultats_diag_lbb = diagnostiquer_la_bonne_boite(code_diag, departement_actif)
+                            resultats_diag_lbb = diagnostiquer_la_bonne_boite(codes_diag, departement_actif)
                         st.json(resultats_diag_lbb)
 
             with sous_tab_certifs:
@@ -498,13 +506,16 @@ with tab_profil:
                     st.info("Aucune suggestion disponible pour l'instant.")
                 else:
                     _, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
-                    st.caption("ℹ️ Certifications identifiées dans des offres réelles publiées sur France Travail.")
+                    st.caption(
+                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
+                        "Travail pour le(s) poste(s) sélectionné(s)."
+                    )
                     if df_certifs.empty:
                         st.info("Aucune certification identifiée dans les offres de cet échantillon.")
                     else:
                         st.dataframe(
-                            df_certifs.rename(
-                                columns={"libelle": "Certification", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
+                            df_certifs.drop(columns=["pourcentage"]).rename(
+                                columns={"libelle": "Certification", "nombre_offres": "Occurrences"}
                             ),
                             use_container_width=True,
                             hide_index=True,
@@ -512,13 +523,16 @@ with tab_profil:
 
                     st.divider()
                     st.markdown("##### 🤝 Savoir-être les plus demandés")
-                    st.caption("ℹ️ Savoir-être identifiés dans des offres réelles publiées sur France Travail.")
+                    st.caption(
+                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
+                        "Travail pour le(s) poste(s) sélectionné(s)."
+                    )
                     if df_savoir_etre.empty:
                         st.info("Aucun savoir-être identifié dans les offres de cet échantillon.")
                     else:
                         st.dataframe(
-                            df_savoir_etre.rename(
-                                columns={"libelle": "Savoir-être", "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres"}
+                            df_savoir_etre.drop(columns=["pourcentage"]).rename(
+                                columns={"libelle": "Savoir-être", "nombre_offres": "Occurrences"}
                             ),
                             use_container_width=True,
                             hide_index=True,
@@ -599,6 +613,17 @@ with tab_profil:
                         "API. À interpréter comme une comparaison relative entre départements/périodes "
                         "plutôt qu'une valeur absolue dont on connaîtrait le sens précis."
                     )
+                    with st.expander("🔧 Comparer cet indicateur sur plusieurs départements (temporaire)"):
+                        st.caption(
+                            "Interroge l'indicateur pour quelques départements volontairement très "
+                            "contrastés (Paris, Bouches-du-Rhône, Seine-Saint-Denis, la Creuse, la "
+                            "Réunion, les Alpes-Maritimes) — comparer leurs valeurs aide à déduire "
+                            "empiriquement une échelle plausible, faute de documentation officielle."
+                        )
+                        if st.button("Lancer la comparaison", key="btn_diagnostic_echelle_dynamisme"):
+                            with st.spinner("Récupération de l'indicateur pour plusieurs départements..."):
+                                resultats_echelle = diagnostiquer_echelle_dynamisme()
+                            st.json(resultats_echelle)
 
                 with st.spinner("Récupération des offres par ville..."):
                     df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_elargi(
@@ -651,64 +676,70 @@ with tab_profil:
                         df_carte["pourcentage"] = (
                             (100 * df_carte["nombre_offres"] / total_region).round(1) if total_region else 0
                         )
-                        # Étiquette texte affichée directement sur chaque point de la carte
-                        # (en plus du détail au survol) — évite d'avoir à survoler chaque
-                        # point pour connaître son poids relatif. Balise <b> pour la mettre
-                        # en gras (supportée par Plotly sur ce type de trace).
-                        df_carte["etiquette_pourcentage"] = df_carte["pourcentage"].map(lambda x: f"<b>{x:.1f}%</b>")
-                        # Taille de pastille dédiée à l'affichage (plancher à 6 offres
-                        # équivalentes, size_max relevé à 70) : les points à 1 ou 2 offres
-                        # étaient auparavant quasi invisibles sur la carte, sans changer la
-                        # valeur réelle affichée dans l'étiquette/l'infobulle.
-                        df_carte["taille_carte"] = df_carte["nombre_offres"].clip(lower=6)
+                        # Taille de pastille en pixels, calculée manuellement (go.Scattermapbox
+                        # ne connaît pas le "sizeref/sizemode" de go.Scatter — sa taille de
+                        # marqueur est un diamètre brut en pixels) : plancher à 28px, jusqu'à
+                        # 65px pour la ville la plus représentée de l'échantillon.
+                        max_offres_ville = df_carte["nombre_offres"].max()
+                        df_carte["taille_px"] = df_carte["nombre_offres"].apply(
+                            lambda n: 28 + (37 * (n / max_offres_ville)) if max_offres_ville else 28
+                        )
+                        df_carte["texte_survol"] = df_carte.apply(
+                            lambda ligne: (
+                                f"<b>{ligne['ville']}</b><br>{int(ligne['nombre_offres'])} offre(s) "
+                                f"— {ligne['pourcentage']:.1f}% du total"
+                            ),
+                            axis=1,
+                        )
+
+                        # go.Scattermapbox utilisé directement (plutôt que px.scatter_mapbox) :
+                        # donne un contrôle total et fiable sur mode="markers+text", contrairement
+                        # à px où le passage par update_traces s'est avéré peu fiable pour faire
+                        # apparaître le texte directement sur la carte (bug constaté : les
+                        # pourcentages restaient invisibles malgré plusieurs tentatives).
                         try:
-                            fig_carte = px.scatter_mapbox(
-                                df_carte,
-                                lat="latitude", lon="longitude",
-                                size="taille_carte", size_max=70,
-                                color="approximatif",
-                                color_discrete_map={False: "#0066cc", True: "#e67e22"},
-                                hover_name="ville",
-                                text="etiquette_pourcentage",
-                                hover_data={
-                                    "nombre_offres": True, "pourcentage": ":.1f",
-                                    "latitude": False, "longitude": False, "approximatif": False,
-                                    "etiquette_pourcentage": False, "taille_carte": False,
-                                },
-                                labels={
-                                    "nombre_offres": "Nombre d'offres", "pourcentage": "% des offres",
-                                    "approximatif": "Position approximative",
-                                },
-                                zoom=8, height=450,
-                            )
-                            # mode="markers+text" est INDISPENSABLE pour que le paramètre
-                            # "text" ci-dessus s'affiche réellement sur la carte — sans lui,
-                            # px.scatter_mapbox ne garde ce texte que pour l'infobulle,
-                            # jamais comme étiquette visible sur le point lui-même (bug
-                            # constaté : les pourcentages restaient invisibles malgré
-                            # "text=" déjà renseigné).
-                            fig_carte.update_traces(
-                                mode="markers+text",
-                                textposition="top center",
-                                textfont=dict(size=14, color="white"),
-                                marker=dict(line=dict(width=1.5, color="white")),
-                            )
+                            fig_carte = go.Figure()
+                            for est_approximatif, sous_df in df_carte.groupby("approximatif"):
+                                couleur = "#F59E0B" if est_approximatif else "#22C55E"  # vert demandé pour les positions précises
+                                fig_carte.add_trace(
+                                    go.Scattermapbox(
+                                        lat=sous_df["latitude"],
+                                        lon=sous_df["longitude"],
+                                        mode="markers+text",
+                                        marker=dict(size=sous_df["taille_px"], color=couleur, opacity=0.9),
+                                        text=sous_df["pourcentage"].map(lambda x: f"{x:.1f}%"),
+                                        textposition="top center",
+                                        textfont=dict(size=15, color="white"),
+                                        hovertext=sous_df["texte_survol"],
+                                        hoverinfo="text",
+                                        name="Position approximative" if est_approximatif else "Position précise",
+                                    )
+                                )
                             fig_carte.update_layout(
-                                mapbox_style="carto-darkmatter",
+                                mapbox=dict(
+                                    style="carto-darkmatter",
+                                    center=dict(
+                                        lat=df_carte["latitude"].mean(), lon=df_carte["longitude"].mean()
+                                    ),
+                                    zoom=8,
+                                ),
+                                height=470,
                                 margin=dict(t=0, l=0, r=0, b=0),
-                                showlegend=False,
+                                showlegend=True,
+                                legend=dict(
+                                    orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+                                    font=dict(color="white"),
+                                ),
                             )
                             st.plotly_chart(fig_carte, use_container_width=True)
                         except Exception:
-                            # Repli robuste : px.scatter_mapbox peut échouer selon la version de
-                            # Plotly installée (dépréciation en cours au profit de scatter_map) —
-                            # mieux vaut une carte plus simple qu'une page entière qui plante et
-                            # empêche tout ce qui suit (Recruteurs, Fiches entreprises...) de s'afficher.
-                            # Pas d'étiquette de pourcentage possible sur ce repli (st.map ne le
-                            # permet pas), seulement les points bruts.
+                            # Repli robuste : mieux vaut une carte plus simple qu'une page
+                            # entière qui plante et empêche tout ce qui suit (Recruteurs,
+                            # Fiches entreprises...) de s'afficher. Pas d'étiquette de
+                            # pourcentage possible sur ce repli (st.map ne le permet pas).
                             st.map(
                                 df_carte, latitude="latitude", longitude="longitude",
-                                size="nombre_offres", color="#0066cc",
+                                size="nombre_offres", color="#22C55E",
                             )
                     else:
                         st.info("Coordonnées GPS non disponibles pour ces offres, carte non affichée.")
@@ -857,7 +888,9 @@ with tab_avance:
                     st.info("Aucune offre en CDI avec salaire indiqué pour ces critères.")
                 else:
                     # Jauge graduée : un bloc par valeur DISTINCTE trouvée dans l'échantillon
-                    # (arrondie au millier près pour regrouper des valeurs quasi identiques),
+                    # (arrondie au 5 000 € près pour regrouper des valeurs proches et limiter
+                    # le nombre de graduations affichées — un arrondi au millier produisait
+                    # trop de graduations serrées, illisibles les unes sous les autres),
                     # triées croissant — pas une simple barre continue du minimum absolu au
                     # maximum absolu, mais une graduation qui matérialise les paliers réels
                     # observés (ex: 30 000 € puis 50 000 € puis 60 000 € puis 80 000 €).
@@ -872,7 +905,8 @@ with tab_avance:
                     if not toutes_valeurs:
                         st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
                     else:
-                        valeurs_graduees = sorted({round(v / 1000) * 1000 for v in toutes_valeurs})
+                        compteur_valeurs = Counter(round(v / 5000) * 5000 for v in toutes_valeurs)
+                        valeurs_graduees = sorted(compteur_valeurs.keys())
                         if len(valeurs_graduees) == 1:
                             st.metric("Salaire annuel indiqué", f"{valeurs_graduees[0]:,.0f} €".replace(",", " "))
                         else:
@@ -885,6 +919,14 @@ with tab_avance:
                             couleurs_segments = [
                                 palette_jauge[i % len(palette_jauge)] for i in range(len(segments_largeur))
                             ]
+                            # Chaque bloc représente la tranche menant à sa graduation de DROITE
+                            # (ex: le bloc entre 30 000 € et 50 000 € "mène" à 50 000 €) — au
+                            # survol, on affiche combien d'offres ont un montant qui arrondit à
+                            # cette borne précise.
+                            textes_survol = [
+                                f"{v:,.0f} € — {compteur_valeurs[v]} offre(s)".replace(",", " ")
+                                for v in valeurs_graduees[1:]
+                            ]
                             fig_jauge = go.Figure(
                                 go.Bar(
                                     x=segments_largeur,
@@ -892,7 +934,8 @@ with tab_avance:
                                     base=segments_base,
                                     orientation="h",
                                     marker=dict(color=couleurs_segments, line=dict(width=1, color="#0e1117")),
-                                    hoverinfo="skip",
+                                    hovertext=textes_survol,
+                                    hoverinfo="text",
                                 )
                             )
                             fig_jauge.update_xaxes(
@@ -901,12 +944,13 @@ with tab_avance:
                                 tickvals=valeurs_graduees,
                                 ticktext=[f"{v:,.0f} €".replace(",", " ") for v in valeurs_graduees],
                                 tickfont=dict(size=12, color="white"),
+                                tickangle=-30,
                                 showgrid=False,
                                 zeroline=False,
                             )
                             fig_jauge.update_yaxes(visible=False)
                             fig_jauge.update_layout(
-                                height=110, margin=dict(t=25, l=10, r=10, b=10),
+                                height=130, margin=dict(t=25, l=10, r=10, b=40),
                                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                                 showlegend=False,
                             )
