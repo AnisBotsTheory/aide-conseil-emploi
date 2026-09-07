@@ -30,7 +30,6 @@ from moteur_recherche import (
     resoudre_codes_rome,
     diagnostiquer_romeo,
     diagnostiquer_la_bonne_boite,
-    diagnostiquer_marche_travail,
     diagnostiquer_fiche_metier,
 )
 from io import BytesIO
@@ -216,6 +215,8 @@ def _init_cv_state():
         st.session_state.cv_formations = []
     if "cv_sections_perso" not in st.session_state:
         st.session_state.cv_sections_perso = []
+    if "cv_langues_structurees" not in st.session_state:
+        st.session_state.cv_langues_structurees = []
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +235,16 @@ def _section_experiences():
             c3, c4, c5, c6 = st.columns(4)
             exp["ville"] = c3.text_input("Ville", value=exp.get("ville", ""), key=f"exp_ville_{i}")
             exp["pays"] = c4.text_input("Pays", value=exp.get("pays", ""), key=f"exp_pays_{i}")
-            exp["date_debut"] = c5.text_input("Début (ex: Jan. 2022)", value=exp.get("date_debut", ""), key=f"exp_debut_{i}")
-            exp["date_fin"] = c6.text_input("Fin (ex: Déc. 2023 ou En cours)", value=exp.get("date_fin", ""), key=f"exp_fin_{i}")
+            # Libellés courts (une seule ligne) pour que les 4 champs restent alignés sur
+            # la même rangée — l'exemple de format passe en info-bulle plutôt que dans le
+            # libellé, qui se mettait sur 2 lignes et décalait "Fin" par rapport aux autres.
+            exp["date_debut"] = c5.text_input(
+                "Début", value=exp.get("date_debut", ""), key=f"exp_debut_{i}", help="Format libre, ex: Jan. 2022"
+            )
+            exp["date_fin"] = c6.text_input(
+                "Fin", value=exp.get("date_fin", ""), key=f"exp_fin_{i}",
+                help="Format libre, ex: Déc. 2023, ou « En cours »",
+            )
 
             exp["description"] = st.text_area(
                 "Missions / réalisations (une ligne = une puce)",
@@ -280,6 +289,42 @@ def _section_formations():
 
     if st.button("➕ Ajouter une formation"):
         st.session_state.cv_formations.append({})
+        st.rerun()
+
+
+_NIVEAUX_LANGUE = ["Notion A1-A2", "Intermédiaire B1-B2", "Avancée - C1", "Bilingue - C2"]
+
+
+def _section_langues():
+    """
+    Liste structurée langue + niveau (CECRL), remplace l'ancien champ texte
+    libre à un niveau saisi à la main — le niveau est désormais un choix
+    fermé parmi les 4 paliers standards, plus fiable et plus rapide à
+    renseigner. La chaîne finale envoyée à generer_cv_docx reste au format
+    "Langue - Niveau" (une ligne par langue), donc pleinement compatible avec
+    la détection de drapeau existante (qui ne regarde que le début de ligne).
+    """
+    st.markdown("#### 🌍 Langues")
+
+    a_supprimer = None
+    for i, lang in enumerate(st.session_state.cv_langues_structurees):
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            lang["langue"] = c1.text_input("Langue", value=lang.get("langue", ""), key=f"langue_nom_{i}")
+            niveau_actuel = lang.get("niveau") or _NIVEAUX_LANGUE[0]
+            index_niveau = _NIVEAUX_LANGUE.index(niveau_actuel) if niveau_actuel in _NIVEAUX_LANGUE else 0
+            lang["niveau"] = c2.selectbox(
+                "Niveau", _NIVEAUX_LANGUE, index=index_niveau, key=f"langue_niveau_{i}"
+            )
+            if st.button("🗑️ Supprimer cette langue", key=f"langue_supprimer_{i}"):
+                a_supprimer = i
+
+    if a_supprimer is not None:
+        st.session_state.cv_langues_structurees.pop(a_supprimer)
+        st.rerun()
+
+    if st.button("➕ Ajouter une langue"):
+        st.session_state.cv_langues_structurees.append({})
         st.rerun()
 
 
@@ -588,7 +633,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             ligne = _nettoyer_ligne(ligne)
             if ligne:
                 prefixe = _drapeau_pour_langue(ligne) if afficher_drapeaux else ""
-                _puce(cell_bandeau, f"{prefixe}{ligne}", echelle=echelle, caractere="▪")
+                _puce(cell_bandeau, f"{prefixe}{ligne}", taille=9, echelle=echelle, caractere="▪")
 
     # --- Compétences ---
     if data.get("competences"):
@@ -596,7 +641,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for ligne in data["competences"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
-                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+                _puce(cell_bandeau, ligne, taille=9, echelle=echelle, caractere="▪")
 
     # --- Outils informatiques ---
     if data.get("outils"):
@@ -604,7 +649,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for ligne in data["outils"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
-                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+                _puce(cell_bandeau, ligne, taille=9, echelle=echelle, caractere="▪")
 
     # --- Langages informatiques (facultatif, invisible si vide — profils non-tech) ---
     if data.get("langages_informatiques"):
@@ -612,7 +657,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for ligne in data["langages_informatiques"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
-                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+                _puce(cell_bandeau, ligne, taille=9, echelle=echelle, caractere="▪")
 
     # --- Certifications (facultatif, invisible si vide) ---
     if data.get("certifications"):
@@ -620,14 +665,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for ligne in data["certifications"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
-                _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
-
-    # --- Centres d'intérêt ---
-    if data.get("interets"):
-        _titre_section(cell_bandeau, libelles["interets"], bandeau_texte, echelle=echelle)
-        interets_list = [i.strip() for i in data["interets"].replace("\n", ",").split(",") if i.strip()]
-        for interet in interets_list:
-            _puce(cell_bandeau, interet, echelle=echelle, caractere="▪")
+                _puce(cell_bandeau, ligne, taille=9, echelle=echelle, caractere="▪")
 
     # --- Sections personnalisées (ajoutées librement par l'utilisateur) ---
     for section_perso in data.get("sections_perso", []):
@@ -638,7 +676,14 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             for ligne in contenu_section_perso.split("\n"):
                 ligne = _nettoyer_ligne(ligne)
                 if ligne:
-                    _puce(cell_bandeau, ligne, echelle=echelle, caractere="▪")
+                    _puce(cell_bandeau, ligne, taille=9, echelle=echelle, caractere="▪")
+
+    # --- Centres d'intérêt (toujours en dernier dans le bandeau, à la demande) ---
+    if data.get("interets"):
+        _titre_section(cell_bandeau, libelles["interets"], bandeau_texte, echelle=echelle)
+        interets_list = [i.strip() for i in data["interets"].replace("\n", ",").split(",") if i.strip()]
+        for interet in interets_list:
+            _puce(cell_bandeau, interet, taille=9, echelle=echelle, caractere="▪")
 
     # =======================================================================
     # COLONNE PRINCIPALE
@@ -665,9 +710,16 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         run_titre.font.size = _pt(17, echelle)
         run_titre.font.color.rgb = RGBColor.from_string(accent)
 
-    # Filet horizontal sous l'en-tête
+    # Filet horizontal sous l'en-tête — un run vide en très petite taille est ajouté
+    # pour forcer la hauteur de cette ligne à rester minimale : un paragraphe SANS
+    # aucun run hérite de la taille de police par défaut du style Normal pour
+    # calculer sa hauteur de ligne, ce qui créait un espace vide visible avant
+    # même d'atteindre la présentation (constaté en usage réel).
     p_filet = cell_principale.add_paragraph()
+    p_filet.paragraph_format.space_before = Pt(0)
     p_filet.paragraph_format.space_after = _pt(4, echelle)
+    run_filet_vide = p_filet.add_run()
+    run_filet_vide.font.size = Pt(2)
     pPr = p_filet._p.get_or_add_pPr()
     bord = OxmlElement("w:pBdr")
     bas = OxmlElement("w:bottom")
@@ -788,12 +840,6 @@ _DEFAUTS_COMPETENCES = [
 _DEFAUTS_OUTILS = ["Excel", "Word", "PowerPoint", "Outlook", "Teams"]
 _DEFAUTS_LANGAGES = []  # vide par défaut : pertinent seulement pour les profils tech
 _DEFAUTS_CERTIFICATIONS = []  # vide par défaut : très spécifique au poste, pas de base générique pertinente
-# Top 10 des langues les plus parlées au monde (nombre total de locuteurs, classement
-# usuel type Ethnologue) — liste de départ ; le champ permet aussi d'en ajouter d'autres.
-_DEFAUTS_LANGUES = [
-    "Anglais", "Mandarin", "Hindi", "Espagnol", "Français",
-    "Arabe", "Bengali", "Russe", "Portugais", "Ourdou",
-]
 
 
 def _champ_liste_avec_ajout(titre, cle_base, valeurs_par_defaut, aide=None):
@@ -807,7 +853,24 @@ def _champ_liste_avec_ajout(titre, cle_base, valeurs_par_defaut, aide=None):
         st.session_state[cle_options] = list(valeurs_par_defaut)
 
     cle_select = f"{cle_base}_select"
-    selection = st.multiselect(titre, options=st.session_state[cle_options], key=cle_select, help=aide)
+    cle_en_attente = f"{cle_base}_en_attente"
+
+    # Une valeur ajoutée au tour précédent est fusionnée dans la sélection ICI,
+    # AVANT la création du widget multiselect ci-dessous — c'est le seul moment
+    # légal pour écrire dans st.session_state[cle_select]. Le faire directement
+    # dans le gestionnaire du bouton "Ajouter" plus bas (après que le widget a
+    # déjà été instancié dans le même run) provoquait un
+    # StreamlitWidgetAlreadyInstantiatedError, empêchant tout ajout de fonctionner.
+    if cle_en_attente in st.session_state:
+        valeur_en_attente = st.session_state.pop(cle_en_attente)
+        selection_actuelle = st.session_state.get(cle_select, [])
+        if valeur_en_attente not in selection_actuelle:
+            st.session_state[cle_select] = selection_actuelle + [valeur_en_attente]
+
+    selection = st.multiselect(
+        titre, options=st.session_state[cle_options], key=cle_select, help=aide,
+        placeholder="Sélectionne dans la liste ou ajoute un élément ci-dessous",
+    )
 
     col_ajout, col_bouton = st.columns([4, 1])
     nouvel_element = col_ajout.text_input(
@@ -820,8 +883,7 @@ def _champ_liste_avec_ajout(titre, cle_base, valeurs_par_defaut, aide=None):
         valeur = nouvel_element.strip()
         if valeur:
             _ajouter_suggestion(cle_options, valeur)
-            if valeur not in st.session_state[cle_select]:
-                st.session_state[cle_select] = st.session_state[cle_select] + [valeur]
+            st.session_state[cle_en_attente] = valeur
             st.rerun()
 
     return "\n".join(selection)
@@ -1076,16 +1138,6 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                     resultats_diag_lbb = diagnostiquer_la_bonne_boite(departement=departement_diag_lbb)
                 st.json(resultats_diag_lbb)
 
-        with st.expander("🔧 Diagnostic technique Marché du travail (temporaire)"):
-            st.caption(
-                "Outil de mise au point — aucun scope ni endpoint confirmé par une doc "
-                "publique ici, teste plusieurs combinaisons et affiche la vraie réponse."
-            )
-            if st.button("Lancer le diagnostic", key="btn_diagnostic_marche"):
-                with st.spinner("Test des combinaisons Marché du travail en cours..."):
-                    resultats_diag_marche = diagnostiquer_marche_travail()
-                st.json(resultats_diag_marche)
-
         with st.expander("🔧 Diagnostic technique Fiches métiers (temporaire)"):
             st.caption(
                 "Outil de mise au point — URL de base et scope probables, mais chemin exact "
@@ -1119,9 +1171,11 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         _section_formations()
 
     with st.expander("🌍 Langues"):
-        langues = _champ_liste_avec_ajout(
-            "Sélectionne ou ajoute tes langues (précise le niveau via « Ajouter », ex: « Anglais - Courant »)",
-            "cv_langues_choix", _DEFAUTS_LANGUES,
+        _section_langues()
+        langues = "\n".join(
+            f"{l['langue'].strip()} - {l['niveau']}"
+            for l in st.session_state.cv_langues_structurees
+            if l.get("langue", "").strip() and l.get("niveau")
         )
 
     with st.expander("💡 Compétences, outils, langages & certifications"):
