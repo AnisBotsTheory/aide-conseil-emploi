@@ -1,27 +1,25 @@
 """
 espace_candidat.py
 --------------------
-Page "Espace Candidat" — 4 onglets (Créer mon CV, Analyse principale,
-Compléments d'analyse, Événements), accès gratuit et public. Toute la logique
-de calcul vient de moteur_recherche.py (aucune duplication).
+Page "Espace Candidat" — 3 onglets (Créer mon CV, Tendance par profil, KPIs
+avancés), accès gratuit et public. Toute la logique de calcul vient de
+moteur_recherche.py (aucune duplication).
 
 L'onglet "Offres d'emploi" a été retiré : lister des offres n'a pas d'avantage
 face aux plateformes dédiées (France Travail, LinkedIn, Indeed...) — pas
 d'alertes, pas de candidature en un clic, pas de sauvegarde de recherche. Ce
-qui reste différenciant, c'est la lecture de marché (compétences, salaires,
-répartition contrats/salaires, villes/recruteurs actifs, dynamisme du
-département) — pas le listing d'offres lui-même. "Villes qui recrutent"/"Top
-recruteurs" deviennent des pistes de candidature spontanée ou ciblée plutôt
-qu'un moteur de recherche d'offres.
+qui reste différenciant, c'est la lecture de marché (tension, évolution,
+répartition contrats/salaires, villes/recruteurs actifs) — pas le listing
+d'offres lui-même. "Villes qui recrutent"/"Top recruteurs" deviennent des
+pistes de candidature spontanée plutôt qu'un moteur de recherche d'offres.
 """
 
 import streamlit as st
 import pandas as pd
 import re
 import random
-from urllib.parse import quote_plus
 from collections import Counter
-from datetime import datetime  # noqa: F401 — utilisé dans l'onglet Compléments d'analyse ;
+from datetime import datetime  # noqa: F401 — utilisé dans l'onglet KPIs avancés ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import plotly.express as px
 import plotly.graph_objects as go
@@ -36,48 +34,22 @@ st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 st.divider()
 
 tab_cv, tab_profil, tab_avance, tab_evenements = st.tabs(
-    ["🧾 Créer mon CV", "🎯 Analyse principale", "📊 Compléments d'analyse", "📅 Événements"]
+    ["🧾 Créer mon CV", "🎯 Tendance par profil", "🧩 KPIs avancés", "📅 Événements"]
 )
-
-
-_RE_ARRONDISSEMENT_PARIS_LYON_MARSEILLE = re.compile(
-    r"^(paris|lyon|marseille)\b\s*\d{0,2}\s*(er|ème|e)?\s*(arrondissement)?\s*$", re.IGNORECASE
-)
-_RE_ARRONDISSEMENT_GENERIQUE = re.compile(r"\s+\d+\s*(er|e|ème)?\s+arrondissement.*$", re.IGNORECASE)
-_RE_SUFFIXE_DEPARTEMENT = re.compile(r"\s*\((?:dept\.?|dépt\.?|département|departement)\)\s*$", re.IGNORECASE)
 
 
 def _nom_ville_simplifie(libelle_brut):
     """
     Simplifie un libellé de lieu France Travail (souvent "code - Nom commune",
     parfois avec un arrondissement) en un nom de ville regroupable — utilisé
-    pour le classement des villes : sans ça, plusieurs variantes d'un même
-    lieu comptaient comme des villes séparées dans le classement (constaté en
-    usage réel : "Paris", "PARIS", "PARIS 10", "PARIS 15", "PARIS 18" et
-    "Paris (Dept.)" apparaissaient comme 6 lignes distinctes au lieu d'une
-    seule "Paris"). Gère : préfixe "code - ", suffixe "(Dept.)"/"(Département)",
-    arrondissement de Paris/Lyon/Marseille (avec ou sans le mot "Arrondissement"
-    explicite, ex: "PARIS 10" comme "Paris 10ème Arrondissement"), variante
-    générique "Ville Nème Arrondissement" pour tout autre nom de ville, et
-    normalisation de casse pour une ville renvoyée tout en majuscules.
+    pour le classement des villes dans "Dynamisme géographique" : sans ça,
+    "Marseille 1er Arrondissement" et "Marseille 6e Arrondissement" comptaient
+    comme deux villes séparées dans le classement, au lieu d'être regroupées
+    sous "Marseille".
     """
     nom = libelle_brut.split(" - ", 1)[-1].strip() if " - " in libelle_brut else libelle_brut.strip()
-    nom = _RE_SUFFIXE_DEPARTEMENT.sub("", nom).strip()
-
-    correspondance_grande_ville = _RE_ARRONDISSEMENT_PARIS_LYON_MARSEILLE.match(nom)
-    if correspondance_grande_ville:
-        return correspondance_grande_ville.group(1).capitalize()
-
-    nom = _RE_ARRONDISSEMENT_GENERIQUE.sub("", nom).strip()
-    if nom.isupper():
-        # Ville renvoyée tout en majuscules (ex: "PARIS") : normalisée en casse standard
-        # pour se regrouper avec sa variante correctement casée ("Paris"). Pas de
-        # capitalisation "intelligente" mot par mot (les particules "sur", "en", "la"
-        # devraient rester en minuscule dans l'orthographe correcte, ce qu'un .title()
-        # ne sait pas faire) — au moins la première lettre de chaque mot est juste pour
-        # les cas simples les plus courants.
-        nom = nom.title()
-    return nom.strip() or libelle_brut
+    nom = re.sub(r"\s+\d+\s*(er|e|ème)?\s+arrondissement.*$", "", nom, flags=re.IGNORECASE).strip()
+    return nom or libelle_brut
 
 
 # ---------------------------------------------------------------------------
@@ -91,50 +63,21 @@ with tab_cv:
 # Onglet 1 : Tendance par profil
 # ---------------------------------------------------------------------------
 with tab_profil:
+    st.caption(
+        "Analyse du marché pour le(s) poste(s) sélectionné(s) dans votre CV : où sont les offres "
+        "près de chez vous, le volume national, et le niveau de tension du marché sur ce métier."
+    )
+
     postes_cv = st.session_state.get("cv_postes_recherche", [])
-    mots_cles_lien_ft = quote_plus(" ".join(postes_cv)) if postes_cv else ""
-    lien_recherche_ft = (
-        f"https://candidat.francetravail.fr/offres/recherche?motsCles={mots_cles_lien_ft}"
-        if mots_cles_lien_ft else "https://candidat.francetravail.fr/offres/recherche"
-    )
-    st.caption(
-        "Analyse du marché pour le(s) poste(s) sélectionné(s) dans votre CV, basée sur des "
-        "offres réelles publiées sur France Travail : quelles entreprises recrutent près de "
-        "chez vous, quelles compétences et quel savoir-être sont demandés, et le dynamisme "
-        "économique de votre département."
-    )
-    st.info(
-        "💡 Cette application n'a pas vocation à être une plateforme de recrutement — c'est un "
-        "outil de **conseil**, pour vous aider à construire votre stratégie de recherche "
-        "d'emploi. Pour consulter et postuler aux offres correspondant à votre recherche, "
-        f"rendez-vous sur [candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer "
-        "par votre département une fois sur place)."
-    )
-    st.caption(
-        "ℹ️ Le total peut différer de celui du site France Travail (recherche par code ROME "
-        "et période glissante, contre mots-clés libres et offres actives en temps réel)."
-    )
-
-            "récent."
-        )
-
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
-    departement_cv = st.session_state.get("cv_departement")
+    departement_cv = st.session_state.get("cv_departement") or "13"
 
     if not postes_cv:
         st.info(
             "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV**, puis sélectionne au "
             "moins une suggestion parmi les étiquettes proposées — l'analyse se lance ensuite "
             "automatiquement, pas besoin de ressaisir quoi que ce soit ici."
-        )
-    elif not departement_cv:
-        # Cas de bord : le département a été effacé après la sélection du poste (retour à
-        # "Non renseigné" dans "Créer mon CV") — pas de repli silencieux sur un département
-        # arbitraire, on redemande explicitement.
-        st.info(
-            "👉 Ton département de résidence n'est plus renseigné — retourne dans l'onglet "
-            "**🧾 Créer mon CV** pour le sélectionner avant de relancer l'analyse."
         )
     else:
         # Poste(s) et département viennent uniquement de "Créer mon CV" (étiquettes de
@@ -164,11 +107,7 @@ with tab_profil:
                 st.session_state["departement_profil_actif"] = departement_cv
                 st.session_state[cle_auto_signature] = signature_actuelle
 
-    # Guard "and departement_cv" : évite d'afficher une analyse en cache (calculée lors
-    # d'un run précédent où le département était bien renseigné) si l'utilisateur a
-    # depuis effacé son département — sinon le message "renseigne ton département"
-    # ci-dessus s'affichait juste au-dessus d'une analyse quand même visible en dessous.
-    if "df_rome_profil" in st.session_state and departement_cv:
+    if "df_rome_profil" in st.session_state:
         df_rome = st.session_state["df_rome_profil"]
         departement_actif = st.session_state["departement_profil_actif"]
         mots_cles_actifs = st.session_state.get("mots_cles_profil_actif", "")
@@ -179,8 +118,7 @@ with tab_profil:
         if df_rome.empty:
             st.error("Aucune offre trouvée pour ce département. Essaie d'élargir les critères.")
         else:
-            # Recruteurs, classement des villes et Compléments d'analyse partagent la même
-            # base de temps : depuis
+            # Tension et villes qui recrutent partagent la même base de temps : depuis
             # le début du semestre EN COURS (celui qui contient la date d'aujourd'hui).
             aujourdhui = datetime.now()
             if aujourdhui.month <= 6:
@@ -191,35 +129,157 @@ with tab_profil:
                 libelle_periode_offres = f"2e semestre {aujourdhui.year}"
             jours_max_periode_offres = (aujourdhui - debut_periode).days
             titre_libre_cv = st.session_state.get("cv_titre", "").strip()
-            # Mémorisé pour que "Compléments d'analyse" utilise EXACTEMENT la même fenêtre
-            # temporelle — sans ça, cet onglet interrogeait toutes les offres actives sans
-            # filtre de date, donnant un total d'échantillon différent de celui affiché ici
-            # pour la même recherche, malgré la demande d'un total aligné entre les deux.
-            st.session_state["jours_max_periode_offres"] = jours_max_periode_offres
-            st.session_state["libelle_periode_offres"] = libelle_periode_offres
 
-            sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
-                ["🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique"]
+            sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes, sous_tab_tension = st.tabs(
+                ["🏢 Recruteurs", "🎓 Compétences", "📍 Dynamisme géographique", "⚖️ Tension"]
             )
 
+            with sous_tab_tension:
+                if code_rome_choisi == "TOUS":
+                    st.info(
+                        "⚖️ La tension du marché nécessite un ou plusieurs postes précis (l'indicateur "
+                        "officiel raisonne par métier). Sélectionne au moins un poste ci-dessus pour "
+                        "voir ce calcul."
+                    )
+                elif departement_est_multiple(departement_actif):
+                    st.info(
+                        "⚖️ La tension du marché nécessite un seul département sélectionné (statistique "
+                        "officielle trimestrielle, un appel par territoire) — indisponible pour « Toute "
+                        "la France » ou une sélection de plusieurs départements. Choisis un seul "
+                        "département ci-dessus pour voir ce calcul."
+                    )
+                else:
+                    st.caption(
+                        f"ℹ️ Les offres comptent depuis le début du semestre en cours (actuellement le "
+                        f"{libelle_periode_offres}) ; les demandeurs d'emploi restent une statistique "
+                        "officielle trimestrielle (non filtrable par date)."
+                        + (
+                            " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
+                            "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
+                            "indicateur officiel par métier unique — détail par poste ci-dessous."
+                            if recherche_multi else ""
+                        )
+                    )
+                    with st.spinner("Récupération des offres et demandeurs d'emploi..."):
+                        offres_pour_tension = rechercher_offres_completes_elargi(
+                            codes_resolus_cv, titre_libre_cv, departement_actif,
+                            jours_max=jours_max_periode_offres,
+                        )
+                        total_dep_offres = len(offres_pour_tension)
+                        detail_par_poste = []
+                        total_offres_officielles = 0
+                        periode_offres_officielles = None
+                        erreur_offres_officielles = None
+                        for label, code in codes_par_poste_cv.items():
+                            if not code:
+                                continue
+                            demandeurs_i, periode_i, erreur_i = demandeurs_emploi_departement(
+                                code, departement_actif
+                            )
+                            detail_par_poste.append((label, demandeurs_i, periode_i, erreur_i))
+                            off_i, periode_off_i, erreur_off_i = offres_officielles_departement(code, departement_actif)
+                            if erreur_off_i:
+                                erreur_offres_officielles = erreur_off_i
+                            else:
+                                total_offres_officielles += off_i or 0
+                                periode_offres_officielles = periode_offres_officielles or periode_off_i
+                        total_embauches = 0
+                        periode_embauches = None
+                        erreur_embauches = None
+                        for label, code in codes_par_poste_cv.items():
+                            if not code:
+                                continue
+                            emb_i, periode_emb_i, erreur_emb_i = embauches_departement(code, departement_actif)
+                            if erreur_emb_i:
+                                erreur_embauches = erreur_emb_i
+                            else:
+                                total_embauches += emb_i or 0
+                                periode_embauches = periode_embauches or periode_emb_i
+                        # Indicateur qualitatif (paliers), pas une somme : affiché seulement
+                        # pour un poste unique — additionner des paliers de plusieurs postes
+                        # n'aurait pas de sens.
+                        libelle_tension_officielle, periode_tension_officielle, erreur_tension_officielle = (
+                            (None, None, "plusieurs postes sélectionnés")
+                            if len(codes_resolus_cv) != 1
+                            else perspective_recrutement_departement(codes_resolus_cv[0], departement_actif)
+                        )
+                    demandeurs_valides = [d for _, d, _, e in detail_par_poste if not e]
+                    total_dep_demandeurs = sum(demandeurs_valides) if demandeurs_valides else 0
+                    # Période affichée seulement pour un poste unique (ambigu à résumer en
+                    # une seule période quand plusieurs postes aux périodes potentiellement
+                    # différentes sont sommés).
+                    periode_demandeurs = (
+                        detail_par_poste[0][2] if len(detail_par_poste) == 1 and not detail_par_poste[0][3] else None
+                    )
+                    erreur_demandeurs = (
+                        None if demandeurs_valides else "toutes les requêtes demandeurs ont échoué"
+                    )
+
+                    if erreur_demandeurs:
+                        st.warning(
+                            f"Impossible de récupérer les demandeurs d'emploi automatiquement ({erreur_demandeurs}). "
+                            "Saisis une valeur manuelle en attendant."
+                        )
+                        total_dep_demandeurs = st.number_input(
+                            "Demandeurs d'emploi (saisie manuelle)", min_value=0, value=0, key="demandeurs_manuel"
+                        )
+                    else:
+                        c1, c2 = st.columns(2)
+                        c1.metric("Offres", total_dep_offres)
+                        c2.metric(
+                            f"Demandeurs d'emploi{' — ' + periode_demandeurs if periode_demandeurs else ''}",
+                            total_dep_demandeurs,
+                        )
+
+                    tension = calculer_tension(total_dep_offres, total_dep_demandeurs)
+                    if tension is not None:
+                        st.metric("Indice de tension (offres / demandeurs)", tension)
+                        st.info(interpreter_tension(tension))
+                        conseils = conseils_tension(tension)
+                        if conseils:
+                            with st.expander("💡 Conseils pour ce niveau de tension"):
+                                for conseil in conseils:
+                                    st.markdown(f"- {conseil}")
+                    else:
+                        st.info("Donnée de demandeurs insuffisante pour calculer la tension.")
+
+                    if libelle_tension_officielle:
+                        st.caption(
+                            f"⚖️ Indicateur officiel France Travail de difficulté de recrutement "
+                            f"({periode_tension_officielle}) : **{libelle_tension_officielle}** — "
+                            "méthode de calcul différente de notre indice ci-dessus (offres/demandeurs), "
+                            "présenté en complément qualitatif, pas en remplacement."
+                        )
+
+                    if not erreur_offres_officielles:
+                        st.caption(
+                            f"📊 Repère officiel France Travail (statistique trimestrielle, {periode_offres_officielles}) : "
+                            f"**{total_offres_officielles}** offre(s) enregistrée(s) sur la période — à ne pas confondre "
+                            f"avec les **{total_dep_offres}** offres actuellement actives comptées ci-dessus : une offre "
+                            "enregistrée peut avoir déjà été pourvue et retirée, l'écart entre les deux n'est donc pas "
+                            "une erreur."
+                        )
+                    if not erreur_embauches:
+                        st.metric(
+                            f"Embauches réalisées — {periode_embauches}", total_embauches,
+                            help=(
+                                "Nombre RÉEL de prises de poste (pas des offres publiées) sur ce métier "
+                                "dans ce département, source France Travail — le repère le plus concret "
+                                "sur la réalité du marché, au-delà du nombre d'offres."
+                            ),
+                        )
+
             with sous_tab_recruteurs:
-                st.markdown(
-                    "Deux façons de repérer une entreprise à contacter pour ce métier : celles "
-                    "qui recrutent **déjà visiblement**, et celles qui ont un **fort potentiel** "
-                    "d'embauche même sans offre publiée."
-                )
                 with st.spinner("Récupération des recruteurs actifs..."):
-                    _, total_echantillon_recruteurs, _, _, df_entreprises, _ = offres_par_ville_elargi(
+                    _, _, _, _, df_entreprises, _ = offres_par_ville_elargi(
                         codes_resolus_cv, titre_libre_cv, departement_actif,
                         jours_max=jours_max_periode_offres,
                     )
 
                 st.markdown("##### 🕒 Recruteurs du moment")
                 st.caption(
-                    f"ℹ️ Recruteurs actifs {libelle_periode_offres} — ont publié une offre "
-                    "récemment sur le métier et le département sélectionnés. Argument de "
-                    f"candidature ciblée. Échantillon : **{total_echantillon_recruteurs} offre(s)** "
-                    "publiée(s) sur France Travail."
+                    f"ℹ️ Recruteurs actifs {libelle_periode_offres} (même base que la tension du "
+                    "marché) — ont publié une offre récemment."
                 )
                 if df_entreprises.empty:
                     st.info(
@@ -227,6 +287,11 @@ with tab_profil:
                         "les offres sont diffusées de façon anonyme."
                     )
                 else:
+                    st.caption(
+                        "💡 Les entreprises ou les candidatures spontanées peuvent être pertinentes — "
+                        "même sans offre publiée actuellement, ces recruteurs actifs sur ce métier "
+                        "peuvent valoir une candidature directe."
+                    )
                     df_entreprises_affiche = df_entreprises.copy()
                     total_offres_entreprises = df_entreprises_affiche["nombre_offres"].sum()
                     df_entreprises_affiche["Part des offres"] = (
@@ -240,7 +305,7 @@ with tab_profil:
                         hide_index=True,
                         column_config={
                             "Part des offres": st.column_config.NumberColumn(
-                                "Part d'occurrence", format="%.1f%%"
+                                "Part des offres", format="%.1f%%"
                             )
                         },
                     )
@@ -248,10 +313,10 @@ with tab_profil:
                 st.divider()
                 st.markdown("##### 🚀 Recruteurs à fort potentiel")
                 st.caption(
-                    "ℹ️ Entreprises susceptibles de recruter dans les 6 prochains mois pour ce "
-                    "métier et ce département — MÊME SANS offre publiée actuellement (modèle "
-                    "prédictif basé sur l'historique de recrutement). Argument de candidature "
-                    "spontanée. Source : La Bonne Boîte (France Travail)."
+                    "ℹ️ Entreprises susceptibles de recruter dans les 6 prochains mois pour ce métier "
+                    "et ce département — MÊME SANS offre publiée actuellement (modèle prédictif basé "
+                    "sur l'historique de recrutement). Source : La Bonne Boîte (France Travail). "
+                    "Argument de candidature spontanée, à ne pas confondre avec le tableau ci-dessus."
                 )
                 if not codes_resolus_cv:
                     st.info("Sélectionne au moins un poste ci-dessus.")
@@ -326,37 +391,14 @@ with tab_profil:
                             resultats_diag_lbb = diagnostiquer_la_bonne_boite(codes_diag, departement_actif)
                         st.json(resultats_diag_lbb)
 
-                st.divider()
-                st.info(
-                    "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
-                    "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
-                    "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
-                    "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
-                    "avec prudence si tu cherches un point de comparaison sur ce type de poste."
-                )
-
             with sous_tab_certifs:
-                st.markdown(
-                    "Ce que le marché demande réellement pour ce métier : certifications, "
-                    "savoir-faire et savoir-être les plus cités dans les offres, complétés par "
-                    "le référentiel officiel du métier (ROME)."
-                )
-                st.caption(
-                    "ℹ️ Au sens France Travail : le **savoir-être** représente les soft skills "
-                    "propres à chaque personne (comportement, posture professionnelle) ; le "
-                    "**savoir-faire** correspond aux connaissances techniques nécessaires au "
-                    "poste ; les **compétences** désignent les tâches et missions concrètement "
-                    "liées au poste (à retrouver dans le référentiel officiel du métier, "
-                    "ci-dessous, aux côtés de la liste complète des savoir-faire et savoir-être)."
-                )
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
                 else:
-                    df_comp, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
+                    _, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
                     st.caption(
                         "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
-                        f"Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
-                        f"**{nb_total_suggestions} offre(s)**."
+                        "Travail pour le(s) poste(s) sélectionné(s)."
                     )
                     if df_certifs.empty:
                         st.info("Aucune certification identifiée dans les offres de cet échantillon.")
@@ -369,53 +411,11 @@ with tab_profil:
                             hide_index=True,
                         )
 
-                    with st.expander("🔧 Vérifier un résultat suspect (temporaire)"):
-                        st.caption(
-                            "Si une certification semble déplacée pour ce métier (ex: « ADR » sur "
-                            "un poste de management), tape son terme exact ci-dessous — affiche les "
-                            "extraits de texte réels où il matche, pour distinguer un vrai signal "
-                            "d'un faux positif (ex: « adr » à l'intérieur de « cadre »)."
-                        )
-                        terme_a_verifier = st.text_input(
-                            "Terme à vérifier (ex: adr)", key="terme_diagnostic_certif"
-                        )
-                        if st.button("Vérifier", key="btn_diagnostic_terme_certif") and terme_a_verifier.strip():
-                            with st.spinner("Recherche des occurrences en cours..."):
-                                resultats_verif = diagnostiquer_terme_certification(
-                                    terme_a_verifier.strip(), codes_resolus_cv, departement_actif,
-                                    mots_cles_libres=titre_libre_cv,
-                                )
-                            st.json(resultats_verif)
-
-                    st.divider()
-                    st.markdown("##### 🛠️ Savoir-faire les plus demandés")
-                    st.caption(
-                        "ℹ️ Le savoir-faire désigne les connaissances techniques nécessaires au "
-                        "poste. Ces savoir-faire proviennent directement des annonces publiées sur "
-                        "France Travail pour le(s) poste(s) sélectionné(s) dans votre CV, sur le "
-                        "département renseigné (hors outils, langages et certifications, "
-                        "affichés séparément). "
-                        f"Échantillon : **{nb_total_suggestions} offre(s)**."
-                    )
-                    if df_comp.empty:
-                        st.info("Aucun savoir-faire identifié dans les offres de cet échantillon.")
-                    else:
-                        st.dataframe(
-                            df_comp.drop(columns=["pourcentage"]).rename(
-                                columns={"libelle": "Savoir-faire", "nombre_offres": "Occurrences"}
-                            ),
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-
                     st.divider()
                     st.markdown("##### 🤝 Savoir-être les plus demandés")
                     st.caption(
-                        "ℹ️ Le savoir-être représente les soft skills propres à chaque personne "
-                        "(comportement, posture professionnelle). Ces savoir-être proviennent "
-                        "directement des annonces publiées sur France Travail pour le(s) poste(s) "
-                        "sélectionné(s) dans votre CV, sur le département renseigné. "
-                        f"Échantillon : **{nb_total_suggestions} offre(s)**."
+                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
+                        "Travail pour le(s) poste(s) sélectionné(s)."
                     )
                     if df_savoir_etre.empty:
                         st.info("Aucun savoir-être identifié dans les offres de cet échantillon.")
@@ -444,15 +444,10 @@ with tab_profil:
                 st.divider()
                 st.markdown("##### 📖 Référentiel officiel du métier (ROME)")
                 st.caption(
-                    "ℹ️ Ces fiches résument les compétences (tâches et missions concrètement "
-                    "liées au poste), le savoir-faire (connaissances techniques) et le "
-                    "savoir-être (soft skills) liés au métier, TELS QUE DÉFINIS par le "
-                    "répertoire officiel de France Travail — complémentaire des listes "
-                    "mentionnées précédemment (afin de compléter la vision sur la demande des "
-                    "recruteurs). C'est ici que figure la liste COMPLÈTE des savoir-faire et "
-                    "savoir-être officiels du métier, au-delà de ceux les plus cités dans les "
-                    "offres ci-dessus. Une fiche par poste sélectionné, pas fusionnée en cas de "
-                    "multi-poste."
+                    "ℹ️ Compétences et savoir-être TELS QUE DÉFINIS par le répertoire officiel — "
+                    "complémentaire des listes ci-dessus (qui reflètent la demande réelle des "
+                    "recruteurs, là maintenant). Une fiche par poste sélectionné, pas fusionnée "
+                    "en cas de multi-poste."
                 )
                 for label, code in codes_par_poste_cv.items():
                     if not code:
@@ -464,8 +459,6 @@ with tab_profil:
                         else:
                             if fiche_metier["competences"]:
                                 st.markdown("**Compétences :** " + ", ".join(fiche_metier["competences"]))
-                            if fiche_metier["savoir_faire"]:
-                                st.markdown("**Savoir-faire :** " + ", ".join(fiche_metier["savoir_faire"]))
                             if fiche_metier["savoir_etre"]:
                                 st.markdown("**Savoir-être :** " + ", ".join(fiche_metier["savoir_etre"]))
                             if fiche_metier["savoirs"]:
@@ -484,11 +477,99 @@ with tab_profil:
                         st.json(resultats_diag_fm)
 
             with sous_tab_villes:
-                st.markdown(
-                    "Où se trouvent les offres pour ce métier, et comment se porte "
-                    "économiquement votre département par rapport à d'autres."
+                st.caption(
+                    f"ℹ️ Classement {libelle_periode_offres} (même base que la tension et le top "
+                    "recruteurs), et comparaison du dynamisme économique du département avec "
+                    "quelques territoires contrastés."
                 )
 
+                # --- Dynamisme géographique : graphe comparatif gradué ---
+                st.markdown("##### 📊 Dynamisme géographique")
+                # Comparaison avec des départements tirés au sort (stable tant que le
+                # département actif ne change pas, pour ne pas re-tirer à chaque
+                # interaction) — ton département est TOUJOURS inclus en plus des
+                # départements aléatoires.
+                cle_dep_aleatoires = "dynamisme_departements_aleatoires"
+                if st.session_state.get(f"{cle_dep_aleatoires}_pour") != departement_actif:
+                    autres_departements = [d for d in DEPARTEMENTS_VERS_NOM if d != departement_actif]
+                    st.session_state[cle_dep_aleatoires] = random.sample(
+                        autres_departements, min(5, len(autres_departements))
+                    )
+                    st.session_state[f"{cle_dep_aleatoires}_pour"] = departement_actif
+                departements_comparaison = [departement_actif] + st.session_state[cle_dep_aleatoires]
+
+                resultats_dynamisme = []
+                for dep_comp in departements_comparaison:
+                    val_dep, _, _, err_dep = dynamisme_territoire(dep_comp)
+                    if not err_dep and val_dep is not None:
+                        resultats_dynamisme.append({"departement": dep_comp, "valeur": val_dep})
+
+                if len(resultats_dynamisme) < 2:
+                    st.info("Comparaison indisponible pour le moment.")
+                else:
+                    st.caption(
+                        "ℹ️ L'échelle officielle exacte de cet indicateur France Travail (méthode "
+                        "IA prospective sur le trimestre à venir) n'est pas documentée publiquement "
+                        "— ce graphique compare ton département à quelques départements tirés au "
+                        "sort pour donner un repère relatif, pas une échelle absolue. Un bloc par "
+                        "valeur observée, les départements qui la partagent sont nommés à "
+                        "l'intérieur du bloc."
+                    )
+                    # Un bloc par valeur DISTINCTE observée, de largeur ÉGALE (pas proportionnelle
+                    # à l'écart numérique entre valeurs, contrairement à la jauge de salaire — ici
+                    # l'écart entre deux valeurs de dynamisme n'a pas de signification proportionnelle
+                    # connue) — les départements partageant une même valeur sont nommés DANS le bloc.
+                    valeurs_par_dep = {}
+                    for r in resultats_dynamisme:
+                        valeurs_par_dep.setdefault(round(r["valeur"], 1), []).append(r["departement"])
+                    valeurs_graduees = sorted(valeurs_par_dep.keys())
+
+                    if len(valeurs_graduees) == 1:
+                        st.metric("Valeur observée (identique pour tous les départements comparés)", valeurs_graduees[0])
+                    else:
+                        palette_dyn = ["#2E86DE", "#10AC84", "#F9A826", "#8854D0", "#EE5A6F", "#01A3A4"]
+                        nb_blocs = len(valeurs_graduees)
+                        couleurs_blocs = [palette_dyn[i % len(palette_dyn)] for i in range(nb_blocs)]
+                        textes_blocs = [
+                            "<br>".join(
+                                f"{DEPARTEMENTS_VERS_NOM.get(d, d)}"
+                                + (" (toi)" if d == departement_actif else "")
+                                for d in valeurs_par_dep[v]
+                            )
+                            for v in valeurs_graduees
+                        ]
+                        fig_dyn = go.Figure(
+                            go.Bar(
+                                x=[1] * nb_blocs,
+                                y=[""] * nb_blocs,
+                                base=list(range(nb_blocs)),
+                                orientation="h",
+                                marker=dict(color=couleurs_blocs, line=dict(width=1, color="#0e1117")),
+                                text=textes_blocs,
+                                textposition="inside",
+                                insidetextanchor="middle",
+                                textfont=dict(size=11, color="white"),
+                                hoverinfo="skip",
+                            )
+                        )
+                        fig_dyn.update_xaxes(
+                            visible=True,
+                            tickmode="array",
+                            tickvals=[i + 0.5 for i in range(nb_blocs)],
+                            ticktext=[str(v) for v in valeurs_graduees],
+                            tickfont=dict(size=12, color="white"),
+                            showgrid=False,
+                            zeroline=False,
+                        )
+                        fig_dyn.update_yaxes(visible=False)
+                        fig_dyn.update_layout(
+                            height=130, margin=dict(t=20, l=10, r=10, b=30),
+                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig_dyn, use_container_width=True)
+
+                st.divider()
                 # --- Classement des villes (remplace la carte) ---
                 st.markdown("##### 🏆 Classement des villes")
                 with st.spinner("Récupération des offres par ville..."):
@@ -496,14 +577,11 @@ with tab_profil:
                         codes_resolus_cv, titre_libre_cv, departement_actif,
                         jours_max=jours_max_periode_offres,
                     )
-                st.caption(
-                    f"ℹ️ Classement {libelle_periode_offres}. Échantillon : "
-                    f"**{total_region} offre(s)** publiée(s) sur France Travail."
-                )
                 # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
                 # donnent la plage de publication réelle des offres renvoyées par l'API —
                 # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
-                # (format AAAA-MM-JJ)".
+                # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
+                # offres sont simplement celles encore actives aujourd'hui.
                 if df_villes.empty:
                     st.info("Aucune offre trouvée pour ces critères.")
                 else:
@@ -529,171 +607,46 @@ with tab_profil:
                         hide_index=True,
                         column_config={
                             "Part des offres": st.column_config.NumberColumn(
-                                "Part d'occurrence", format="%.1f%%"
+                                "Part des offres", format="%.1f%%"
                             )
                         },
                     )
 
-                st.divider()
-                # --- Dynamisme géographique : graphe comparatif gradué ---
-                # Placé APRÈS le classement des villes : contrairement au reste de cet
-                # onglet, cet indicateur est TERRITORIAL et GLOBAL — il ne dépend pas du
-                # ou des poste(s) recherché(s) (l'API l'interroge avec un code générique
-                # "MOYENNE", jamais un code ROME). Il vient donc en complément d'ambiance
-                # économique du département, pas comme un résultat lié à ta recherche.
-                st.markdown("##### 📊 Dynamisme géographique")
-                st.caption(
-                    "ℹ️ Contrairement aux sections précédentes, cet indicateur ne dépend PAS "
-                    "du ou des poste(s) recherché(s) — c'est un signal général sur l'économie "
-                    "du département dans son ensemble, pas sur ton métier précis."
-                )
-                # Comparaison avec Paris et Lyon (toujours inclus) + des départements tirés
-                # au sort (stable tant que le département actif ne change pas, pour ne pas
-                # re-tirer à chaque interaction) — ton département est TOUJOURS inclus en plus.
-                cle_dep_aleatoires = "dynamisme_departements_aleatoires"
-                departements_fixes = ["75", "69"]  # Paris, Lyon — toujours affichés en comparatif
-                if st.session_state.get(f"{cle_dep_aleatoires}_pour") != departement_actif:
-                    exclus = set(departements_fixes + [departement_actif])
-                    autres_departements = [d for d in DEPARTEMENTS_VERS_NOM if d not in exclus]
-                    # Échantillon élargi (3 -> 6) : augmente les chances de couvrir les 4
-                    # paliers de valeur observés en pratique, plutôt que de laisser un bloc
-                    # systématiquement vide faute d'avoir tiré le bon département.
-                    st.session_state[cle_dep_aleatoires] = random.sample(
-                        autres_departements, min(6, len(autres_departements))
-                    )
-                    st.session_state[f"{cle_dep_aleatoires}_pour"] = departement_actif
-                departements_comparaison = list(dict.fromkeys(
-                    [departement_actif] + departements_fixes + st.session_state[cle_dep_aleatoires]
-                ))
-
-                resultats_dynamisme = []
-                for dep_comp in departements_comparaison:
-                    val_dep, _, _, err_dep = dynamisme_territoire(dep_comp)
-                    if not err_dep and val_dep is not None:
-                        resultats_dynamisme.append({"departement": dep_comp, "valeur": val_dep})
-
-                if len(resultats_dynamisme) < 2:
-                    st.info("Comparaison indisponible pour le moment.")
-                else:
-                    st.caption(
-                        "ℹ️ Indicateur composite officiel (source : France Travail & Acoss) mesurant "
-                        "l'évolution COMPARÉE (pas le niveau absolu) des effectifs salariés, des "
-                        "embauches et des offres diffusées, anticipée pour le trimestre à venir — un "
-                        "petit département peut donc afficher une progression relative forte sur une "
-                        "petite base, sans que ça signifie plus d'activité en valeur absolue qu'un "
-                        "grand bassin d'emploi."
-                    )
-                    # Blocs pour les valeurs 1 à 4 (plage observée jusqu'ici en pratique) —
-                    # tout palier resté VIDE après l'échantillonnage (aucun département tiré
-                    # n'y correspond) est retiré du graphique plutôt qu'affiché comme bloc gris
-                    # sans contenu ; une éventuelle valeur hors plage (défensif, l'échelle
-                    # réelle n'étant pas documentée officiellement) est conservée si observée.
-                    valeurs_par_dep = {v: [] for v in (1, 2, 3, 4)}
-                    for r in resultats_dynamisme:
-                        valeurs_par_dep.setdefault(round(r["valeur"]), []).append(r["departement"])
-                    valeurs_par_dep = {v: deps for v, deps in valeurs_par_dep.items() if deps}
-                    valeurs_graduees = sorted(valeurs_par_dep.keys())
-
-                    palette_dyn = ["#2E86DE", "#10AC84", "#F9A826", "#EE5A6F", "#01A3A4"]
-                    nb_blocs = len(valeurs_graduees)
-                    couleurs_blocs = [palette_dyn[i % len(palette_dyn)] for i in range(nb_blocs)]
-                    # Le département actif est mis en évidence par une COULEUR (violet) plutôt
-                    # que par un texte type "(toi)", jugé peu professionnel pour cet usage.
-                    # Chaque nom est suivi de son code département (ex: "Paris - 75").
-                    textes_blocs = [
-                        "<br>".join(
-                            (
-                                f'<span style="color:#5B21B6"><b>{DEPARTEMENTS_VERS_NOM.get(d, d)} - {d}</b></span>'
-                                if d == departement_actif
-                                else f"{DEPARTEMENTS_VERS_NOM.get(d, d)} - {d}"
-                            )
-                            for d in valeurs_par_dep[v]
-                        )
-                        for v in valeurs_graduees
-                    ]
-                    fig_dyn = go.Figure(
-                        go.Bar(
-                            x=[1] * nb_blocs,
-                            y=[""] * nb_blocs,
-                            base=list(range(nb_blocs)),
-                            orientation="h",
-                            marker=dict(color=couleurs_blocs, line=dict(width=1, color="#0e1117")),
-                            text=textes_blocs,
-                            textposition="inside",
-                            insidetextanchor="middle",
-                            textfont=dict(size=11, color="white"),
-                            hoverinfo="skip",
-                        )
-                    )
-                    fig_dyn.update_xaxes(
-                        visible=True,
-                        tickmode="array",
-                        tickvals=[i + 0.5 for i in range(nb_blocs)],
-                        ticktext=[str(v) for v in valeurs_graduees],
-                        tickfont=dict(size=12, color="white"),
-                        showgrid=False,
-                        zeroline=False,
-                    )
-                    fig_dyn.update_yaxes(visible=False)
-                    fig_dyn.update_layout(
-                        height=130, margin=dict(t=20, l=10, r=10, b=30),
-                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                        showlegend=False,
-                    )
-                    st.plotly_chart(fig_dyn, use_container_width=True)
-
-                    with st.expander("🔧 Diagnostic technique Dynamisme (temporaire)"):
-                        st.caption(
-                            "Teste directement l'appel API pour ton département et affiche le "
-                            "statut HTTP et la réponse brute — utile pour confirmer que l'appel se "
-                            "déroule bien plutôt que de se fier uniquement à la valeur affichée."
-                        )
-                        if st.button("Lancer le diagnostic", key="btn_diagnostic_dynamisme"):
-                            with st.spinner("Test de l'appel Dynamisme en cours..."):
-                                resultats_diag_dyn = diagnostiquer_dynamisme_territoire(departement_actif)
-                            st.json(resultats_diag_dyn)
+            st.divider()
+            st.info(
+                "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
+                "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
+                "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
+                "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
+                "avec prudence si tu cherches un point de comparaison sur ce type de poste."
+            )
 
 # ---------------------------------------------------------------------------
-# Onglet "Compléments d'analyse"
+# Onglet "KPIs avancés"
 # ---------------------------------------------------------------------------
 with tab_avance:
     if "code_rome_choisi" not in st.session_state:
         st.info(
-            "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les Compléments d'analyse "
-            "s'appuient sur l'analyse automatique de l'onglet Analyse principale."
+            "👉 Renseigne un poste dans l'onglet **🧾 Créer mon CV** — les KPIs avancés "
+            "s'appuient sur l'analyse automatique de l'onglet Tendance par profil."
         )
     else:
-        st.caption(
-            "Détails complémentaires sur le même échantillon d'offres que l'onglet Analyse "
-            "principale : répartition par type de contrat, fourchette de salaire, niveau "
-            "d'expérience demandé."
-        )
         code_rome_actif = st.session_state["code_rome_choisi"]
         codes_rome_choisis_avance = st.session_state.get("codes_rome_choisis", [])
         departement_actif = st.session_state["departement_profil_actif"]
         titre_libre_cv_avance = st.session_state.get("cv_titre", "").strip()
-        # Même fenêtre temporelle que "Analyse principale" (mémorisée par cet onglet) — sans
-        # ça, cet onglet interrogeait toutes les offres actives sans filtre de date, donnant
-        # un total d'échantillon différent de l'onglet Analyse principale pour la même
-        # recherche.
-        jours_max_periode_offres_avance = st.session_state.get("jours_max_periode_offres")
-        libelle_periode_offres_avance = st.session_state.get("libelle_periode_offres", "")
 
         # Auto-déclenchement : se relance seul dès que le poste/département actif change
-        # (mis à jour automatiquement par "Analyse principale"), résultats conservés en
+        # (mis à jour automatiquement par "Tendance par profil"), résultats conservés en
         # session pour rester affichés en revenant sur cet onglet.
         cle_signature_avance = "avance_auto_signature"
-        signature_avance_actuelle = (
-            code_rome_actif, tuple(codes_rome_choisis_avance), departement_actif,
-            jours_max_periode_offres_avance,
-        )
+        signature_avance_actuelle = (code_rome_actif, tuple(codes_rome_choisis_avance), departement_actif)
 
         if st.session_state.get(cle_signature_avance) != signature_avance_actuelle:
             with st.spinner("Analyse en cours (contrats, salaires, expérience)..."):
                 df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                     repartition_contrats_et_salaires_elargi(
                         codes_rome_choisis_avance, titre_libre_cv_avance, departement_actif,
-                        jours_max=jours_max_periode_offres_avance,
                     )
                 )
             st.session_state["avance_resultats"] = (
@@ -705,15 +658,9 @@ with tab_avance:
             df_contrats, df_salaires, nb_avec_salaire, nb_total_offres, df_experience = (
                 st.session_state["avance_resultats"]
             )
-            st.caption(
-                f"ℹ️ Échantillon {libelle_periode_offres_avance} : **{nb_total_offres} offre(s)** "
-                "publiée(s) sur France Travail — identique à l'onglet Analyse principale pour "
-                "cette même recherche."
-            )
 
             st.divider()
             st.markdown("#### 📋 Répartition par type de contrat")
-            st.caption("Quels contrats sont réellement proposés — CDI, CDD, intérim...")
             if df_contrats.empty:
                 st.info("Aucune donnée de type de contrat disponible pour ces critères.")
             else:
@@ -725,66 +672,41 @@ with tab_avance:
                 couleurs_contrats = [
                     palette_contrats[i % len(palette_contrats)] for i in range(len(df_contrats_tri))
                 ]
-                # Taille proportionnelle à l'AIRE du nombre d'offres brut, SANS compression
-                # supplémentaire (une racine carrée avait été appliquée en plus du sizemode="area"
-                # déjà en place, ce qui écrasait trop l'écart entre les valeurs — un 50 rendait
-                # quasiment la même taille qu'un 20, un 10 la même taille qu'un 5). La lisibilité
-                # du texte dans les petites sphères est assurée autrement : un plancher de taille
-                # (sizemin) ET une police PAR SPHÈRE, plus petite pour les petites valeurs plutôt
-                # que de gonfler artificiellement leur taille.
-                tailles_base = df_contrats_tri["nombre_offres"]
-                valeur_max = tailles_base.max()
-                # Police entre 10 et 18 pt, sur la racine carrée du ratio à la valeur max (la
-                # racine carrée reflète le rayon, dimension realmente perçue visuellement, pas
-                # l'aire) — reste lisible même sur la plus petite sphère, sans être minuscule.
-                polices_contrats = [
-                    round(10 + 8 * ((v / valeur_max) ** 0.5), 1) for v in tailles_base
-                ]
-                # Écartement horizontal entre sphères (x2.4, au lieu de positions 0,1,2...) pour
-                # garantir un espace visible entre elles même quand il y a plusieurs types de
-                # contrat — sans ça, des sphères voisines se touchaient ou se chevauchaient
-                # (constaté avec 5 types de contrat affichés simultanément).
-                positions_x = [i * 2.4 for i in range(len(df_contrats_tri))]
                 fig_contrats = go.Figure(
                     go.Scatter(
-                        x=positions_x,
+                        x=list(range(len(df_contrats_tri))),
                         y=[0] * len(df_contrats_tri),
                         mode="markers+text",
                         marker=dict(
-                            # sizemode="area" rend l'AIRE du cercle proportionnelle à
-                            # nombre_offres — le diamètre cible maximal (150) fixe la taille de
-                            # la plus grande sphère, sizemin garantit un plancher pour que même
-                            # la plus petite valeur reste visible et manipulable.
-                            size=tailles_base,
+                            # sizemode="area" + cette formule standard Plotly rend l'AIRE du
+                            # cercle proportionnelle à nombre_offres (pas le diamètre, qui
+                            # exagérerait visuellement les écarts entre types de contrat).
+                            size=df_contrats_tri["nombre_offres"],
                             sizemode="area",
-                            sizeref=2.0 * valeur_max / (150.0 ** 2),
-                            sizemin=38,
+                            sizeref=2.0 * df_contrats_tri["nombre_offres"].max() / (110.0 ** 2),
+                            sizemin=18,
                             color=couleurs_contrats,
                             line=dict(width=2, color="white"),
                         ),
                         text=[
-                            # Intitulé en 2 mots (ex: "Profession commerciale") : saut de ligne
-                            # après le premier mot plutôt que de laisser le texte déborder à
-                            # l'horizontale hors de la sphère et chevaucher la voisine.
-                            f"{row.type_contrat.replace(' ', '<br>', 1)}<br>{row.nombre_offres}"
+                            f"{row.type_contrat}<br>{row.nombre_offres}"
                             for row in df_contrats_tri.itertuples()
                         ],
                         textposition="middle center",
-                        textfont=dict(size=polices_contrats, color="white"),
+                        textfont=dict(size=13, color="white"),
                         hoverinfo="skip",
                     )
                 )
-                fig_contrats.update_xaxes(visible=False, range=[-1.2, positions_x[-1] + 1.2 if positions_x else 1])
-                fig_contrats.update_yaxes(visible=False, range=[-1.3, 1.3])
+                fig_contrats.update_xaxes(visible=False, range=[-1, len(df_contrats_tri)])
+                fig_contrats.update_yaxes(visible=False, range=[-1.2, 1.2])
                 fig_contrats.update_layout(
-                    height=320, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
+                    height=280, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
                     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 )
                 st.plotly_chart(fig_contrats, use_container_width=True)
 
             st.divider()
             st.markdown("#### 💰 Fourchette de salaire proposée")
-            st.caption("Les montants réellement affichés sur les offres CDI de cet échantillon.")
             if code_rome_actif != "MULTI" and code_rome_actif != "TOUS":
                 valeur_sal, nom_sal, periode_sal, erreur_sal = salaires_officiels_metier(
                     code_rome_actif, code_territoire=departement_actif, code_type_territoire="DEP",
@@ -827,18 +749,7 @@ with tab_avance:
                     if not toutes_valeurs:
                         st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
                     else:
-                        # Pas d'arrondi calé dynamiquement sur l'étendue réelle des valeurs,
-                        # plutôt qu'un arrondi fixe au 5 000 € — avec beaucoup d'offres, un pas
-                        # fixe pouvait produire des dizaines de graduations illisibles et
-                        # chevauchées (constaté avec 178 offres, plage 5 000 € à 600 000 €).
-                        # Objectif : environ 8 à 10 blocs, quelle que soit l'étendue observée.
-                        plage_valeurs = max(toutes_valeurs) - min(toutes_valeurs)
-                        nb_blocs_cible = 9
-                        if plage_valeurs > 0:
-                            pas_arrondi = max(1000, round(plage_valeurs / nb_blocs_cible / 1000) * 1000)
-                        else:
-                            pas_arrondi = 1000
-                        compteur_valeurs = Counter(round(v / pas_arrondi) * pas_arrondi for v in toutes_valeurs)
+                        compteur_valeurs = Counter(round(v / 5000) * 5000 for v in toutes_valeurs)
                         valeurs_graduees = sorted(compteur_valeurs.keys())
                         if len(valeurs_graduees) == 1:
                             st.metric("Salaire annuel indiqué", f"{valeurs_graduees[0]:,.0f} €".replace(",", " "))
@@ -892,17 +803,17 @@ with tab_avance:
                     # Repère de fiabilité déplacé ici en simple mention de source (au lieu
                     # d'un gros st.metric qui lui donnait plus de poids visuel que ce n'est
                     # qu'un indicateur de taille d'échantillon).
+                    pct = round(100 * nb_avec_salaire / nb_total_offres)
                     st.caption(
-                        f"📎 Source : **{nb_avec_salaire} offre(s)** sur {nb_total_offres} indiquent "
-                        "un salaire, tous types de contrat confondus — jauge ci-dessus calculée "
-                        "uniquement sur les offres CDI parmi elles, montants annualisés (un salaire "
-                        "mensuel est multiplié par 12 ; un salaire horaire est exclu, faute de "
-                        "pouvoir le convertir en annuel de façon fiable)."
+                        f"📎 Source : {nb_avec_salaire} offre(s) sur {nb_total_offres} indiquent un "
+                        f"salaire ({pct}%, tous types de contrat confondus) — jauge ci-dessus "
+                        "calculée uniquement sur les offres CDI parmi elles, montants annualisés "
+                        "(un salaire mensuel est multiplié par 12 ; un salaire horaire est exclu, "
+                        "faute de pouvoir le convertir en annuel de façon fiable)."
                     )
 
             st.divider()
             st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
-            st.caption("De « Débutant accepté » à plusieurs années requises.")
             if df_experience.empty:
                 st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
             else:
@@ -940,6 +851,14 @@ with tab_avance:
                         use_container_width=True, hide_index=True,
                     )
 
+            st.divider()
+            st.markdown("#### 🎯 Difficulté de recrutement (BMO)")
+            st.info(
+                "⚠️ Pas encore branché — c'est un indicateur annuel et déclaratif (enquête "
+                "employeurs), différent des données d'offres réelles utilisées ailleurs dans "
+                "l'app. Dis-moi si tu veux qu'on l'ajoute."
+            )
+
 # ---------------------------------------------------------------------------
 # Onglet "Événements" — forums, salons, ateliers, job dating... via l'API
 # "Mes événements emploi" de France Travail. Utilise le(s) code(s) ROME
@@ -956,44 +875,16 @@ with tab_evenements:
     postes_cv_evt = st.session_state.get("cv_postes_recherche", [])
     codes_par_poste_evt = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_evt = [c for c in codes_par_poste_evt.values() if c]
-    departement_evt = st.session_state.get("cv_departement")
+    departement_evt = st.session_state.get("cv_departement") or "13"
 
     if not postes_cv_evt:
         st.info(
             "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV** pour voir les "
             "événements pertinents."
         )
-    elif not departement_evt:
-        st.info(
-            "👉 Ton département de résidence n'est plus renseigné — retourne dans l'onglet "
-            "**🧾 Créer mon CV** pour le sélectionner."
-        )
     else:
-        # Filtres facultatifs — la recherche se lance déjà avec les valeurs par
-        # défaut ci-dessous (90 jours, toutes modalités, tous publics), les
-        # cases permettent d'affiner sans devoir tout reconfigurer.
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            fenetre_jours = st.radio(
-                "Période", [30, 90, 180], index=1,
-                format_func=lambda j: f"{j} jours", horizontal=True, key="evt_fenetre",
-            )
-            debutant_uniquement = st.checkbox(
-                "Ouvert aux débutants/étudiants uniquement", key="evt_debutant",
-                help="Filtre sur le référentiel officiel : \"Ouvert aux jeunes\" + \"Débutant(e) accepté(e)\".",
-            )
-        with col_f2:
-            modalite_choisie = st.radio(
-                "Modalité", ["Toutes", "Présentiel", "Distanciel"], horizontal=True, key="evt_modalite",
-            )
-        modalite_code = {"Présentiel": "ENPHY", "Distanciel": "ADIST"}.get(modalite_choisie)
-        public_cible_codes = [1, 2] if debutant_uniquement else None
-
         with st.spinner("Recherche d'événements en cours..."):
-            evenements, total_grand_domaine, nb_avant_filtre_rome = rechercher_evenements_emploi(
-                codes_resolus_evt, departement_evt, jours_max=fenetre_jours,
-                modalite=modalite_code, public_cible=public_cible_codes,
-            )
+            evenements = rechercher_evenements_emploi(codes_resolus_evt, departement_evt)
 
         if evenements is None:
             st.info(
@@ -1002,21 +893,10 @@ with tab_evenements:
             )
         elif not evenements:
             st.info(
-                f"Aucun événement trouvé pour ces critères dans les {fenetre_jours} prochains jours."
+                "Aucun événement à venir trouvé pour ce poste et ce département dans les 90 "
+                "prochains jours."
             )
         else:
-            # Transparence sur le filtrage : le grand domaine ROME (une lettre, ex: "M" pour
-            # "Support à l'entreprise") est large et couvre bien plus que le seul poste
-            # recherché — un résultat final réduit après affinage sur le(s) code(s) ROME
-            # précis n'est donc pas anormal, ce message permet de le vérifier soi-même
-            # plutôt que de se demander si l'app "rate" des événements.
-            if total_grand_domaine and len(evenements) < nb_avant_filtre_rome:
-                st.caption(
-                    f"ℹ️ {len(evenements)} événement(s) affiché(s), affinés sur le(s) poste(s) "
-                    f"précis parmi {nb_avant_filtre_rome} récupérés sur cette page — le grand "
-                    f"domaine du poste recherché en compte {total_grand_domaine} au total sur la "
-                    "période, mais couvre bien d'autres métiers que celui recherché."
-                )
             df_evenements = pd.DataFrame(
                 [
                     {
