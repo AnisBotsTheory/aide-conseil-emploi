@@ -755,6 +755,11 @@ def rechercher_entreprises_potentiel_embauche(code_rome, departement=None, page_
     nombre_entreprises_potentiel_embauche() (qui ne donne qu'un comptage) avec
     les vraies fiches : nom, SIRET, secteur NAF, tranche d'effectif, score.
 
+    code_rome accepte un code unique (str) OU une liste de codes — le paramètre
+    "rome" de l'API est déjà un tableau, ce qui permet de chercher sur plusieurs
+    postes sélectionnés en un seul appel plutôt que de forcer l'utilisateur à
+    n'en choisir qu'un seul (ancienne limitation de l'app, pas de l'API).
+
     Renvoie une liste de dicts (potentiellement vide) ou None en cas d'échec —
     dégradation silencieuse, comme partout ailleurs dans ce module.
     """
@@ -763,8 +768,13 @@ def rechercher_entreprises_potentiel_embauche(code_rome, departement=None, page_
     except Exception:
         return None
 
+    codes = code_rome if isinstance(code_rome, (list, tuple)) else [code_rome]
+    codes = [c for c in codes if c]
+    if not codes:
+        return []
+
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"rome": [code_rome], "page": 1, "page_size": min(page_size, 100)}
+    params = {"rome": codes, "page": 1, "page_size": min(page_size, 100)}
     if departement:
         try:
             params["department_number"] = [int(departement)]
@@ -824,7 +834,9 @@ def diagnostiquer_la_bonne_boite(code_rome="M1805", departement="13"):
         return [{"etape": "obtention du token (scope 'search office api_labonneboitev2')", "erreur": detail_erreur}]
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"rome": [code_rome], "department_number": [int(departement)]} if departement.isdigit() else {"rome": [code_rome]}
+    codes = code_rome if isinstance(code_rome, (list, tuple)) else [code_rome]
+    codes = [c for c in codes if c] or ["M1805"]
+    params = {"rome": codes, "department_number": [int(departement)]} if departement and str(departement).isdigit() else {"rome": codes}
     resultats_diagnostic = [{"etape": "token obtenu"}]
 
     try:
@@ -2630,6 +2642,34 @@ def dynamisme_territoire(departement):
     return None, None, premiere.get("libPeriode"), None
 
 
+def diagnostiquer_echelle_dynamisme(departements_test=None):
+    """
+    Outil de DIAGNOSTIC empirique pour l'indicateur "dynamisme de l'emploi"
+    (dynamisme_territoire) — aucune documentation publique confirmée ne
+    précise l'échelle de cette valeur (minimum/maximum, ce qui constitue un
+    score "élevé" ou "faible"). Plutôt que de deviner, cette fonction
+    interroge l'indicateur pour plusieurs départements délibérément très
+    contrastés (Paris, un département rural peu peuplé, un DOM, Bouches-du-
+    Rhône...) et renvoie les valeurs brutes obtenues côte à côte — ça permet
+    de déduire empiriquement une plage plausible en comparant des territoires
+    dont le dynamisme économique réel est connu pour être très différent,
+    faute de pouvoir consulter un Swagger qui documenterait l'échelle.
+    Pas utilisé par le flux normal de l'app.
+    """
+    departements_test = departements_test or ["75", "13", "93", "23", "974", "06"]
+    resultats = []
+    for dep in departements_test:
+        valeur, nom, periode, erreur = dynamisme_territoire(dep)
+        resultats.append({
+            "departement": dep,
+            "valeur": valeur,
+            "libelle": nom,
+            "periode": periode,
+            "erreur": erreur,
+        })
+    return resultats
+
+
 def embauches_departement(code_rome, departement):
     """
     Indicateur EMB_1 : nombre RÉEL d'embauches réalisées (pas des offres
@@ -3186,6 +3226,7 @@ __all__ = [
     "demandeurs_emploi_departement",
     "offres_officielles_departement",
     "dynamisme_territoire",
+    "diagnostiquer_echelle_dynamisme",
     "BASE_STATS_TERRITOIRE",
     "SCOPE_STATS_TERRITOIRE",
     "embauches_departement",
