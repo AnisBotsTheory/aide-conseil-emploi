@@ -166,7 +166,7 @@ with tab_profil:
                         f"{libelle_periode_offres}) ; les demandeurs d'emploi restent une statistique "
                         "officielle trimestrielle (non filtrable par date)."
                         + (
-                            " Plusieurs postes sélectionnés : tension calculée sur la somme des offres "
+                            "\n\nPlusieurs postes sélectionnés : tension calculée sur la somme des offres "
                             "et des demandeurs d'emploi de l'ensemble des postes retenus, pas sur un "
                             "indicateur officiel par métier unique — détail par poste ci-dessous."
                             if recherche_multi else ""
@@ -264,12 +264,12 @@ with tab_profil:
                         )
 
                     if not erreur_offres_officielles:
+                        mention_cumul = " (cumulé sur l'ensemble des postes sélectionnés)" if recherche_multi else ""
                         st.caption(
                             f"📊 Repère officiel France Travail (statistique trimestrielle, {periode_offres_officielles}) : "
-                            f"**{total_offres_officielles}** offre(s) enregistrée(s) sur la période — à ne pas confondre "
-                            f"avec les **{total_dep_offres}** offres actuellement actives comptées ci-dessus : une offre "
-                            "enregistrée peut avoir déjà été pourvue et retirée, l'écart entre les deux n'est donc pas "
-                            "une erreur."
+                            f"**{total_offres_officielles}** offre(s) enregistrée(s) sur la période{mention_cumul} — "
+                            f"à ne pas confondre avec les **{total_dep_offres}** offres actuellement actives "
+                            "comptées ci-dessus : une offre enregistrée peut avoir déjà été pourvue et retirée."
                         )
                     if not erreur_embauches:
                         st.metric(
@@ -551,8 +551,11 @@ with tab_profil:
                 if st.session_state.get(f"{cle_dep_aleatoires}_pour") != departement_actif:
                     exclus = set(departements_fixes + [departement_actif])
                     autres_departements = [d for d in DEPARTEMENTS_VERS_NOM if d not in exclus]
+                    # Échantillon élargi (3 -> 6) : augmente les chances de couvrir les 4
+                    # paliers de valeur observés en pratique, plutôt que de laisser un bloc
+                    # systématiquement vide faute d'avoir tiré le bon département.
                     st.session_state[cle_dep_aleatoires] = random.sample(
-                        autres_departements, min(3, len(autres_departements))
+                        autres_departements, min(6, len(autres_departements))
                     )
                     st.session_state[f"{cle_dep_aleatoires}_pour"] = departement_actif
                 departements_comparaison = list(dict.fromkeys(
@@ -573,32 +576,32 @@ with tab_profil:
                         "IA prospective sur le trimestre à venir) n'est pas documentée publiquement "
                         "— ce graphique compare ton département à Paris, Lyon et quelques "
                         "départements tirés au sort, pour donner un repère relatif, pas une "
-                        "échelle absolue. Un bloc par valeur (1 à 4, les valeurs observées en "
-                        "pratique jusqu'ici) ; les départements qui la partagent sont nommés à "
-                        "l'intérieur du bloc — le tien apparaît en violet."
+                        "échelle absolue."
                     )
-                    # Blocs FIXES 1 à 4 (plage observée jusqu'ici en pratique), toujours tous
-                    # affichés même si aucun département de l'échantillon actuel ne tombe sur
-                    # une valeur donnée (bloc vide dans ce cas) — plus une éventuelle valeur
-                    # hors plage si jamais observée (défensif, l'échelle réelle n'étant pas
-                    # documentée officiellement).
+                    # Blocs pour les valeurs 1 à 4 (plage observée jusqu'ici en pratique) —
+                    # tout palier resté VIDE après l'échantillonnage (aucun département tiré
+                    # n'y correspond) est retiré du graphique plutôt qu'affiché comme bloc gris
+                    # sans contenu ; une éventuelle valeur hors plage (défensif, l'échelle
+                    # réelle n'étant pas documentée officiellement) est conservée si observée.
                     valeurs_par_dep = {v: [] for v in (1, 2, 3, 4)}
                     for r in resultats_dynamisme:
                         valeurs_par_dep.setdefault(round(r["valeur"]), []).append(r["departement"])
+                    valeurs_par_dep = {v: deps for v, deps in valeurs_par_dep.items() if deps}
                     valeurs_graduees = sorted(valeurs_par_dep.keys())
 
                     palette_dyn = ["#2E86DE", "#10AC84", "#F9A826", "#EE5A6F", "#01A3A4"]
                     nb_blocs = len(valeurs_graduees)
-                    couleurs_blocs = [
-                        palette_dyn[i % len(palette_dyn)] if valeurs_par_dep[v] else "#3A3F4B"
-                        for i, v in enumerate(valeurs_graduees)
-                    ]
+                    couleurs_blocs = [palette_dyn[i % len(palette_dyn)] for i in range(nb_blocs)]
                     # Le département actif est mis en évidence par une COULEUR (violet) plutôt
                     # que par un texte type "(toi)", jugé peu professionnel pour cet usage.
+                    # Chaque nom est suivi de son code département (ex: "Paris - 75").
                     textes_blocs = [
                         "<br>".join(
-                            f'<span style="color:#5B21B6"><b>{DEPARTEMENTS_VERS_NOM.get(d, d)}</b></span>'
-                            if d == departement_actif else DEPARTEMENTS_VERS_NOM.get(d, d)
+                            (
+                                f'<span style="color:#5B21B6"><b>{DEPARTEMENTS_VERS_NOM.get(d, d)} - {d}</b></span>'
+                                if d == departement_actif
+                                else f"{DEPARTEMENTS_VERS_NOM.get(d, d)} - {d}"
+                            )
                             for d in valeurs_par_dep[v]
                         )
                         for v in valeurs_graduees
