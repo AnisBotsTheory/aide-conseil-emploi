@@ -541,8 +541,61 @@ with tab_profil:
                     "quelques territoires contrastés."
                 )
 
+                # --- Classement des villes (remplace la carte) ---
+                st.markdown("##### 🏆 Classement des villes")
+                with st.spinner("Récupération des offres par ville..."):
+                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_elargi(
+                        codes_resolus_cv, titre_libre_cv, departement_actif,
+                        jours_max=jours_max_periode_offres,
+                    )
+                # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
+                # donnent la plage de publication réelle des offres renvoyées par l'API —
+                # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
+                # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
+                # offres sont simplement celles encore actives aujourd'hui.
+                if df_villes.empty:
+                    st.info("Aucune offre trouvée pour ces critères.")
+                else:
+                    # Regroupement des arrondissements/quartiers d'une même ville (ex:
+                    # "Marseille 1er Arrondissement" et "Marseille 6e Arrondissement"
+                    # comptaient jusqu'ici comme deux villes séparées).
+                    df_classement = df_villes.copy()
+                    df_classement["ville"] = df_classement["ville"].map(_nom_ville_simplifie)
+                    df_classement = (
+                        df_classement.groupby("ville", as_index=False)["nombre_offres"].sum()
+                        .sort_values("nombre_offres", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    df_classement.insert(0, "Classement", range(1, len(df_classement) + 1))
+                    df_classement["Part des offres"] = (
+                        (100 * df_classement["nombre_offres"] / total_region).round(1) if total_region else 0
+                    )
+                    st.dataframe(
+                        df_classement.rename(columns={"ville": "Ville"})[
+                            ["Classement", "Ville", "Part des offres"]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Part des offres": st.column_config.NumberColumn(
+                                "Part des offres", format="%.1f%%"
+                            )
+                        },
+                    )
+
+                st.divider()
                 # --- Dynamisme géographique : graphe comparatif gradué ---
+                # Placé APRÈS le classement des villes : contrairement au reste de cet
+                # onglet, cet indicateur est TERRITORIAL et GLOBAL — il ne dépend pas du
+                # ou des poste(s) recherché(s) (l'API l'interroge avec un code générique
+                # "MOYENNE", jamais un code ROME). Il vient donc en complément d'ambiance
+                # économique du département, pas comme un résultat lié à ta recherche.
                 st.markdown("##### 📊 Dynamisme géographique")
+                st.caption(
+                    "ℹ️ Contrairement aux sections précédentes, cet indicateur ne dépend PAS "
+                    "du ou des poste(s) recherché(s) — c'est un signal général sur l'économie "
+                    "du département dans son ensemble, pas sur ton métier précis."
+                )
                 # Comparaison avec Paris et Lyon (toujours inclus) + des départements tirés
                 # au sort (stable tant que le département actif ne change pas, pour ne pas
                 # re-tirer à chaque interaction) — ton département est TOUJOURS inclus en plus.
@@ -572,11 +625,14 @@ with tab_profil:
                     st.info("Comparaison indisponible pour le moment.")
                 else:
                     st.caption(
-                        "ℹ️ L'échelle officielle exacte de cet indicateur France Travail (méthode "
-                        "IA prospective sur le trimestre à venir) n'est pas documentée publiquement "
-                        "— ce graphique compare ton département à Paris, Lyon et quelques "
-                        "départements tirés au sort, pour donner un repère relatif, pas une "
-                        "échelle absolue."
+                        "ℹ️ Indicateur composite officiel (source : France Travail & Acoss) mesurant "
+                        "l'évolution COMPARÉE (pas le niveau absolu) des effectifs salariés, des "
+                        "embauches et des offres diffusées, anticipée pour le trimestre à venir — un "
+                        "petit département peut donc afficher une progression relative forte sur une "
+                        "petite base, sans que ça signifie plus d'activité en valeur absolue qu'un "
+                        "grand bassin d'emploi. L'échelle exacte (1 à 4 observés ici) n'est pas "
+                        "documentée publiquement ; ce graphique compare ton département à Paris, "
+                        "Lyon et quelques départements tirés au sort pour donner un repère relatif."
                     )
                     # Blocs pour les valeurs 1 à 4 (plage observée jusqu'ici en pratique) —
                     # tout palier resté VIDE après l'échantillonnage (aucun département tiré
@@ -637,48 +693,16 @@ with tab_profil:
                     )
                     st.plotly_chart(fig_dyn, use_container_width=True)
 
-                st.divider()
-                # --- Classement des villes (remplace la carte) ---
-                st.markdown("##### 🏆 Classement des villes")
-                with st.spinner("Récupération des offres par ville..."):
-                    df_villes, total_region, date_min_pub, date_max_pub, _, _ = offres_par_ville_elargi(
-                        codes_resolus_cv, titre_libre_cv, departement_actif,
-                        jours_max=jours_max_periode_offres,
-                    )
-                # Note (non affichée à l'écran, à la demande) : date_min_pub/date_max_pub
-                # donnent la plage de publication réelle des offres renvoyées par l'API —
-                # ex: "Offres publiées entre le {date_min_pub[:10]} et le {date_max_pub[:10]}
-                # (format AAAA-MM-JJ)". L'API ne filtre pas par ancienneté par défaut : ces
-                # offres sont simplement celles encore actives aujourd'hui.
-                if df_villes.empty:
-                    st.info("Aucune offre trouvée pour ces critères.")
-                else:
-                    # Regroupement des arrondissements/quartiers d'une même ville (ex:
-                    # "Marseille 1er Arrondissement" et "Marseille 6e Arrondissement"
-                    # comptaient jusqu'ici comme deux villes séparées).
-                    df_classement = df_villes.copy()
-                    df_classement["ville"] = df_classement["ville"].map(_nom_ville_simplifie)
-                    df_classement = (
-                        df_classement.groupby("ville", as_index=False)["nombre_offres"].sum()
-                        .sort_values("nombre_offres", ascending=False)
-                        .reset_index(drop=True)
-                    )
-                    df_classement.insert(0, "Classement", range(1, len(df_classement) + 1))
-                    df_classement["Part des offres"] = (
-                        (100 * df_classement["nombre_offres"] / total_region).round(1) if total_region else 0
-                    )
-                    st.dataframe(
-                        df_classement.rename(columns={"ville": "Ville"})[
-                            ["Classement", "Ville", "Part des offres"]
-                        ],
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Part des offres": st.column_config.NumberColumn(
-                                "Part des offres", format="%.1f%%"
-                            )
-                        },
-                    )
+                    with st.expander("🔧 Diagnostic technique Dynamisme (temporaire)"):
+                        st.caption(
+                            "Teste directement l'appel API pour ton département et affiche le "
+                            "statut HTTP et la réponse brute — utile pour confirmer que l'appel se "
+                            "déroule bien plutôt que de se fier uniquement à la valeur affichée."
+                        )
+                        if st.button("Lancer le diagnostic", key="btn_diagnostic_dynamisme"):
+                            with st.spinner("Test de l'appel Dynamisme en cours..."):
+                                resultats_diag_dyn = diagnostiquer_dynamisme_territoire(departement_actif)
+                            st.json(resultats_diag_dyn)
 
 # ---------------------------------------------------------------------------
 # Onglet "Compléments d'analyse"
