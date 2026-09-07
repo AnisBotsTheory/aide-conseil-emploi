@@ -115,9 +115,6 @@ with tab_profil:
         "et période glissante, contre mots-clés libres et offres actives en temps réel)."
     )
 
-            "récent."
-        )
-
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
     departement_cv = st.session_state.get("cv_departement")
