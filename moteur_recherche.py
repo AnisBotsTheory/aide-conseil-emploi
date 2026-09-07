@@ -2679,6 +2679,44 @@ def dynamisme_territoire(departement):
     return None, None, premiere.get("libPeriode"), None
 
 
+def diagnostiquer_dynamisme_territoire(departement="13"):
+    """
+    Outil de DIAGNOSTIC pour dynamisme_territoire() — affiche le statut HTTP et
+    la réponse brute de l'appel (au lieu du tuple déjà interprété) pour un
+    département donné, afin de vérifier que l'appel API se déroule bien
+    (jeton obtenu, scope accepté, réponse 200) plutôt que de se fier
+    uniquement à la valeur affichée à l'écran. Pas utilisé par le flux normal
+    de l'app.
+    """
+    payload = {
+        "codeTypeTerritoire": "DEP",
+        "codeTerritoire": departement,
+        "codeTypeActivite": "MOYENNE",
+        "codeActivite": "MOYENNE",
+        "codeTypePeriode": "TRIMESTRE",
+        "dernierePeriode": True,
+        "sansCaracteristiques": True,
+    }
+    try:
+        token = get_token(SCOPE_STATS_TERRITOIRE)
+    except Exception as e:
+        return [{"etape": "obtention du token (scope stats-informations-territoire)", "erreur": str(e)}]
+
+    resultats_diagnostic = [{"etape": "token obtenu"}]
+    url = f"{BASE_STATS_TERRITOIRE}/v1/indicateur/stat-dynamique-emploi"
+    headers = {
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json",
+    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=8)
+        resultats_diagnostic.append({
+            "departement": departement, "status": r.status_code, "reponse": r.text[:1500],
+        })
+    except requests.RequestException as e:
+        resultats_diagnostic.append({"departement": departement, "erreur": str(e)})
+    return resultats_diagnostic
+
+
 def diagnostiquer_echelle_dynamisme(departements_test=None):
     """
     Outil de DIAGNOSTIC empirique pour l'indicateur "dynamisme de l'emploi"
@@ -3450,6 +3488,7 @@ __all__ = [
     "demandeurs_emploi_departement",
     "offres_officielles_departement",
     "dynamisme_territoire",
+    "diagnostiquer_dynamisme_territoire",
     "diagnostiquer_echelle_dynamisme",
     "BASE_STATS_TERRITOIRE",
     "SCOPE_STATS_TERRITOIRE",
