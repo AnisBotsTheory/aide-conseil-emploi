@@ -2958,6 +2958,35 @@ def evolution_offres_annuelle(code_rome, departement, mots_cles=None, secteur_ac
     return pd.DataFrame(lignes)
 
 
+def _normaliser_experience_libelle(libelle_brut):
+    """
+    Normalise le libellé d'expérience France Travail pour regrouper des
+    doublons constatés en usage réel dans "Répartition par niveau
+    d'expérience" :
+    - "1 An(s) - Réceptionniste de nuit", "1 An(s) - en réception" -> "1 An(s)"
+      (le champ contient parfois, en plus de la durée, un texte spécifique au
+      poste accolé après un tiret — même schéma que "Intérim - 6 Mois" pour le
+      type de contrat, juste au-dessus).
+    - "24 Mois" et "2 An(s)" comptaient comme deux catégories séparées alors
+      qu'elles représentent la même durée — les deux se rejoignent sous
+      "2 An(s)" (conversion en mois puis reformulation en années quand c'est
+      un multiple de 12).
+    """
+    if not libelle_brut:
+        return "Non précisé"
+    libelle = libelle_brut.split(" - ")[0].strip()
+
+    correspondance = re.match(r"^(\d+)\s*(ans?|mois)\b", libelle, re.IGNORECASE)
+    if not correspondance:
+        return libelle  # ex: "Débutant accepté", "Non précisé"
+
+    valeur, unite = int(correspondance.group(1)), correspondance.group(2).lower()
+    mois_total = valeur * 12 if unite.startswith("an") else valeur
+    if mois_total >= 12 and mois_total % 12 == 0:
+        return f"{mois_total // 12} An(s)"
+    return f"{mois_total} Mois"
+
+
 @st.cache_data(ttl=1800)
 def _agreger_contrats_et_salaires(toutes_offres):
     """
@@ -2975,7 +3004,7 @@ def _agreger_contrats_et_salaires(toutes_offres):
         type_contrat = type_contrat_brut.split(" - ")[0].strip()
         compteur_contrats[type_contrat] += 1
 
-        experience_libelle = offre.get("experienceLibelle") or "Non précisé"
+        experience_libelle = _normaliser_experience_libelle(offre.get("experienceLibelle"))
         compteur_experience[experience_libelle] += 1
 
         salaire = offre.get("salaire", {})
