@@ -70,24 +70,21 @@ LANGUES_CV = {
 LIBELLES = {
     "FR": {
         "contact": "Contact", "email": "E-mail", "telephone": "Téléphone", "adresse": "Adresse",
-        "langues": "Langues", "competences": "Savoir-faire", "savoir_etre": "Savoir-être",
-        "outils": "Outils informatiques",
+        "langues": "Langues", "competences": "Compétences", "outils": "Outils informatiques",
         "langages": "Langages informatiques", "certifications": "Certifications", "interets": "Centres d'intérêt",
         "experiences": "Expériences professionnelles", "formation": "Formation",
         "presentation": "Présentation", "disponibilite": "Disponibilité",
     },
     "EN-GB": {
         "contact": "Contact", "email": "Email", "telephone": "Phone", "adresse": "Address",
-        "langues": "Languages", "competences": "Skills", "savoir_etre": "Soft Skills",
-        "outils": "IT Tools",
+        "langues": "Languages", "competences": "Skills", "outils": "IT Tools",
         "langages": "Programming Languages", "certifications": "Certifications", "interets": "Interests",
         "experiences": "Professional Experience", "formation": "Education",
         "presentation": "Profile", "disponibilite": "Availability",
     },
     "ES": {
         "contact": "Contacto", "email": "Correo electrónico", "telephone": "Teléfono", "adresse": "Dirección",
-        "langues": "Idiomas", "competences": "Competencias", "savoir_etre": "Habilidades blandas",
-        "outils": "Herramientas informáticas",
+        "langues": "Idiomas", "competences": "Competencias", "outils": "Herramientas informáticas",
         "langages": "Lenguajes informáticos", "certifications": "Certificaciones", "interets": "Intereses",
         "experiences": "Experiencia profesional", "formation": "Formación",
         "presentation": "Presentación", "disponibilite": "Disponibilidad",
@@ -165,7 +162,6 @@ def _estimer_volume_contenu(data):
         volume += 40
     volume += len(data.get("langues", ""))
     volume += len(data.get("competences", ""))
-    volume += len(data.get("savoir_etre", ""))
     volume += len(data.get("outils", ""))
     volume += len(data.get("langages_informatiques", ""))
     volume += len(data.get("certifications", ""))
@@ -639,18 +635,10 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
                 prefixe = _drapeau_pour_langue(ligne) if afficher_drapeaux else ""
                 _puce(cell_bandeau, f"{prefixe}{ligne}", taille=9, echelle=echelle, caractere="▪")
 
-    # --- Savoir-faire (ex-"Compétences" — clé interne "competences" conservée) ---
+    # --- Compétences ---
     if data.get("competences"):
         _titre_section(cell_bandeau, libelles["competences"], bandeau_texte, echelle=echelle)
         for ligne in data["competences"].split("\n"):
-            ligne = _nettoyer_ligne(ligne)
-            if ligne:
-                _puce(cell_bandeau, ligne, taille=9, echelle=echelle, caractere="▪")
-
-    # --- Savoir-être (nouvelle section, sourcée de qualitesProfessionnelles) ---
-    if data.get("savoir_etre"):
-        _titre_section(cell_bandeau, libelles["savoir_etre"], bandeau_texte, echelle=echelle)
-        for ligne in data["savoir_etre"].split("\n"):
             ligne = _nettoyer_ligne(ligne)
             if ligne:
                 _puce(cell_bandeau, ligne, taille=9, echelle=echelle, caractere="▪")
@@ -844,17 +832,16 @@ def _ajouter_suggestion(cle_session, valeur):
 
 
 # Listes de base toujours proposées, même sans recherche de profil préalable
-# (pour que le champ ne soit jamais "vide" par défaut). Répartition affinée
-# entre savoir-faire (pratique/technique) et savoir-être (comportemental) —
-# certains éléments de l'ancienne liste unique "Compétences" (ex: "Communication",
-# "Travail d'équipe", "Leadership") relevaient en réalité du savoir-être.
+# (pour que le champ ne soit jamais "vide" par défaut).
+# Une seule liste "Compétences" désormais (fusion de l'ancienne distinction savoir-faire/
+# savoir-être) — le "savoir-faire" version référentiel ROME s'avérant en pratique plus
+# proche de missions/actions que de compétences isolées, il est traité séparément (voir
+# "Actions/missions les plus demandées" dans l'onglet Expertise, vérifié via le texte des
+# expériences plutôt que comme une liste à cocher ici). Cette liste reste orientée
+# qualités/savoir-être, la plus pertinente comme tags CV autonomes.
 _DEFAUTS_COMPETENCES = [
-    "Gestion de projet", "Résolution de problèmes", "Organisation",
-    "Analyse", "Négociation", "Gestion du temps",
-]
-_DEFAUTS_SAVOIR_ETRE = [
     "Communication", "Travail d'équipe", "Leadership", "Esprit critique",
-    "Autonomie", "Adaptabilité",
+    "Autonomie", "Adaptabilité", "Organisation", "Gestion du temps",
 ]
 _DEFAUTS_OUTILS = ["Excel", "Word", "PowerPoint", "Outlook", "Teams"]
 _DEFAUTS_LANGAGES = ["Python", "SQL", "JavaScript", "Java", "VBA"]  # profils tech/data
@@ -1027,8 +1014,11 @@ def _section_suggestions_competences(fonction_analyse_competences):
                 departement=departement_cv, jours_max=jours_max_cv,
             )
         for cle_options, df in [
-            ("cv_competences_options", df_comp),
-            ("cv_savoir_etre_options", df_savoir_etre),
+            # "cv_competences_options" alimenté par df_savoir_etre (renommé "Compétences" côté
+            # Expertise) — df_comp (renommé "Actions/missions les plus demandées") n'alimente
+            # plus aucun widget CV : vérifié à la place dans le texte des expériences, ces
+            # éléments étant souvent formulés comme des missions plutôt que des tags CV isolés.
+            ("cv_competences_options", df_savoir_etre),
             ("cv_outils_options", df_outils),
             ("cv_langages_options", df_langages),
             ("cv_certifications_options", df_certifs),
@@ -1048,11 +1038,11 @@ def _section_suggestions_competences(fonction_analyse_competences):
         else:
             st.caption(f"✅ Listes enrichies automatiquement à partir de {nb_total} offre(s) trouvée(s).")
         for titre_apercu, df in [
-            ("Savoir-faire les + demandés", df_comp),
+            ("Compétences les + demandées", df_savoir_etre),
+            ("Actions/missions les + demandées", df_comp),
             ("Outils les + demandés", df_outils),
             ("Langages les + demandés", df_langages),
             ("Certifications les + demandées", df_certifs),
-            ("Savoir-être les + demandés", df_savoir_etre),
         ]:
             if not df.empty:
                 apercu = ", ".join(f"{r.libelle} ({r.pourcentage}%)" for _, r in df.head(6).iterrows())
@@ -1238,20 +1228,17 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             if l.get("langue", "").strip() and l.get("niveau")
         )
 
-    with st.expander("💡 Savoir-faire, savoir-être & outils"):
+    with st.expander("💡 Compétences & outils"):
         st.caption("ℹ️ Ces éléments apparaîtront sur votre CV, dans le bandeau latéral.")
         _section_suggestions_competences(fonction_analyse_competences)
 
-        st.markdown("###### 🛠️ Savoir-faire")
-        st.caption("Compétences pratiques/techniques (ex: gestion de projet, techniques de soudage...).")
-        competences = _champ_liste_avec_ajout(
-            "Sélectionne ou ajoute tes savoir-faire", "cv_competences", _DEFAUTS_COMPETENCES
+        st.markdown("###### 🧠 Compétences")
+        st.caption(
+            "Qualités et savoir-être valorisés pour ce poste (ex: esprit d'équipe, rigueur, "
+            "force de proposition...)."
         )
-
-        st.markdown("###### 🤝 Savoir-être")
-        st.caption("Qualités comportementales (ex: esprit d'équipe, force de proposition...).")
-        savoir_etre = _champ_liste_avec_ajout(
-            "Sélectionne ou ajoute tes savoir-être", "cv_savoir_etre", _DEFAUTS_SAVOIR_ETRE
+        competences = _champ_liste_avec_ajout(
+            "Sélectionne ou ajoute tes compétences", "cv_competences", _DEFAUTS_COMPETENCES
         )
 
         st.markdown("###### 🛠️ Outils informatiques")
@@ -1322,7 +1309,6 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "formations": st.session_state.cv_formations,
                 "langues": langues,
                 "competences": competences,
-                "savoir_etre": savoir_etre,
                 "langages_informatiques": langages_informatiques,
                 "outils": outils,
                 "certifications": certifications,
