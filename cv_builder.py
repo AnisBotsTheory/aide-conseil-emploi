@@ -690,6 +690,17 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for interet in interets_list:
             _puce(cell_bandeau, interet, taille=9, echelle=echelle, caractere="▪")
 
+    # --- Mention Europass, discrète, tout en bas du bandeau — légitimité de la structure
+    # du CV (déjà annoncée côté app dans "Créer mon CV", reprise ici sur le document
+    # lui-même). Taille et couleur volontairement en retrait, pas un élément à mettre
+    # en avant visuellement.
+    p_europass = cell_bandeau.add_paragraph()
+    p_europass.paragraph_format.space_before = _pt(14, echelle)
+    run_europass = p_europass.add_run("Structure inspirée du format Europass")
+    run_europass.italic = True
+    run_europass.font.size = _pt(7, echelle)
+    run_europass.font.color.rgb = RGBColor.from_string("999999")
+
     # =======================================================================
     # COLONNE PRINCIPALE
     # =======================================================================
@@ -1057,16 +1068,11 @@ def _section_suggestions_competences(fonction_analyse_competences):
             st.caption(f"⚠️ Échantillon réduit ({nb_total} offre(s)) — indicatif seulement.")
         else:
             st.caption(f"✅ Listes enrichies automatiquement à partir de {nb_total} offre(s) trouvée(s).")
-        for titre_apercu, df in [
-            ("Compétences les + demandées", df_savoir_etre),
-            ("Actions/missions les + demandées", df_comp),
-            ("Outils les + demandés", df_outils),
-            ("Langages les + demandés", df_langages),
-            ("Certifications les + demandées", df_certifs),
-        ]:
-            if not df.empty:
-                apercu = ", ".join(f"{r.libelle} ({r.pourcentage}%)" for _, r in df.head(6).iterrows())
-                st.caption(f"💡 **{titre_apercu}** : {apercu}")
+        st.caption(
+            "Remplis tes compétences ci-dessous — le détail de ce que le marché demande "
+            "(pourcentages, actions/missions, certifications) est disponible dans l'onglet "
+            "**Analyse principale → Expertise**."
+        )
 
 
 # ---------------------------------------------------------------------------
