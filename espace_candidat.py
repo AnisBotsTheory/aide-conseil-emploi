@@ -145,18 +145,19 @@ with tab_profil:
         "dynamisme économique de votre département — de quoi construire votre stratégie de "
         "recherche d'emploi."
     )
-    st.caption(
-        "Elle n'a pas vocation à être une plateforme de recrutement. Pour consulter et "
-        "postuler aux offres correspondant à votre recherche, rendez-vous sur "
-        f"[candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer par votre "
-        "département une fois sur place)."
-    )
-    st.caption(
-        "📎 Les données utilisées proviennent des offres publiées sur France Travail. Le "
-        "total affiché peut toutefois différer de celui obtenu directement sur le site "
-        "(recherche par code ROME et fenêtre glissante ici, contre mots-clés libres et "
-        "offres actives en temps réel sur France Travail)."
-    )
+    with st.expander("ℹ️ À propos de cette analyse"):
+        st.caption(
+            "Elle n'a pas vocation à être une plateforme de recrutement. Pour consulter et "
+            "postuler aux offres correspondant à votre recherche, rendez-vous sur "
+            f"[candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer par votre "
+            "département une fois sur place)."
+        )
+        st.caption(
+            "📎 Les données utilisées proviennent des offres publiées sur France Travail. Le "
+            "total affiché peut toutefois différer de celui obtenu directement sur le site "
+            "(recherche par code ROME et fenêtre glissante ici, contre mots-clés libres et "
+            "offres actives en temps réel sur France Travail)."
+        )
 
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
