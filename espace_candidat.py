@@ -202,8 +202,8 @@ with tab_profil:
             st.session_state["jours_max_periode_offres"] = jours_max_periode_offres
             st.session_state["libelle_periode_offres"] = libelle_periode_offres
 
-            sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes, sous_tab_action = st.tabs(
-                ["🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique", "📝 Plan d'action"]
+            sous_tab_action, sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
+                ["📝 Plan d'action", "🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique"]
             )
 
             with sous_tab_recruteurs:
@@ -691,6 +691,14 @@ with tab_profil:
                 if not savoir_etre_cv:
                     elements_manquants.append("savoir-être")
 
+                st.markdown(
+                    "**Pourquoi c'est important :** le savoir-faire et le savoir-être sont "
+                    "les critères que les recruteurs recherchent en priorité dans une "
+                    "candidature — les renseigner (et les aligner avec la demande réelle du "
+                    "marché) augmente tes chances d'être identifié comme pertinent pour ce "
+                    "poste."
+                )
+
                 if elements_manquants:
                     nb_actions_affichees += 1
                     suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
@@ -714,20 +722,60 @@ with tab_profil:
                     )
                 else:
                     nb_actions_affichees += 1
-                    st.success("**Savoir-faire et savoir-être renseignés** dans ton CV — rien à compléter ici.")
+                    # CV déjà complété sur ces deux points : au lieu de s'arrêter là, on
+                    # compare avec ce que l'onglet Expertise identifie comme le plus demandé
+                    # pour ce métier, pour repérer d'éventuels savoir-faire/savoir-être
+                    # pertinents que le candidat n'a pas encore pensé à mentionner.
+                    suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
+                    ecarts_marche = []
+                    if suggestions_apercu:
+                        df_comp_apercu, _, _, _, df_savoir_etre_apercu, _ = suggestions_apercu
+                        savoir_faire_cv_normalise = {s.strip().lower() for s in savoir_faire_cv}
+                        savoir_etre_cv_normalise = {s.strip().lower() for s in savoir_etre_cv}
+                        if not df_comp_apercu.empty:
+                            manquants_sf = [
+                                lib for lib in df_comp_apercu["libelle"].head(8)
+                                if lib.strip().lower() not in savoir_faire_cv_normalise
+                            ]
+                            if manquants_sf:
+                                ecarts_marche.append("savoir-faire : " + ", ".join(manquants_sf[:3]))
+                        if not df_savoir_etre_apercu.empty:
+                            manquants_se = [
+                                lib for lib in df_savoir_etre_apercu["libelle"].head(8)
+                                if lib.strip().lower() not in savoir_etre_cv_normalise
+                            ]
+                            if manquants_se:
+                                ecarts_marche.append("savoir-être : " + ", ".join(manquants_se[:3]))
+
+                    if ecarts_marche:
+                        st.info(
+                            "**Savoir-faire et savoir-être déjà renseignés** dans ton CV. En les "
+                            "comparant à ce que l'onglet **🧠 Expertise** identifie comme le plus "
+                            "demandé pour ce métier, tu pourrais aussi envisager — "
+                            + " ; ".join(ecarts_marche) + ". 👉 À ajouter dans l'onglet "
+                            "**🧾 Créer mon CV** si ça correspond à ton profil."
+                        )
+                    else:
+                        st.success(
+                            "**Savoir-faire et savoir-être renseignés** dans ton CV, et déjà "
+                            "alignés avec ce que le marché demande le plus pour ce métier — rien "
+                            "à compléter ici."
+                        )
 
                 # --- Action 2 : des recruteurs actifs identifiés pour ce poste ? ---
                 # Réutilise directement df_entreprises déjà récupéré dans le sous-onglet
                 # "Top Recruteurs" ci-dessus (même appel, mêmes paramètres) plutôt que de
-                # relancer un second appel identique.
+                # relancer un second appel identique. Noms d'entreprises volontairement PAS
+                # cités ici (certains sont anonymisés, une liste de 2-3 noms mélangeant une
+                # vraie entreprise et "Nom de l'entreprise anonymisé" n'avait pas de sens) —
+                # le détail complet reste dans le sous-onglet dédié.
                 if not df_entreprises.empty:
                     nb_actions_affichees += 1
-                    noms_top3 = ", ".join(df_entreprises["entreprise"].head(3))
                     st.info(
                         f"**{len(df_entreprises)} entreprise(s) recrutent activement** sur ce "
-                        f"métier et ce département — dont {noms_top3}. 👉 Consulte le sous-onglet "
-                        "**🏢 Top Recruteurs** pour candidater directement ou t'en inspirer pour "
-                        "une candidature spontanée."
+                        "métier et ce département. 👉 Consulte le sous-onglet **🏢 Top "
+                        "Recruteurs** pour candidater directement ou t'en inspirer pour une "
+                        "candidature spontanée."
                     )
 
                 # --- Action 3 : des événements pertinents à venir ? ---
