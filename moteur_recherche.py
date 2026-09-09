@@ -258,6 +258,72 @@ def calculer_correspondance_recruteur(
     return score_global, detail
 
 
+_DICTIONNAIRE_QUALITES_PROFESSIONNELLES = {
+    "faire preuve d'autonomie": "Autonomie",
+    "faire preuve de rigueur": "Rigueur",
+    "faire preuve de réactivité": "Réactivité",
+    "faire preuve de persévérance": "Persévérance",
+    "faire preuve de créativité": "Créativité",
+    "faire preuve de curiosité": "Curiosité",
+    "faire preuve de diplomatie": "Diplomatie",
+    "faire preuve d'adaptabilité et de flexibilité": "Adaptabilité",
+    "faire preuve de sens des responsabilités": "Sens des responsabilités",
+    "faire preuve de leadership": "Leadership",
+    "faire preuve d'esprit d'équipe": "Esprit d'équipe",
+    "avoir l'esprit d'équipe": "Esprit d'équipe",
+    "avoir le sens du service": "Sens du service",
+    "avoir le sens de la communication": "Sens de la communication",
+    "organiser son travail selon les priorités et les objectifs": "Organisation",
+    "travailler en équipe": "Travail d'équipe",
+    "être à l'écoute, faire preuve d'empathie": "Écoute et empathie",
+}
+
+
+def _reformuler_qualite_professionnelle(phrase_brute):
+    """
+    Les "qualités professionnelles" ROME (champ qualitesProfessionnelles de
+    l'API Offres d'emploi) sont un référentiel officiel FIXE, mais rédigé en
+    phrases comportementales complètes ("Faire preuve d'autonomie", "Avoir
+    l'esprit d'équipe") plutôt qu'en tags courts style CV ("Autonomie",
+    "Esprit d'équipe") — inexploitable tel quel comme suggestion de CV.
+
+    Priorité 1 : dictionnaire de correspondance construit au fil des phrases
+    réellement rencontrées (couverture partielle par nature — le référentiel
+    étant fixe mais pas exhaustivement recensé ici).
+
+    Priorité 2 (repli) : le référentiel suit presque toujours l'un de
+    quelques gabarits de phrase récurrents ("Faire preuve de/d'...", "Avoir
+    le/la/l'/de/du/des...", "Être...", "Savoir...") — on retire le préfixe
+    verbal (et un article résiduel type "un/une/le/la/de/du/des/l'") pour ne
+    garder que la partie nominale. Repli imparfait par construction : une
+    phrase qui ne suit aucun de ces gabarits reste affichée telle quelle
+    plutôt que d'être mal découpée.
+    """
+    phrase = (phrase_brute or "").strip().replace("’", "'")
+    if not phrase:
+        return phrase
+
+    correspondance = _DICTIONNAIRE_QUALITES_PROFESSIONNELLES.get(phrase.lower())
+    if correspondance:
+        return correspondance
+
+    gabarits = [
+        r"^faire preuve d[e']\s*(.+)$",
+        r"^avoir\s+(?:le\s|la\s|l'|de\s|du\s|des\s)?(.+)$",
+        r"^être\s+(.+)$",
+        r"^savoir\s+(.+)$",
+    ]
+    for gabarit in gabarits:
+        correspondance_gabarit = re.match(gabarit, phrase, re.IGNORECASE)
+        if correspondance_gabarit:
+            reste = correspondance_gabarit.group(1).strip()
+            reste = re.sub(r"^(un|une|le|la|de|du|des)\s+", "", reste, flags=re.IGNORECASE)
+            reste = re.sub(r"^l'", "", reste, flags=re.IGNORECASE).strip()
+            if reste:
+                return reste[0].upper() + reste[1:]
+    return phrase
+
+
 def _agreger_competences(toutes_offres):
     """
     Agrège une liste d'offres déjà récupérées en 5 listes de suggestions
@@ -324,6 +390,7 @@ def _agreger_competences(toutes_offres):
         for qualite in offre.get("qualitesProfessionnelles") or []:
             libelle_qualite = (qualite.get("libelle") or "").strip()
             if libelle_qualite:
+                libelle_qualite = _reformuler_qualite_professionnelle(libelle_qualite)
                 compteurs["savoir_etre"][libelle_qualite] += 1
 
     def _construire_df(compteur):
