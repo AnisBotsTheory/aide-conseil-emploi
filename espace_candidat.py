@@ -1,9 +1,13 @@
 """
 espace_candidat.py
 --------------------
-Page "Espace Candidat" — 5 onglets (Créer mon CV, Analyse principale,
-Compléments d'analyse, Événements, Plan d'action), accès gratuit et public.
-Toute la logique de calcul vient de moteur_recherche.py (aucune duplication).
+Page "Espace Candidat" — 4 onglets (Créer mon CV, Analyse principale,
+Compléments d'analyse, Événements), accès gratuit et public. "Plan d'action"
+est un SOUS-onglet de "Analyse principale" (pas un onglet racine séparé) :
+il relit les mêmes variables déjà calculées dans cet onglet (poste, code(s)
+ROME, département, échantillon d'offres) plutôt que de les redéterminer,
+pour rester rattaché au contexte de recherche déjà affiché. Toute la logique
+de calcul vient de moteur_recherche.py (aucune duplication).
 
 L'onglet "Offres d'emploi" a été retiré : lister des offres n'a pas d'avantage
 face aux plateformes dédiées (France Travail, LinkedIn, Indeed...) — pas
@@ -35,10 +39,10 @@ st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
 st.divider()
 
-tab_cv, tab_profil, tab_avance, tab_evenements, tab_action = st.tabs(
+tab_cv, tab_profil, tab_avance, tab_evenements = st.tabs(
     [
         "🧾 Créer mon CV", "🎯 Analyse principale", "📊 Compléments d'analyse",
-        "📅 Événements", "📝 Plan d'action",
+        "📅 Événements",
     ]
 )
 
@@ -198,8 +202,8 @@ with tab_profil:
             st.session_state["jours_max_periode_offres"] = jours_max_periode_offres
             st.session_state["libelle_periode_offres"] = libelle_periode_offres
 
-            sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
-                ["🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique"]
+            sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes, sous_tab_action = st.tabs(
+                ["🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique", "📝 Plan d'action"]
             )
 
             with sous_tab_recruteurs:
@@ -653,6 +657,106 @@ with tab_profil:
                                 resultats_diag_dyn = diagnostiquer_dynamisme_territoire(departement_actif)
                             st.json(resultats_diag_dyn)
 
+            # -----------------------------------------------------------------
+            # Sous-onglet "Plan d'action" — déplacé ici depuis un onglet racine
+            # séparé : il n'exécute AUCUN nouveau calcul, relit les mêmes
+            # variables déjà en place dans "Analyse principale" (codes_resolus_cv,
+            # departement_actif, titre_libre_cv, jours_max_periode_offres) plutôt
+            # que de les re-déterminer indépendamment, et transforme les résultats
+            # déjà obtenus en 2-3 actions concrètes, chacune renvoyant vers le
+            # sous-onglet où creuser le détail. Volontairement fondé sur des
+            # règles transparentes et lisibles (pas un score ou une
+            # recommandation "boîte noire") — l'app fournit des éléments de
+            # décision à partir de données publiques réelles, elle ne prétend
+            # pas deviner ce qui est le mieux pour l'utilisateur.
+            # -----------------------------------------------------------------
+            with sous_tab_action:
+                st.caption(
+                    "Ce que ces résultats suggèrent concrètement de faire, à partir des mêmes "
+                    "données que les sous-onglets précédents — pas une recommandation « boîte "
+                    "noire », juste une lecture directe de ta recherche pour savoir par où "
+                    "commencer."
+                )
+
+                nb_actions_affichees = 0
+
+                # --- Action 1 : savoir-faire / savoir-être renseignés dans le CV ? ---
+                # Lit directement la sélection déjà faite dans "Créer mon CV" (widgets
+                # _champ_liste_avec_ajout, clés "<base>_select") — aucune donnée recalculée.
+                savoir_faire_cv = st.session_state.get("cv_competences_select", [])
+                savoir_etre_cv = st.session_state.get("cv_savoir_etre_select", [])
+                elements_manquants = []
+                if not savoir_faire_cv:
+                    elements_manquants.append("savoir-faire")
+                if not savoir_etre_cv:
+                    elements_manquants.append("savoir-être")
+
+                if elements_manquants:
+                    nb_actions_affichees += 1
+                    suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
+                    texte_suggestion = ""
+                    if suggestions_apercu:
+                        df_comp_apercu, _, _, _, df_savoir_etre_apercu, _ = suggestions_apercu
+                        exemples = []
+                        if "savoir-faire" in elements_manquants and not df_comp_apercu.empty:
+                            exemples.append(
+                                "savoir-faire les plus cités : " + ", ".join(df_comp_apercu["libelle"].head(3))
+                            )
+                        if "savoir-être" in elements_manquants and not df_savoir_etre_apercu.empty:
+                            exemples.append(
+                                "savoir-être les plus cités : " + ", ".join(df_savoir_etre_apercu["libelle"].head(3))
+                            )
+                        if exemples:
+                            texte_suggestion = " Pour ce métier, les offres citent par exemple — " + " ; ".join(exemples) + "."
+                    st.warning(
+                        f"**{' et '.join(elements_manquants).capitalize()} non renseigné(s) dans ton CV.**"
+                        f"{texte_suggestion} 👉 Complète-les dans l'onglet **🧾 Créer mon CV**."
+                    )
+                else:
+                    nb_actions_affichees += 1
+                    st.success("**Savoir-faire et savoir-être renseignés** dans ton CV — rien à compléter ici.")
+
+                # --- Action 2 : des recruteurs actifs identifiés pour ce poste ? ---
+                # Réutilise directement df_entreprises déjà récupéré dans le sous-onglet
+                # "Top Recruteurs" ci-dessus (même appel, mêmes paramètres) plutôt que de
+                # relancer un second appel identique.
+                if not df_entreprises.empty:
+                    nb_actions_affichees += 1
+                    noms_top3 = ", ".join(df_entreprises["entreprise"].head(3))
+                    st.info(
+                        f"**{len(df_entreprises)} entreprise(s) recrutent activement** sur ce "
+                        f"métier et ce département — dont {noms_top3}. 👉 Consulte le sous-onglet "
+                        "**🏢 Top Recruteurs** pour candidater directement ou t'en inspirer pour "
+                        "une candidature spontanée."
+                    )
+
+                # --- Action 3 : des événements pertinents à venir ? ---
+                with st.spinner("Vérification des événements à venir..."):
+                    evenements_action, _, _ = rechercher_evenements_emploi(
+                        codes_resolus_cv, departement_actif, jours_max=90
+                    )
+                if evenements_action:
+                    nb_actions_affichees += 1
+                    prochain = min(evenements_action, key=lambda e: e.get("dateEvenement") or "9999")
+                    date_prochain = (prochain.get("dateEvenement") or "")[:10]
+                    titre_prochain = prochain.get("titre") or "un événement"
+                    st.info(
+                        f"**{len(evenements_action)} événement(s)** (forums, salons, job dating) "
+                        f"prévu(s) dans les 90 prochains jours pour ce métier, dont « {titre_prochain} »"
+                        f"{f' le {date_prochain}' if date_prochain else ''}. 👉 Détail dans l'onglet "
+                        "**📅 Événements**."
+                    )
+                # Pas d'événement trouvé : on ne l'affiche pas comme un manque — l'absence
+                # d'événement sur 90 jours est fréquente et ne reflète pas un problème côté
+                # candidat, contrairement aux deux actions précédentes.
+
+                if nb_actions_affichees == 0:
+                    st.info(
+                        "Rien de particulier à signaler pour l'instant sur les critères "
+                        "disponibles — explore les autres sous-onglets pour approfondir ton "
+                        "analyse de marché."
+                    )
+
 # ---------------------------------------------------------------------------
 # Onglet "Compléments d'analyse"
 # ---------------------------------------------------------------------------
@@ -1049,119 +1153,3 @@ with tab_evenements:
                 with st.spinner("Test de l'appel Événements en cours..."):
                     resultats_diag_evt = diagnostiquer_evenements(codes_resolus_evt, departement_evt)
                 st.json(resultats_diag_evt)
-
-# ---------------------------------------------------------------------------
-# Onglet "Plan d'action" — ne fait AUCUN nouveau calcul : relit les mêmes
-# fonctions déjà utilisées par les autres onglets (pour l'essentiel mises en
-# cache par moteur_recherche.py, donc pas d'appel API supplémentaire réel) et
-# transforme leur résultat en 2-4 actions concrètes, chacune renvoyant vers
-# l'onglet où creuser le détail. Volontairement fondé sur des règles
-# transparentes et lisibles (pas un score ou une recommandation "boîte
-# noire") — l'app fournit des éléments de décision à partir de données
-# publiques réelles, elle ne prétend pas deviner ce qui est le mieux pour
-# l'utilisateur.
-# ---------------------------------------------------------------------------
-with tab_action:
-    st.caption(
-        "Ce que ces résultats suggèrent concrètement de faire, à partir des mêmes données que "
-        "les autres onglets — pas une recommandation « boîte noire », juste une lecture directe "
-        "de ta recherche pour savoir par où commencer."
-    )
-
-    postes_cv_action = st.session_state.get("cv_postes_recherche", [])
-    codes_par_poste_action = st.session_state.get("cv_codes_par_poste", {})
-    codes_resolus_action = [c for c in codes_par_poste_action.values() if c]
-    departement_action = st.session_state.get("cv_departement")
-
-    if not postes_cv_action:
-        st.info(
-            "👉 Renseigne un poste recherché dans l'onglet **🧾 Créer mon CV**, puis sélectionne "
-            "au moins une suggestion — le plan d'action se construit ensuite automatiquement."
-        )
-    elif not departement_action:
-        st.info(
-            "👉 Ton département de résidence n'est plus renseigné — retourne dans l'onglet "
-            "**🧾 Créer mon CV** pour le sélectionner."
-        )
-    else:
-        titre_libre_action = st.session_state.get("cv_titre", "").strip()
-        jours_max_action = st.session_state.get("jours_max_periode_offres", 90)
-        nb_actions_affichees = 0
-
-        # --- Action 1 : savoir-faire / savoir-être renseignés dans le CV ? ---
-        # Lit directement la sélection déjà faite dans "Créer mon CV" (widgets
-        # _champ_liste_avec_ajout, clés "<base>_select") — aucune donnée recalculée.
-        savoir_faire_cv = st.session_state.get("cv_competences_select", [])
-        savoir_etre_cv = st.session_state.get("cv_savoir_etre_select", [])
-        elements_manquants = []
-        if not savoir_faire_cv:
-            elements_manquants.append("savoir-faire")
-        if not savoir_etre_cv:
-            elements_manquants.append("savoir-être")
-
-        if elements_manquants:
-            nb_actions_affichees += 1
-            suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
-            texte_suggestion = ""
-            if suggestions_apercu:
-                df_comp_apercu, _, _, _, df_savoir_etre_apercu, _ = suggestions_apercu
-                exemples = []
-                if "savoir-faire" in elements_manquants and not df_comp_apercu.empty:
-                    exemples.append(
-                        "savoir-faire les plus cités : " + ", ".join(df_comp_apercu["libelle"].head(3))
-                    )
-                if "savoir-être" in elements_manquants and not df_savoir_etre_apercu.empty:
-                    exemples.append(
-                        "savoir-être les plus cités : " + ", ".join(df_savoir_etre_apercu["libelle"].head(3))
-                    )
-                if exemples:
-                    texte_suggestion = " Pour ce métier, les offres citent par exemple — " + " ; ".join(exemples) + "."
-            st.warning(
-                f"**{' et '.join(elements_manquants).capitalize()} non renseigné(s) dans ton CV.**"
-                f"{texte_suggestion} 👉 Complète-les dans l'onglet **🧾 Créer mon CV**."
-            )
-        else:
-            nb_actions_affichees += 1
-            st.success("**Savoir-faire et savoir-être renseignés** dans ton CV — rien à compléter ici.")
-
-        # --- Action 2 : des recruteurs actifs identifiés pour ce poste ? ---
-        with st.spinner("Vérification des recruteurs actifs..."):
-            _, _, _, _, df_entreprises_action, _ = offres_par_ville_elargi(
-                codes_resolus_action, titre_libre_action, departement_action,
-                jours_max=jours_max_action,
-            )
-        if not df_entreprises_action.empty:
-            nb_actions_affichees += 1
-            noms_top3 = ", ".join(df_entreprises_action["entreprise"].head(3))
-            st.info(
-                f"**{len(df_entreprises_action)} entreprise(s) recrutent activement** sur ce "
-                f"métier et ce département — dont {noms_top3}. 👉 Consulte l'onglet "
-                "**🎯 Analyse principale → Top Recruteurs** pour candidater directement ou t'en "
-                "inspirer pour une candidature spontanée."
-            )
-
-        # --- Action 3 : des événements pertinents à venir ? ---
-        with st.spinner("Vérification des événements à venir..."):
-            evenements_action, _, _ = rechercher_evenements_emploi(
-                codes_resolus_action, departement_action, jours_max=90
-            )
-        if evenements_action:
-            nb_actions_affichees += 1
-            prochain = min(evenements_action, key=lambda e: e.get("dateEvenement") or "9999")
-            date_prochain = (prochain.get("dateEvenement") or "")[:10]
-            titre_prochain = prochain.get("titre") or "un événement"
-            st.info(
-                f"**{len(evenements_action)} événement(s)** (forums, salons, job dating) prévu(s) "
-                f"dans les 90 prochains jours pour ce métier, dont « {titre_prochain} »"
-                f"{f' le {date_prochain}' if date_prochain else ''}. 👉 Détail dans l'onglet "
-                "**📅 Événements**."
-            )
-        # Pas d'événement trouvé : on ne l'affiche pas comme un manque — l'absence
-        # d'événement sur 90 jours est fréquente et ne reflète pas un problème côté
-        # candidat, contrairement aux deux actions précédentes.
-
-        if nb_actions_affichees == 0:
-            st.info(
-                "Rien de particulier à signaler pour l'instant sur les critères disponibles — "
-                "explore les autres onglets pour approfondir ton analyse de marché."
-            )
