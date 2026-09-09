@@ -288,6 +288,14 @@ with tab_profil:
                         codes_resolus_cv, titre_libre_cv, departement_actif,
                         jours_max=jours_max_periode_offres,
                     )
+                # Mémorisé pour que l'onglet "Expertise" affiche EXACTEMENT ce même total.
+                # "Créer mon CV" s'exécute AVANT cet onglet dans le script (ordre des tabs),
+                # donc son propre calcul de compétences ne peut connaître cette valeur qu'AU
+                # PLUS TÔT au tour précédent — source du décalage observé. En centralisant le
+                # total ici et en le relisant côté "Créer mon CV", les deux onglets convergent
+                # vers le même nombre dès que cet onglet a tourné une fois pour cette recherche,
+                # au lieu de dépendre de deux calculs indépendants qui pourraient diverger.
+                st.session_state["total_offres_recherche_actuelle"] = total_echantillon_recruteurs
 
                 st.markdown("##### 🕒 Recruteurs du moment")
                 st.caption(
@@ -746,9 +754,15 @@ with tab_profil:
                     "noire », juste une lecture directe de ta recherche pour savoir par où "
                     "commencer."
                 )
+                st.markdown(
+                    "5 points à passer en revue, dans cet ordre : ton CV (compétences, puis "
+                    "missions), les entreprises à contacter, un repère de salaire, et les "
+                    "événements à venir."
+                )
 
                 nb_actions_affichees = 0
 
+                st.markdown("##### 1️⃣ Tes compétences sont-elles à jour ?")
                 # --- Action 1 : compétences (soft skills) renseignées dans le CV ? ---
                 # Lit directement la sélection déjà faite dans "Créer mon CV" (widget
                 # _champ_liste_avec_ajout, clé "cv_competences_select") — aucune donnée recalculée.
@@ -825,6 +839,7 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
+                st.markdown("##### 2️⃣ Tes expériences couvrent-elles les missions attendues ?")
                 # --- Action 2 : les actions/missions les plus demandées apparaissent-elles
                 # dans le texte des expériences du CV ? ---
                 # Contrairement aux compétences (des tags courts, adaptés à une liste à cocher),
@@ -892,6 +907,7 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
+                st.markdown("##### 3️⃣ Des entreprises à contacter ?")
                 # --- Action 3 : des recruteurs actifs identifiés pour ce poste ? ---
                 # Réutilise directement df_entreprises déjà récupéré dans le sous-onglet
                 # "Top Recruteurs" ci-dessus (même appel, mêmes paramètres) plutôt que de
@@ -910,6 +926,7 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
+                st.markdown("##### 4️⃣ Quel salaire viser ?")
                 # --- Action 4 : fourchette de salaire observée (repère de négociation) ---
                 # Relit "avance_resultats", déjà calculé par l'onglet "Compléments d'analyse"
                 # (celui-ci s'exécute avant dans le script, donc la valeur lue ici vient du
@@ -948,6 +965,7 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
+                st.markdown("##### 5️⃣ Des événements à ne pas manquer ?")
                 # --- Action 5 : des événements pertinents à venir ? ---
                 with st.spinner("Vérification des événements à venir..."):
                     evenements_action, _, _ = rechercher_evenements_emploi(
