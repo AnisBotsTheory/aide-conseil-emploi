@@ -136,22 +136,25 @@ with tab_profil:
         f"https://candidat.francetravail.fr/offres/recherche?motsCles={mots_cles_lien_ft}"
         if mots_cles_lien_ft else "https://candidat.francetravail.fr/offres/recherche"
     )
-    st.caption(
-        "Analyse du marché pour le(s) poste(s) sélectionné(s) dans votre CV, basée sur des "
-        "offres réelles publiées sur France Travail : quelles entreprises recrutent près de "
-        "chez vous, quelles compétences et quel savoir-être sont demandés, et le dynamisme "
-        "économique de votre département."
+    st.markdown(
+        "Cette application est un outil de **conseil**, qui s'appuie sur des techniques de "
+        "**Business Intelligence** pour analyser les besoins liés au poste et au département "
+        "sélectionnés, et vous apporter des éléments de décision sur : les entreprises qui "
+        "recrutent près de chez vous, les compétences et le savoir-être demandés, et le "
+        "dynamisme économique de votre département — de quoi construire votre stratégie de "
+        "recherche d'emploi."
     )
-    st.info(
-        "💡 Cette application n'a pas vocation à être une plateforme de recrutement — c'est un "
-        "outil de **conseil**, pour vous aider à construire votre stratégie de recherche "
-        "d'emploi. Pour consulter et postuler aux offres correspondant à votre recherche, "
-        f"rendez-vous sur [candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer "
-        "par votre département une fois sur place)."
+    st.markdown(
+        "Elle n'a pas vocation à être une plateforme de recrutement. Pour consulter et "
+        "postuler aux offres correspondant à votre recherche, rendez-vous sur "
+        f"[candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer par votre "
+        "département une fois sur place)."
     )
     st.caption(
-        "ℹ️ Le total peut différer de celui du site France Travail (recherche par code ROME "
-        "et période glissante, contre mots-clés libres et offres actives en temps réel)."
+        "📎 Les données utilisées proviennent des offres publiées sur France Travail. Le "
+        "total affiché peut toutefois différer de celui obtenu directement sur le site "
+        "(recherche par code ROME et fenêtre glissante ici, contre mots-clés libres et "
+        "offres actives en temps réel sur France Travail)."
     )
 
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
@@ -235,7 +238,7 @@ with tab_profil:
             st.session_state["libelle_periode_offres"] = libelle_periode_offres
 
             sous_tab_action, sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
-                ["🧭 Par où commencer", "🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique"]
+                ["📌 Tes points d'attention", "🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique"]
             )
 
             # Effet lumineux temporaire sur l'onglet "Par où commencer", pour inciter au clic.
@@ -762,13 +765,14 @@ with tab_profil:
 
                 nb_actions_affichees = 0
 
-                st.markdown("##### 1️⃣ Tes compétences sont-elles à jour ?")
+                st.markdown("##### 🧠 Compétences")
+                st.caption("Tes compétences sont-elles à jour ?")
                 # --- Action 1 : compétences (soft skills) renseignées dans le CV ? ---
                 # Lit directement la sélection déjà faite dans "Créer mon CV" (widget
                 # _champ_liste_avec_ajout, clé "cv_competences_select") — aucune donnée recalculée.
                 competences_cv = st.session_state.get("cv_competences_select", [])
                 nb_comp = len(competences_cv)
-                NB_CIBLE_COMPETENCES = 5  # objectif minimal, pas seulement "au moins un élément"
+                NB_CIBLE_COMPETENCES = 6  # objectif minimal, pas seulement "au moins un élément"
 
                 st.markdown(
                     "**Pourquoi c'est important :** les compétences sont un critère que les "
@@ -839,7 +843,8 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
-                st.markdown("##### 2️⃣ Tes expériences couvrent-elles les missions attendues ?")
+                st.markdown("##### 🛠️ Actions/missions")
+                st.caption("Tes expériences couvrent-elles les missions attendues ?")
                 # --- Action 2 : les actions/missions les plus demandées apparaissent-elles
                 # dans le texte des expériences du CV ? ---
                 # Contrairement aux compétences (des tags courts, adaptés à une liste à cocher),
@@ -907,7 +912,8 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
-                st.markdown("##### 3️⃣ Des entreprises à contacter ?")
+                st.markdown("##### 🏢 Recruteurs")
+                st.caption("Des entreprises à contacter ?")
                 # --- Action 3 : des recruteurs actifs identifiés pour ce poste ? ---
                 # Réutilise directement df_entreprises déjà récupéré dans le sous-onglet
                 # "Top Recruteurs" ci-dessus (même appel, mêmes paramètres) plutôt que de
@@ -926,7 +932,8 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
-                st.markdown("##### 4️⃣ Quel salaire viser ?")
+                st.markdown("##### 💰 Salaire")
+                st.caption("Quel salaire viser ?")
                 # --- Action 4 : fourchette de salaire observée (repère de négociation) ---
                 # Relit "avance_resultats", déjà calculé par l'onglet "Compléments d'analyse"
                 # (celui-ci s'exécute avant dans le script, donc la valeur lue ici vient du
@@ -965,7 +972,8 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
-                st.markdown("##### 5️⃣ Des événements à ne pas manquer ?")
+                st.markdown("##### 📅 Événements")
+                st.caption("Des événements à ne pas manquer ?")
                 # --- Action 5 : des événements pertinents à venir ? ---
                 with st.spinner("Vérification des événements à venir..."):
                     evenements_action, _, _ = rechercher_evenements_emploi(
