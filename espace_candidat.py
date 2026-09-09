@@ -29,6 +29,7 @@ from datetime import datetime  # noqa: F401 — utilisé dans l'onglet Compléme
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 
 from cv_builder import afficher_generateur_cv
 from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées
@@ -218,7 +219,46 @@ with tab_profil:
             st.session_state["libelle_periode_offres"] = libelle_periode_offres
 
             sous_tab_action, sous_tab_recruteurs, sous_tab_certifs, sous_tab_villes = st.tabs(
-                ["📝 Plan d'action", "🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique"]
+                ["🧭 Par où commencer", "🏢 Top Recruteurs", "🧠 Expertise", "📍 Dynamisme géographique"]
+            )
+
+            # Effet lumineux temporaire sur l'onglet "Par où commencer", pour inciter au clic.
+            # Note technique : Streamlit n'offre pas d'API officielle pour cibler un onglet
+            # précis — ce script cherche le bouton par son TEXTE visible (via l'accès au
+            # document parent, autorisé car même origine) et lui applique une classe CSS
+            # animée pendant quelques secondes avant de la retirer. Technique non garantie
+            # à 100% si la structure interne de Streamlit change entre versions — à vérifier
+            # visuellement une fois déployé.
+            components.html(
+                """
+                <script>
+                (function() {
+                    const style = window.parent.document.createElement('style');
+                    style.textContent = `
+                        @keyframes glow_par_ou_commencer {
+                            0%, 100% { box-shadow: 0 0 0px rgba(255,196,0,0); }
+                            50% { box-shadow: 0 0 14px 5px rgba(255,196,0,0.9); }
+                        }
+                        .glow_par_ou_commencer_actif {
+                            animation: glow_par_ou_commencer 0.9s ease-in-out 3;
+                            border-radius: 6px;
+                        }
+                    `;
+                    window.parent.document.head.appendChild(style);
+
+                    const boutons = window.parent.document.querySelectorAll('button[role="tab"]');
+                    boutons.forEach(function(bouton) {
+                        if (bouton.textContent.includes("Par où commencer")) {
+                            bouton.classList.add('glow_par_ou_commencer_actif');
+                            setTimeout(function() {
+                                bouton.classList.remove('glow_par_ou_commencer_actif');
+                            }, 3000);
+                        }
+                    });
+                })();
+                </script>
+                """,
+                height=0,
             )
 
             with sous_tab_recruteurs:
@@ -686,7 +726,6 @@ with tab_profil:
             # pas deviner ce qui est le mieux pour l'utilisateur.
             # -----------------------------------------------------------------
             with sous_tab_action:
-                st.markdown("##### 🧭 Par où commencer ?")
                 st.caption(
                     "Ce que ces résultats suggèrent concrètement de faire, à partir des mêmes "
                     "données que les sous-onglets précédents — pas une recommandation « boîte "
@@ -819,6 +858,8 @@ with tab_profil:
                             "à compléter ici."
                         )
 
+                st.write("")
+                st.write("")
                 # --- Action 2 : des recruteurs actifs identifiés pour ce poste ? ---
                 # Réutilise directement df_entreprises déjà récupéré dans le sous-onglet
                 # "Top Recruteurs" ci-dessus (même appel, mêmes paramètres) plutôt que de
@@ -835,6 +876,8 @@ with tab_profil:
                         "candidature spontanée."
                     )
 
+                st.write("")
+                st.write("")
                 # --- Action 3 : des événements pertinents à venir ? ---
                 with st.spinner("Vérification des événements à venir..."):
                     evenements_action, _, _ = rechercher_evenements_emploi(
