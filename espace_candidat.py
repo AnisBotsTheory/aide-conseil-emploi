@@ -30,9 +30,10 @@ from datetime import datetime  # noqa: F401 — utilisé dans l'onglet Compléme
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import plotly.express as px
 import plotly.graph_objects as go
+import numpy as np
 import streamlit.components.v1 as components
 
-from cv_builder import afficher_generateur_cv
+from cv_builder import afficher_generateur_cv, calculer_annees_experience_cv
 from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées
 
 st.title("🎯 Aide Conseil Emploi")
@@ -895,11 +896,15 @@ with tab_profil:
                 else:
                     st.caption(
                         f"💡 **{nb_recruteurs_actifs} entreprise(s)** recrutent actuellement sur "
-                        "ce métier dans ton département — à cibler en priorité pour tes "
-                        f"candidatures. **{nb_potentiel} entreprise(s)** supplémentaire(s) ont un "
-                        "fort potentiel de recrutement (même sans offre publiée) — une piste "
-                        "pour des candidatures spontanées. 👉 Détail dans le sous-onglet "
+                        "ce métier dans ton département — à cibler pour une **candidature "
+                        "ciblée** (réponse à une offre publiée). 👉 Détail dans le sous-onglet "
                         "**🏢 Top Recruteurs**."
+                    )
+                    st.caption(
+                        f"💡 **{nb_potentiel} entreprise(s)** supplémentaire(s) ont un fort "
+                        "potentiel de recrutement (même sans offre publiée) — une piste pour "
+                        "une **candidature spontanée**. 👉 Détail dans le sous-onglet **🏢 Top "
+                        "Recruteurs**."
                     )
 
                 st.write("")
@@ -1278,6 +1283,108 @@ with tab_avance:
                     st.dataframe(
                         df_experience_tri.rename(columns={"experience": "Expérience", "nombre_offres": "Nombre d'offres"}),
                         use_container_width=True, hide_index=True,
+                    )
+
+            st.divider()
+            st.markdown("#### 📈 Salaire selon l'expérience demandée")
+            st.caption(
+                "Chaque point est une offre (CDI, salaire indiqué) : son ancienneté requise en "
+                "abscisse, son salaire moyen indiqué en ordonnée. La droite est une tendance "
+                "estimée à partir de ces points, pas un barème officiel."
+            )
+            # Reconstruit un point par offre à partir de df_salaires (déjà récupéré ci-dessus
+            # pour la jauge de salaire) — même filtre CDI et même seuil de plausibilité
+            # (15 000 €/an) que la jauge, pour rester cohérent avec elle plutôt que de créer
+            # un troisième total différent sur la même page.
+            df_salaires_cdi_courbe = (
+                df_salaires[df_salaires["Type de contrat"] == "CDI"]
+                if not df_salaires.empty and "Type de contrat" in df_salaires.columns
+                else df_salaires.iloc[0:0]
+            )
+            points_experience_salaire = []
+            for _, ligne in df_salaires_cdi_courbe.iterrows():
+                annees = _experience_en_annees(ligne.get("Expérience requise", ""))
+                if annees is None:
+                    continue
+                borne_min, borne_max = _extraire_bornes_salaire(ligne["Salaire indiqué"])
+                valeurs_bornes = [v for v in (borne_min, borne_max) if v is not None and v >= 15000]
+                if not valeurs_bornes:
+                    continue
+                points_experience_salaire.append(
+                    {"annees": annees, "salaire": sum(valeurs_bornes) / len(valeurs_bornes)}
+                )
+
+            if len(points_experience_salaire) < 3:
+                st.info(
+                    "Pas assez d'offres avec à la fois une ancienneté et un salaire exploitables "
+                    "pour tracer ce graphique sur cette recherche (minimum 3 nécessaires)."
+                )
+            else:
+                df_points = pd.DataFrame(points_experience_salaire)
+                fig_courbe = go.Figure()
+                fig_courbe.add_trace(
+                    go.Scatter(
+                        x=df_points["annees"], y=df_points["salaire"], mode="markers",
+                        marker=dict(size=10, color="#5DADE2", line=dict(width=1, color="white")),
+                        name="Offres", hovertemplate="%{x} an(s) — %{y:,.0f} €<extra></extra>",
+                    )
+                )
+
+                # Régression linéaire simple (numpy.polyfit, degré 1) — indicative seulement,
+                # l'échantillon réel étant souvent trop petit (quelques dizaines de points au
+                # mieux) pour une modélisation plus poussée.
+                coefficients = np.polyfit(df_points["annees"], df_points["salaire"], 1)
+                pente, ordonnee_origine = coefficients[0], coefficients[1]
+                x_ligne = [df_points["annees"].min(), df_points["annees"].max()]
+                y_ligne = [pente * x + ordonnee_origine for x in x_ligne]
+                fig_courbe.add_trace(
+                    go.Scatter(
+                        x=x_ligne, y=y_ligne, mode="lines",
+                        line=dict(color="#F5B041", width=2, dash="dash"),
+                        name="Tendance",
+                    )
+                )
+
+                fig_courbe.update_layout(
+                    height=350, margin=dict(t=10, l=10, r=10, b=10),
+                    xaxis_title="Années d'expérience demandées", yaxis_title="Salaire brut annuel (€)",
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                )
+                st.plotly_chart(fig_courbe, use_container_width=True)
+
+                # --- Suggestion de salaire basée sur le profil du candidat ---
+                annees_experience_cv, nb_experiences_ignorees = calculer_annees_experience_cv(
+                    st.session_state.get("cv_experiences", [])
+                )
+                if not st.session_state.get("cv_experiences"):
+                    st.caption(
+                        "Ajoute tes expériences (avec leurs dates) dans l'onglet **🧾 Créer mon "
+                        "CV** pour obtenir une suggestion de salaire basée sur ton profil."
+                    )
+                else:
+                    salaire_suggere = pente * annees_experience_cv + ordonnee_origine
+                    hors_plage = not (df_points["annees"].min() <= annees_experience_cv <= df_points["annees"].max())
+                    texte_avertissement_ignorees = (
+                        f" ({nb_experiences_ignorees} expérience(s) aux dates peu claires non "
+                        "comptabilisée(s))" if nb_experiences_ignorees else ""
+                    )
+                    st.markdown(
+                        f"**Avec {annees_experience_cv} an(s) d'expérience cumulée(s)**"
+                        f"{texte_avertissement_ignorees} **, le marché suggère environ "
+                        f"{salaire_suggere:,.0f} € brut annuel** pour ce métier, d'après la "
+                        "tendance ci-dessus.".replace(",", " ")
+                    )
+                    if hors_plage:
+                        st.caption(
+                            "⚠️ Ton expérience est en dehors de la plage observée dans "
+                            "l'échantillon — cette estimation est une extrapolation, à prendre "
+                            "avec plus de précaution."
+                        )
+                    st.caption(
+                        "Estimation approximative (dates d'expérience en texte libre, "
+                        "échantillon parfois restreint) — un repère de discussion, pas un "
+                        "chiffre garanti."
                     )
 
 # ---------------------------------------------------------------------------
