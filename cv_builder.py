@@ -857,8 +857,8 @@ _DEFAUTS_SAVOIR_ETRE = [
     "Autonomie", "Adaptabilité",
 ]
 _DEFAUTS_OUTILS = ["Excel", "Word", "PowerPoint", "Outlook", "Teams"]
-_DEFAUTS_LANGAGES = []  # vide par défaut : pertinent seulement pour les profils tech
-_DEFAUTS_CERTIFICATIONS = []  # vide par défaut : très spécifique au poste, pas de base générique pertinente
+_DEFAUTS_LANGAGES = ["Python", "SQL", "JavaScript", "Java", "VBA"]  # profils tech/data
+_DEFAUTS_CERTIFICATIONS = ["PMP", "Scrum Master", "CACES", "Permis B", "SST"]  # base large, tous profils
 
 
 def _champ_liste_avec_ajout(titre, cle_base, valeurs_par_defaut, aide=None):
@@ -1001,19 +1001,30 @@ def _section_suggestions_competences(fonction_analyse_competences):
     departement_cv = st.session_state.get("cv_departement")
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
+    # Même fenêtre temporelle que "Analyse principale" (mémorisée par cet onglet, lu ici
+    # car "Créer mon CV" s'exécute avant dans le script — valeur du run précédent, stable
+    # à l'échelle d'une journée puisque basée sur le semestre en cours) — sans ça, cette
+    # fonction n'appliquait AUCUN filtre de date alors que "Top Recruteurs" filtre sur le
+    # semestre en cours, donnant deux échantillons différents pour la même recherche.
+    jours_max_cv = st.session_state.get("jours_max_periode_offres")
     cle_signature = "cv_suggestions_signature"
-    signature_actuelle = (tuple(postes_choisis), tuple(codes_resolus_cv), departement_cv)
+    signature_actuelle = (tuple(postes_choisis), tuple(codes_resolus_cv), departement_cv, jours_max_cv)
 
     if st.session_state.get(cle_signature) != signature_actuelle:
         with st.spinner("Analyse des offres en cours..."):
-            mots_cles_larges = " ".join(postes_choisis)
+            # Titre brut tel que saisi par l'utilisateur (pas la concaténation des libellés
+            # de suggestions cochées, souvent verbeux et multiples) — identique au mot-clé
+            # utilisé par "Top Recruteurs" dans Analyse principale, pour que les deux
+            # onglets interrogent exactement le même échantillon d'offres.
+            titre_libre_suggestions = st.session_state.get("cv_titre", "").strip()
             # Codes ROME résolus transmis en plus des mots-clés (au lieu de
             # motsCles seul sur "TOUS") : un intitulé de suggestion complet
             # (ex: "Chef de projet / Cheffe de projet (Project Management
             # Officer) (H/F)") est bruité pour une recherche libre — le code
             # ROME précis remonte des offres bien plus pertinentes.
             df_comp, df_outils, df_langages, df_certifs, df_savoir_etre, nb_total = fonction_analyse_competences(
-                codes_rome=codes_resolus_cv, mots_cles_libres=mots_cles_larges, departement=departement_cv,
+                codes_rome=codes_resolus_cv, mots_cles_libres=titre_libre_suggestions,
+                departement=departement_cv, jours_max=jours_max_cv,
             )
         for cle_options, df in [
             ("cv_competences_options", df_comp),
@@ -1148,7 +1159,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "loin dans l'app (Analyse principale, Compléments d'analyse, Événements) en dépend."
             )
         titre_recherche = st.text_input(
-            "Titre du poste recherché (ex: PMO Finance)",
+            "Titre du poste recherché (ex: Chef de Projet Informatique)",
             key="cv_titre",
             disabled=not departement_defini,
             help="C'est ce titre qui apparaîtra sur ton CV, sous forme « Prénom NOM – Poste ».",
@@ -1201,7 +1212,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         email = c3.text_input("Email", key="cv_email")
         telephone = c4.text_input("Téléphone", key="cv_telephone")
         adresse = st.text_input(
-            "Adresse", key="cv_adresse", placeholder="ex: 6 Calle Cronista Veravens, 3012 Alicante, España"
+            "Adresse", key="cv_adresse", placeholder="ex: 27 rue de Pologne, 13010 Marseille"
         )
 
         profil = st.text_area(
@@ -1227,7 +1238,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             if l.get("langue", "").strip() and l.get("niveau")
         )
 
-    with st.expander("💡 Savoir-faire, savoir-être, outils, langages & certifications"):
+    with st.expander("💡 Savoir-faire, savoir-être & outils"):
         st.caption("ℹ️ Ces éléments apparaîtront sur votre CV, dans le bandeau latéral.")
         _section_suggestions_competences(fonction_analyse_competences)
 
@@ -1248,16 +1259,21 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             "Sélectionne ou ajoute tes outils", "cv_outils", _DEFAUTS_OUTILS
         )
 
-        st.markdown("###### 💻 Langages informatiques")
+    # Langages informatiques et Certifications sortis dans leurs propres expanders
+    # (auparavant noyés en sous-section dans l'expander combiné ci-dessus, dont le titre
+    # devenait trop long et le contenu peu lisible) — même traitement que "Formation"
+    # et "Langues", chacun avec sa propre section dédiée.
+    with st.expander("💻 Langages informatiques"):
         st.caption("Facultatif — pertinent surtout pour les profils tech/data.")
         langages_informatiques = _champ_liste_avec_ajout(
             "Sélectionne ou ajoute tes langages", "cv_langages", _DEFAUTS_LANGAGES
         )
 
-        st.markdown("###### 🎓 Certifications")
+    with st.expander("🎓 Certifications"):
         st.caption(
             "Facultatif — ex: PMP, Scrum Master, CISSP, AWS Certified, CACES, permis... Les "
-            "suggestions ci-dessus (si disponibles) sont repérées par mot-clé dans les offres "
+            "certifications les plus demandées pour ton métier (si disponibles) sont visibles "
+            "dans l'onglet Analyse principale → Expertise, repérées par mot-clé dans les offres "
             "réelles, pas un champ officiel dédié côté France Travail."
         )
         certifications = _champ_liste_avec_ajout(
