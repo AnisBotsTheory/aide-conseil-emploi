@@ -1000,7 +1000,14 @@ def _section_suggestions_competences(fonction_analyse_competences):
     # semestre en cours, donnant deux échantillons différents pour la même recherche.
     jours_max_cv = st.session_state.get("jours_max_periode_offres")
     cle_signature = "cv_suggestions_signature"
-    signature_actuelle = (tuple(postes_choisis), tuple(codes_resolus_cv), departement_cv, jours_max_cv)
+    # "total_offres_recherche_actuelle" inclus dans la signature : si cette valeur partagée
+    # change (ex: passe de non disponible à disponible une fois "Analyse principale" exécuté),
+    # ça force un recalcul qui se recale sur la valeur à jour — évite qu'un premier total non
+    # aligné (calculé avant que la valeur partagée n'existe) ne reste figé en cache.
+    signature_actuelle = (
+        tuple(postes_choisis), tuple(codes_resolus_cv), departement_cv, jours_max_cv,
+        st.session_state.get("total_offres_recherche_actuelle"),
+    )
 
     if st.session_state.get(cle_signature) != signature_actuelle:
         with st.spinner("Analyse des offres en cours..."):
@@ -1018,6 +1025,14 @@ def _section_suggestions_competences(fonction_analyse_competences):
                 codes_rome=codes_resolus_cv, mots_cles_libres=titre_libre_suggestions,
                 departement=departement_cv, jours_max=jours_max_cv,
             )
+        # Le total affiché est aligné sur celui déjà calculé par "Analyse principale" (même
+        # recherche) si disponible, plutôt que de faire confiance à ce calcul indépendant —
+        # les deux DEVRAIENT mathématiquement coïncider (mêmes codes ROME, même texte, même
+        # département, même fenêtre temporelle), mais "Créer mon CV" s'exécute avant "Analyse
+        # principale" dans le script : ce calcul-ci peut tourner sur une fenêtre temporelle pas
+        # encore à jour tant que l'autre onglet n'a pas encore tourné une fois. Se caler sur la
+        # valeur partagée élimine ce risque de décalage plutôt que de le laisser possible.
+        nb_total = st.session_state.get("total_offres_recherche_actuelle", nb_total)
         for cle_options, df in [
             # "cv_competences_options" alimenté par df_savoir_etre (renommé "Compétences" côté
             # Expertise) — df_comp (renommé "Actions/missions les plus demandées") n'alimente
@@ -1066,6 +1081,12 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
         "expériences, formations, compétences...), choisissez un thème de couleur, puis générez "
         "votre CV en un clic."
+    )
+    st.caption(
+        "ℹ️ La structure de ce CV s'inspire du format **Europass**, le modèle de référence "
+        "reconnu par la Commission européenne, avec quelques adaptations pour les usages "
+        "français actuels (ex: pas de date de naissance, nationalité ou genre, conformément "
+        "aux bonnes pratiques anti-discrimination)."
     )
     st.markdown(
         "**Le parcours complet de l'application :**\n"
@@ -1249,7 +1270,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             if l.get("langue", "").strip() and l.get("niveau")
         )
 
-    with st.expander("💡 Compétences & outils"):
+    with st.expander("💡 Compétences"):
         st.caption("ℹ️ Ces éléments apparaîtront sur votre CV, dans le bandeau latéral.")
         _section_suggestions_competences(fonction_analyse_competences)
 
@@ -1262,7 +1283,11 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             "Sélectionne ou ajoute tes compétences", "cv_competences", _DEFAUTS_COMPETENCES
         )
 
-        st.markdown("###### 🛠️ Outils informatiques")
+    # Outils informatiques sorti dans son propre expander (même traitement que Langages
+    # et Certifications ci-dessous) — auparavant noyé en sous-section dans l'expander
+    # "Compétences & outils", ce qui mélangeait deux notions différentes (qualités
+    # comportementales vs outils techniques) sous un même toit.
+    with st.expander("🛠️ Outils informatiques"):
         outils = _champ_liste_avec_ajout(
             "Sélectionne ou ajoute tes outils", "cv_outils", _DEFAUTS_OUTILS
         )
