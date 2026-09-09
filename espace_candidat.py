@@ -54,6 +54,9 @@ _RE_ARRONDISSEMENT_GENERIQUE = re.compile(r"\s+\d+\s*(er|e|ème)?\s+arrondisseme
 _RE_SUFFIXE_DEPARTEMENT = re.compile(r"\s*\((?:dept\.?|dépt\.?|département|departement)\)\s*$", re.IGNORECASE)
 
 
+_NOM_DEPARTEMENT_VERS_CODE = {nom: code for code, nom in DEPARTEMENTS_VERS_NOM.items()}
+
+
 def _nom_ville_simplifie(libelle_brut):
     """
     Simplifie un libellé de lieu France Travail (souvent "code - Nom commune",
@@ -65,8 +68,14 @@ def _nom_ville_simplifie(libelle_brut):
     seule "Paris"). Gère : préfixe "code - ", suffixe "(Dept.)"/"(Département)",
     arrondissement de Paris/Lyon/Marseille (avec ou sans le mot "Arrondissement"
     explicite, ex: "PARIS 10" comme "Paris 10ème Arrondissement"), variante
-    générique "Ville Nème Arrondissement" pour tout autre nom de ville, et
-    normalisation de casse pour une ville renvoyée tout en majuscules.
+    générique "Ville Nème Arrondissement" pour tout autre nom de ville,
+    normalisation de casse pour une ville renvoyée tout en majuscules, et une
+    offre localisée SEULEMENT au département (sans ville précise) — France
+    Travail renvoie alors littéralement le nom du département dans le champ
+    "ville" (ex: "Bouches-du-Rhône" apparaissant comme une "ville" dans le
+    classement, alors que ce n'est pas une commune) : on le fait correspondre
+    au chef-lieu du département, pour qu'il se fonde dans le décompte de cette
+    vraie ville plutôt que d'apparaître comme une ville fictive séparée.
     """
     nom = libelle_brut.split(" - ", 1)[-1].strip() if " - " in libelle_brut else libelle_brut.strip()
     nom = _RE_SUFFIXE_DEPARTEMENT.sub("", nom).strip()
@@ -84,7 +93,13 @@ def _nom_ville_simplifie(libelle_brut):
         # ne sait pas faire) — au moins la première lettre de chaque mot est juste pour
         # les cas simples les plus courants.
         nom = nom.title()
-    return nom.strip() or libelle_brut
+    nom = nom.strip() or libelle_brut
+
+    code_departement_correspondant = _NOM_DEPARTEMENT_VERS_CODE.get(nom)
+    if code_departement_correspondant and code_departement_correspondant in DEPARTEMENTS_CHEF_LIEU:
+        return DEPARTEMENTS_CHEF_LIEU[code_departement_correspondant][0]
+
+    return nom
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +686,7 @@ with tab_profil:
             # pas deviner ce qui est le mieux pour l'utilisateur.
             # -----------------------------------------------------------------
             with sous_tab_action:
+                st.markdown("##### 🧭 Par où commencer ?")
                 st.caption(
                     "Ce que ces résultats suggèrent concrètement de faire, à partir des mêmes "
                     "données que les sous-onglets précédents — pas une recommandation « boîte "
@@ -685,11 +701,8 @@ with tab_profil:
                 # _champ_liste_avec_ajout, clés "<base>_select") — aucune donnée recalculée.
                 savoir_faire_cv = st.session_state.get("cv_competences_select", [])
                 savoir_etre_cv = st.session_state.get("cv_savoir_etre_select", [])
-                elements_manquants = []
-                if not savoir_faire_cv:
-                    elements_manquants.append("savoir-faire")
-                if not savoir_etre_cv:
-                    elements_manquants.append("savoir-être")
+                nb_sf, nb_se = len(savoir_faire_cv), len(savoir_etre_cv)
+                NB_CIBLE_SF_SE = 5  # objectif minimal par liste, pas seulement "au moins un élément"
 
                 st.markdown(
                     "**Pourquoi c'est important :** le savoir-faire et le savoir-être sont "
@@ -699,65 +712,109 @@ with tab_profil:
                     "poste."
                 )
 
-                if elements_manquants:
-                    nb_actions_affichees += 1
-                    suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
-                    texte_suggestion = ""
-                    if suggestions_apercu:
-                        df_comp_apercu, _, _, _, df_savoir_etre_apercu, _ = suggestions_apercu
-                        exemples = []
-                        if "savoir-faire" in elements_manquants and not df_comp_apercu.empty:
-                            exemples.append(
-                                "savoir-faire les plus cités : " + ", ".join(df_comp_apercu["libelle"].head(3))
-                            )
-                        if "savoir-être" in elements_manquants and not df_savoir_etre_apercu.empty:
-                            exemples.append(
-                                "savoir-être les plus cités : " + ", ".join(df_savoir_etre_apercu["libelle"].head(3))
-                            )
-                        if exemples:
-                            texte_suggestion = " Pour ce métier, les offres citent par exemple — " + " ; ".join(exemples) + "."
+                suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
+                df_comp_apercu, df_savoir_etre_apercu = None, None
+                if suggestions_apercu:
+                    df_comp_apercu, _, _, _, df_savoir_etre_apercu, _ = suggestions_apercu
+
+                def _exemples_a_ajouter(df, deja_presents, nb_a_atteindre):
+                    """Libellés les plus demandés qui ne sont PAS déjà dans la liste du
+                    candidat, jusqu'à nb_a_atteindre exemples — sert à combler l'écart vers
+                    l'objectif de 5, ou à alimenter une comparaison une fois l'objectif atteint."""
+                    if df is None or df.empty or nb_a_atteindre <= 0:
+                        return []
+                    deja = {s.strip().lower() for s in deja_presents}
+                    return [lib for lib in df["libelle"] if lib.strip().lower() not in deja][:nb_a_atteindre]
+
+                nb_actions_affichees += 1
+
+                if nb_sf == 0 and nb_se == 0:
+                    exemples_sf = _exemples_a_ajouter(df_comp_apercu, savoir_faire_cv, NB_CIBLE_SF_SE)
+                    exemples_se = _exemples_a_ajouter(df_savoir_etre_apercu, savoir_etre_cv, NB_CIBLE_SF_SE)
+                    texte = ""
+                    if exemples_sf:
+                        texte += " Savoir-faire à considérer : " + ", ".join(exemples_sf) + "."
+                    if exemples_se:
+                        texte += " Savoir-être à considérer : " + ", ".join(exemples_se) + "."
                     st.warning(
-                        f"**{' et '.join(elements_manquants).capitalize()} non renseigné(s) dans ton CV.**"
-                        f"{texte_suggestion} 👉 Complète-les dans l'onglet **🧾 Créer mon CV**."
+                        "**Aucun savoir-faire ni savoir-être renseigné dans ton CV.**"
+                        f"{texte} 👉 Vise au moins {NB_CIBLE_SF_SE} éléments de chaque dans "
+                        "l'onglet **🧾 Créer mon CV**."
+                    )
+                elif nb_sf == 0:
+                    # Savoir-être présent mais savoir-faire totalement absent : explication
+                    # SPÉCIFIQUE à ce qui manque, pas un rappel générique des deux notions.
+                    exemples_sf = _exemples_a_ajouter(df_comp_apercu, savoir_faire_cv, NB_CIBLE_SF_SE)
+                    texte = f" Exemples pour ce métier : {', '.join(exemples_sf)}." if exemples_sf else ""
+                    st.warning(
+                        "**Aucun savoir-faire renseigné dans ton CV.** Le savoir-faire décrit "
+                        "tes compétences techniques concrètes — c'est souvent le premier filtre "
+                        f"utilisé par les recruteurs pour présélectionner un CV.{texte} 👉 Ajoutes-en "
+                        f"au moins {NB_CIBLE_SF_SE} dans l'onglet **🧾 Créer mon CV**."
+                    )
+                elif nb_se == 0:
+                    # Savoir-faire présent mais savoir-être totalement absent : même logique,
+                    # avec l'explication spécifique au savoir-être cette fois.
+                    exemples_se = _exemples_a_ajouter(df_savoir_etre_apercu, savoir_etre_cv, NB_CIBLE_SF_SE)
+                    texte = f" Exemples pour ce métier : {', '.join(exemples_se)}." if exemples_se else ""
+                    st.warning(
+                        "**Aucun savoir-être renseigné dans ton CV.** Le savoir-être valorise tes "
+                        "qualités comportementales — de plus en plus recherché par les recruteurs "
+                        "pour évaluer ta capacité d'intégration et de collaboration, en "
+                        f"complément des compétences techniques.{texte} 👉 Ajoutes-en au moins "
+                        f"{NB_CIBLE_SF_SE} dans l'onglet **🧾 Créer mon CV**."
+                    )
+                elif nb_sf < NB_CIBLE_SF_SE or nb_se < NB_CIBLE_SF_SE:
+                    # Les deux catégories sont représentées, mais l'une (ou les deux) reste en
+                    # dessous de l'objectif de 5 — encouragement à étoffer, pas un manque total.
+                    manques = []
+                    if nb_sf < NB_CIBLE_SF_SE:
+                        exemples_sf = _exemples_a_ajouter(df_comp_apercu, savoir_faire_cv, NB_CIBLE_SF_SE - nb_sf)
+                        suffixe = f" (exemples : {', '.join(exemples_sf)})" if exemples_sf else ""
+                        manques.append(f"savoir-faire — {nb_sf}/{NB_CIBLE_SF_SE}{suffixe}")
+                    if nb_se < NB_CIBLE_SF_SE:
+                        exemples_se = _exemples_a_ajouter(df_savoir_etre_apercu, savoir_etre_cv, NB_CIBLE_SF_SE - nb_se)
+                        suffixe = f" (exemples : {', '.join(exemples_se)})" if exemples_se else ""
+                        manques.append(f"savoir-être — {nb_se}/{NB_CIBLE_SF_SE}{suffixe}")
+                    st.warning(
+                        "**Encore un peu court** — vise au moins "
+                        f"{NB_CIBLE_SF_SE} éléments dans chaque liste pour un CV bien référencé : "
+                        + " ; ".join(manques) + ". 👉 Complète dans l'onglet **🧾 Créer mon CV**."
                     )
                 else:
-                    nb_actions_affichees += 1
-                    # CV déjà complété sur ces deux points : au lieu de s'arrêter là, on
+                    # Les deux listes atteignent déjà l'objectif : au lieu de s'arrêter là, on
                     # compare avec ce que l'onglet Expertise identifie comme le plus demandé
                     # pour ce métier, pour repérer d'éventuels savoir-faire/savoir-être
                     # pertinents que le candidat n'a pas encore pensé à mentionner.
-                    suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
+                    savoir_faire_cv_normalise = {s.strip().lower() for s in savoir_faire_cv}
+                    savoir_etre_cv_normalise = {s.strip().lower() for s in savoir_etre_cv}
                     ecarts_marche = []
-                    if suggestions_apercu:
-                        df_comp_apercu, _, _, _, df_savoir_etre_apercu, _ = suggestions_apercu
-                        savoir_faire_cv_normalise = {s.strip().lower() for s in savoir_faire_cv}
-                        savoir_etre_cv_normalise = {s.strip().lower() for s in savoir_etre_cv}
-                        if not df_comp_apercu.empty:
-                            manquants_sf = [
-                                lib for lib in df_comp_apercu["libelle"].head(8)
-                                if lib.strip().lower() not in savoir_faire_cv_normalise
-                            ]
-                            if manquants_sf:
-                                ecarts_marche.append("savoir-faire : " + ", ".join(manquants_sf[:3]))
-                        if not df_savoir_etre_apercu.empty:
-                            manquants_se = [
-                                lib for lib in df_savoir_etre_apercu["libelle"].head(8)
-                                if lib.strip().lower() not in savoir_etre_cv_normalise
-                            ]
-                            if manquants_se:
-                                ecarts_marche.append("savoir-être : " + ", ".join(manquants_se[:3]))
+                    if df_comp_apercu is not None and not df_comp_apercu.empty:
+                        manquants_sf = [
+                            lib for lib in df_comp_apercu["libelle"].head(8)
+                            if lib.strip().lower() not in savoir_faire_cv_normalise
+                        ]
+                        if manquants_sf:
+                            ecarts_marche.append("savoir-faire : " + ", ".join(manquants_sf[:3]))
+                    if df_savoir_etre_apercu is not None and not df_savoir_etre_apercu.empty:
+                        manquants_se = [
+                            lib for lib in df_savoir_etre_apercu["libelle"].head(8)
+                            if lib.strip().lower() not in savoir_etre_cv_normalise
+                        ]
+                        if manquants_se:
+                            ecarts_marche.append("savoir-être : " + ", ".join(manquants_se[:3]))
 
                     if ecarts_marche:
                         st.info(
-                            "**Savoir-faire et savoir-être déjà renseignés** dans ton CV. En les "
-                            "comparant à ce que l'onglet **🧠 Expertise** identifie comme le plus "
-                            "demandé pour ce métier, tu pourrais aussi envisager — "
+                            "**Savoir-faire et savoir-être déjà bien renseignés** dans ton CV. En "
+                            "les comparant à ce que l'onglet **🧠 Expertise** identifie comme le "
+                            "plus demandé pour ce métier, tu pourrais aussi envisager — "
                             + " ; ".join(ecarts_marche) + ". 👉 À ajouter dans l'onglet "
                             "**🧾 Créer mon CV** si ça correspond à ton profil."
                         )
                     else:
                         st.success(
-                            "**Savoir-faire et savoir-être renseignés** dans ton CV, et déjà "
+                            "**Savoir-faire et savoir-être bien renseignés** dans ton CV, et déjà "
                             "alignés avec ce que le marché demande le plus pour ce métier — rien "
                             "à compléter ici."
                         )
