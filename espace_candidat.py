@@ -136,7 +136,7 @@ with tab_profil:
         f"https://candidat.francetravail.fr/offres/recherche?motsCles={mots_cles_lien_ft}"
         if mots_cles_lien_ft else "https://candidat.francetravail.fr/offres/recherche"
     )
-    st.markdown(
+    st.caption(
         "Cette application est un outil de **conseil**, qui s'appuie sur des techniques de "
         "**Business Intelligence** pour analyser les besoins liés au poste et au département "
         "sélectionnés, et vous apporter des éléments de décision sur : les entreprises qui "
@@ -144,7 +144,7 @@ with tab_profil:
         "dynamisme économique de votre département — de quoi construire votre stratégie de "
         "recherche d'emploi."
     )
-    st.markdown(
+    st.caption(
         "Elle n'a pas vocation à être une plateforme de recrutement. Pour consulter et "
         "postuler aux offres correspondant à votre recherche, rendez-vous sur "
         f"[candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer par votre "
@@ -757,7 +757,7 @@ with tab_profil:
                     "noire », juste une lecture directe de ta recherche pour savoir par où "
                     "commencer."
                 )
-                st.markdown(
+                st.caption(
                     "5 points à passer en revue, dans cet ordre : ton CV (compétences, puis "
                     "missions), les entreprises à contacter, un repère de salaire, et les "
                     "événements à venir."
@@ -781,12 +781,12 @@ with tab_profil:
 
                 nb_actions_affichees += 1
                 if nb_comp >= NB_CIBLE_COMPETENCES:
-                    st.markdown(
+                    st.caption(
                         f"💡 Tu as renseigné **{nb_comp} compétences** dans ton CV — objectif "
                         "atteint."
                     )
                 else:
-                    st.markdown(
+                    st.caption(
                         f"💡 Tu as renseigné **{nb_comp} compétence(s)** dans ton CV — vise au "
                         f"moins **{NB_CIBLE_COMPETENCES}** pour un CV bien référencé. 👉 "
                         "Complète dans l'onglet **🧾 Créer mon CV**."
@@ -799,12 +799,12 @@ with tab_profil:
                     competences_cv_normalise = {s.strip().lower() for s in competences_cv}
                     nb_top3_presentes = len(top3_competences & competences_cv_normalise)
                     if nb_top3_presentes == 3:
-                        st.markdown(
+                        st.caption(
                             "💡 Tu as bien inclus les **3 compétences les plus demandées** pour "
                             "ce métier — tu peux consulter le reste dans l'onglet **🧠 Expertise**."
                         )
                     else:
-                        st.markdown(
+                        st.caption(
                             f"💡 Tu as inclus {nb_top3_presentes}/3 des compétences les plus "
                             "demandées pour ce métier. 👉 Consulte l'onglet **🧠 Expertise** pour "
                             "identifier et ajouter les manquantes."
@@ -829,7 +829,7 @@ with tab_profil:
 
                     nb_actions_affichees += 1
                     if not texte_experiences:
-                        st.markdown(
+                        st.caption(
                             "💡 Aucune expérience avec description de missions renseignée — "
                             "impossible de vérifier si tu couvres les actions/missions les plus "
                             "demandées. 👉 Ajoute au moins une expérience avec ses missions dans "
@@ -845,13 +845,13 @@ with tab_profil:
                             if fuzz.partial_ratio(action.lower(), texte_experiences_normalise) >= SEUIL_MATCH_FLOU
                         )
                         if nb_identifiees == len(top_actions):
-                            st.markdown(
+                            st.caption(
                                 "💡 Bravo, tes expériences couvrent déjà (au moins "
                                 "approximativement) les actions/missions les plus demandées pour "
                                 "ce métier."
                             )
                         else:
-                            st.markdown(
+                            st.caption(
                                 f"💡 {nb_identifiees}/{len(top_actions)} des actions/missions les "
                                 "plus demandées semblent déjà apparaître dans tes expériences "
                                 "(vérification approximative, par ressemblance de texte). 👉 "
@@ -887,13 +887,13 @@ with tab_profil:
                 nb_potentiel = len(entreprises_potentiel_action) if entreprises_potentiel_action else 0
 
                 if nb_recruteurs_actifs == 0 and nb_potentiel == 0:
-                    st.markdown(
+                    st.caption(
                         "💡 Aucune entreprise identifiable pour cibler tes candidatures pour "
                         "l'instant sur ce métier et ce département — essaie avec un département "
                         "ou un poste plus large."
                     )
                 else:
-                    st.markdown(
+                    st.caption(
                         f"💡 **{nb_recruteurs_actifs} entreprise(s)** recrutent actuellement sur "
                         "ce métier dans ton département — à cibler en priorité pour tes "
                         f"candidatures. **{nb_potentiel} entreprise(s)** supplémentaire(s) ont un "
@@ -939,7 +939,7 @@ with tab_profil:
                                 "salaire indiqué) — un repère utile pour bien négocier. 👉 Détail "
                                 "dans l'onglet **📊 Compléments d'analyse**."
                             ).replace(",", " ")
-                            st.markdown(texte_salaire_action)
+                            st.caption(texte_salaire_action)
 
                 st.write("")
                 st.write("")
@@ -954,7 +954,7 @@ with tab_profil:
                     prochain = min(evenements_action, key=lambda e: e.get("dateEvenement") or "9999")
                     date_prochain = (prochain.get("dateEvenement") or "")[:10]
                     titre_prochain = prochain.get("titre") or "un événement"
-                    st.markdown(
+                    st.caption(
                         f"💡 **{len(evenements_action)} événement(s)** (forums, salons, job "
                         f"dating) prévu(s) dans les 90 prochains jours dans ta région pour ce "
                         f"métier, dont « {titre_prochain} »"
