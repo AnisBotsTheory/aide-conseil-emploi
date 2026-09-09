@@ -25,6 +25,7 @@ import re
 import random
 from urllib.parse import quote_plus
 from rapidfuzz import fuzz
+from collections import Counter
 from datetime import datetime  # noqa: F401 — utilisé dans l'onglet Compléments d'analyse ;
 # moteur_recherche.py importe aussi datetime mais son __all__ ne le réexporte pas
 import plotly.express as px
@@ -424,8 +425,7 @@ with tab_profil:
             with sous_tab_certifs:
                 st.markdown(
                     "Ce que le marché demande réellement pour ce métier : certifications, "
-                    "compétences et actions/missions les plus citées dans les offres, "
-                    "complétées par le référentiel officiel du métier (ROME)."
+                    "compétences et actions/missions les plus citées dans les offres."
                 )
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
@@ -522,50 +522,6 @@ with tab_profil:
                             use_container_width=True,
                             hide_index=True,
                         )
-
-                st.divider()
-                st.markdown("##### 📖 Référentiel officiel du métier (ROME)")
-                st.caption(
-                    "ℹ️ Ces fiches résument les compétences (tâches et missions concrètement "
-                    "liées au poste), le savoir-faire (connaissances techniques) et le "
-                    "savoir-être (soft skills) liés au métier, TELS QUE DÉFINIS par le "
-                    "répertoire officiel de France Travail — une nomenclature différente de "
-                    "celle utilisée ci-dessus pour les tableaux issus des offres réelles "
-                    "(« Compétences » = soft skills, « Actions/missions » = savoir-faire, "
-                    "reformulés pour un usage CV) : ce référentiel garde le vocabulaire "
-                    "officiel ROME, à titre de contexte complémentaire sur le métier. C'est "
-                    "ici que figure la liste COMPLÈTE des savoir-faire et savoir-être officiels "
-                    "du métier, au-delà de ceux les plus cités dans les offres ci-dessus. Une "
-                    "fiche par poste sélectionné, pas fusionnée en cas de multi-poste."
-                )
-                for label, code in codes_par_poste_cv.items():
-                    if not code:
-                        continue
-                    fiche_metier = recuperer_fiche_metier(code)
-                    with st.expander(f"{label} ({code})"):
-                        if not fiche_metier:
-                            st.info("Aucune donnée disponible pour ce métier.")
-                        else:
-                            if fiche_metier["competences"]:
-                                st.markdown("**Compétences :** " + ", ".join(fiche_metier["competences"]))
-                            if fiche_metier["savoir_faire"]:
-                                st.markdown("**Savoir-faire :** " + ", ".join(fiche_metier["savoir_faire"]))
-                            if fiche_metier["savoir_etre"]:
-                                st.markdown("**Savoir-être :** " + ", ".join(fiche_metier["savoir_etre"]))
-                            if fiche_metier["savoirs"]:
-                                st.markdown("**Savoirs :** " + ", ".join(fiche_metier["savoirs"]))
-
-                with st.expander("🔧 Diagnostic technique Fiches métiers ROME (temporaire)"):
-                    st.caption(
-                        "Teste directement l'appel API pour le premier poste sélectionné et affiche "
-                        "la vraie réponse brute — utile pour vérifier pourquoi une fiche reste vide "
-                        "ou pour confirmer que l'intégration répond bien."
-                    )
-                    if st.button("Lancer le diagnostic", key="btn_diagnostic_fiche_metier_tendance"):
-                        code_diag_fm = codes_resolus_cv[0] if codes_resolus_cv else "M1805"
-                        with st.spinner("Test de l'appel Fiches métiers en cours..."):
-                            resultats_diag_fm = diagnostiquer_fiche_metier(code_diag_fm)
-                        st.json(resultats_diag_fm)
 
             with sous_tab_villes:
                 st.markdown(
@@ -1180,7 +1136,8 @@ with tab_avance:
                     )
 
             st.divider()
-            st.markdown("#### 💰 Salaire selon l'expérience demandée")
+            st.markdown("#### 💰 Fourchette de salaire proposée")
+            st.caption("Les montants réellement affichés sur les offres CDI de cet échantillon.")
             if code_rome_actif != "MULTI" and code_rome_actif != "TOUS":
                 valeur_sal, nom_sal, periode_sal, erreur_sal = salaires_officiels_metier(
                     code_rome_actif, code_territoire=departement_actif, code_type_territoire="DEP",
@@ -1190,17 +1147,135 @@ with tab_avance:
                         f"📊 Repère officiel France Travail — **{nom_sal or 'salaire en poste'}** "
                         f"({periode_sal}) : **{valeur_sal}** — salaires réels des salariés déjà en "
                         "poste (pas des salaires proposés sur une offre), à titre de comparaison "
-                        "avec le graphique ci-dessous."
+                        "avec la fourchette ci-dessous."
                     )
-            st.caption(
-                "Chaque point est une offre (CDI, salaire indiqué) : son salaire moyen indiqué "
-                "en abscisse (pour suivre l'augmentation de gauche à droite), son ancienneté "
-                "requise en ordonnée. La droite est une tendance estimée à partir de ces points, "
-                "pas un barème officiel."
-            )
-            # Reconstruit un point par offre à partir de df_salaires (déjà récupéré ci-dessus) —
-            # même filtre CDI et même seuil de plausibilité (15 000 €/an) partout sur cette page,
-            # pour ne jamais afficher deux totaux différents sur le même sujet.
+            if nb_total_offres == 0:
+                st.info("Aucune offre trouvée pour ces critères.")
+            elif nb_avec_salaire == 0:
+                st.info("Aucune des offres trouvées n'indique de salaire.")
+            else:
+                df_salaires_cdi = (
+                    df_salaires[df_salaires["Type de contrat"] == "CDI"]
+                    if "Type de contrat" in df_salaires.columns
+                    else df_salaires.iloc[0:0]
+                )
+                if df_salaires_cdi.empty:
+                    st.info("Aucune offre en CDI avec salaire indiqué pour ces critères.")
+                else:
+                    # Jauge graduée : un bloc par valeur DISTINCTE trouvée dans l'échantillon
+                    # (arrondie au 5 000 € près pour regrouper des valeurs proches et limiter
+                    # le nombre de graduations affichées — un arrondi au millier produisait
+                    # trop de graduations serrées, illisibles les unes sous les autres),
+                    # triées croissant — pas une simple barre continue du minimum absolu au
+                    # maximum absolu, mais une graduation qui matérialise les paliers réels
+                    # observés (ex: 30 000 € puis 50 000 € puis 60 000 € puis 80 000 €).
+                    bornes = [_extraire_bornes_salaire(s) for s in df_salaires_cdi["Salaire indiqué"]]
+                    toutes_valeurs = []
+                    for borne_min, borne_max in bornes:
+                        if borne_min is not None:
+                            toutes_valeurs.append(borne_min)
+                        if borne_max is not None:
+                            toutes_valeurs.append(borne_max)
+
+                    # Seuil de plausibilité : un montant mensuel annualisé (×12) peut
+                    # légitimement donner un total très bas s'il s'agit en réalité d'une
+                    # indemnité d'alternance/stage plutôt qu'un salaire de poste à temps
+                    # plein (ex: 250 €/mois -> 3 000 €/an, mathématiquement correct mais
+                    # non représentatif du "salaire de ce métier") — exclu de la jauge pour
+                    # ne pas fausser la lecture, sans être un signe d'erreur de calcul.
+                    SEUIL_SALAIRE_PLAUSIBLE = 15000
+                    nb_valeurs_avant_filtre = len(toutes_valeurs)
+                    toutes_valeurs = [v for v in toutes_valeurs if v >= SEUIL_SALAIRE_PLAUSIBLE]
+                    nb_valeurs_exclues = nb_valeurs_avant_filtre - len(toutes_valeurs)
+
+                    if not toutes_valeurs:
+                        st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
+                    else:
+                        if nb_valeurs_exclues:
+                            st.caption(
+                                f"ℹ️ {nb_valeurs_exclues} montant(s) sous {SEUIL_SALAIRE_PLAUSIBLE:,.0f} €/an "
+                                "exclu(s) de la jauge (probable indemnité d'alternance/stage plutôt "
+                                "qu'un salaire de poste à temps plein).".replace(",", " ")
+                            )
+                        # Pas d'arrondi calé dynamiquement sur l'étendue réelle des valeurs,
+                        # plutôt qu'un arrondi fixe au 5 000 € — avec beaucoup d'offres, un pas
+                        # fixe pouvait produire des dizaines de graduations illisibles et
+                        # chevauchées (constaté avec 178 offres, plage 5 000 € à 600 000 €).
+                        # Objectif : environ 8 à 10 blocs, quelle que soit l'étendue observée.
+                        plage_valeurs = max(toutes_valeurs) - min(toutes_valeurs)
+                        nb_blocs_cible = 9
+                        if plage_valeurs > 0:
+                            pas_arrondi = max(1000, round(plage_valeurs / nb_blocs_cible / 1000) * 1000)
+                        else:
+                            pas_arrondi = 1000
+                        compteur_valeurs = Counter(round(v / pas_arrondi) * pas_arrondi for v in toutes_valeurs)
+                        valeurs_graduees = sorted(compteur_valeurs.keys())
+                        if len(valeurs_graduees) == 1:
+                            st.metric("Salaire annuel indiqué", f"{valeurs_graduees[0]:,.0f} €".replace(",", " "))
+                        else:
+                            palette_jauge = ["#2E86DE", "#10AC84", "#F9A826", "#8854D0", "#EE5A6F", "#01A3A4"]
+                            segments_largeur = [
+                                valeurs_graduees[i + 1] - valeurs_graduees[i]
+                                for i in range(len(valeurs_graduees) - 1)
+                            ]
+                            segments_base = valeurs_graduees[:-1]
+                            couleurs_segments = [
+                                palette_jauge[i % len(palette_jauge)] for i in range(len(segments_largeur))
+                            ]
+                            # Chaque bloc représente la tranche menant à sa graduation de DROITE
+                            # (ex: le bloc entre 30 000 € et 50 000 € "mène" à 50 000 €) — au
+                            # survol, on affiche combien d'offres ont un montant qui arrondit à
+                            # cette borne précise.
+                            textes_survol = [
+                                f"{v:,.0f} € — {compteur_valeurs[v]} offre(s)".replace(",", " ")
+                                for v in valeurs_graduees[1:]
+                            ]
+                            fig_jauge = go.Figure(
+                                go.Bar(
+                                    x=segments_largeur,
+                                    y=[""] * len(segments_largeur),
+                                    base=segments_base,
+                                    orientation="h",
+                                    marker=dict(color=couleurs_segments, line=dict(width=1, color="#0e1117")),
+                                    hovertext=textes_survol,
+                                    hoverinfo="text",
+                                )
+                            )
+                            fig_jauge.update_xaxes(
+                                visible=True,
+                                tickmode="array",
+                                tickvals=valeurs_graduees,
+                                ticktext=[f"{v:,.0f} €".replace(",", " ") for v in valeurs_graduees],
+                                tickfont=dict(size=12, color="white"),
+                                tickangle=-30,
+                                showgrid=False,
+                                zeroline=False,
+                            )
+                            fig_jauge.update_yaxes(visible=False)
+                            fig_jauge.update_layout(
+                                height=130, margin=dict(t=25, l=10, r=10, b=40),
+                                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                                showlegend=False,
+                            )
+                            st.plotly_chart(fig_jauge, use_container_width=True)
+
+                    # Repère de fiabilité déplacé ici en simple mention de source (au lieu
+                    # d'un gros st.metric qui lui donnait plus de poids visuel que ce n'est
+                    # qu'un indicateur de taille d'échantillon).
+                    st.caption(
+                        f"📎 Source : **{nb_avec_salaire} offre(s)** sur {nb_total_offres} indiquent "
+                        "un salaire, tous types de contrat confondus — jauge ci-dessus calculée "
+                        "uniquement sur les offres CDI parmi elles, montants annualisés (un salaire "
+                        "mensuel est multiplié par 12 ; un salaire horaire est exclu, faute de "
+                        "pouvoir le convertir en annuel de façon fiable)."
+                    )
+
+            # --- Calcul silencieux expérience/salaire, PAS affiché ici (jauge ci-dessus
+            # conservée comme seule visualisation de salaire visible) — sert uniquement à
+            # alimenter la suggestion personnalisée de "Tes points d'attention", en mémorisant
+            # la régression dans st.session_state["regression_salaire_experience"]. Même filtre
+            # CDI et même seuil de plausibilité (15 000 €/an) que la jauge ci-dessus, pour
+            # rester cohérent avec elle plutôt que de calculer un troisième total différent.
             df_salaires_cdi_courbe = (
                 df_salaires[df_salaires["Type de contrat"] == "CDI"]
                 if not df_salaires.empty and "Type de contrat" in df_salaires.columns
@@ -1218,106 +1293,13 @@ with tab_avance:
                 points_experience_salaire.append(
                     {"annees": annees, "salaire": sum(valeurs_bornes) / len(valeurs_bornes)}
                 )
-
-            if nb_total_offres == 0:
-                st.info("Aucune offre trouvée pour ces critères.")
-            elif nb_avec_salaire == 0:
-                st.info("Aucune des offres trouvées n'indique de salaire.")
-            elif len(points_experience_salaire) < 3:
-                st.info(
-                    "Pas assez d'offres avec à la fois une ancienneté et un salaire exploitables "
-                    "pour tracer ce graphique sur cette recherche (minimum 3 nécessaires)."
-                )
-            else:
-                df_points = pd.DataFrame(points_experience_salaire)
-                fig_courbe = go.Figure()
-                fig_courbe.add_trace(
-                    go.Scatter(
-                        # Salaire en abscisse (en k€, plus lisible que des milliers d'euros
-                        # bruts) : l'œil suit alors l'augmentation du salaire de gauche à
-                        # droite, dans le sens de lecture naturel, plutôt que verticalement.
-                        x=df_points["salaire"] / 1000, y=df_points["annees"], mode="markers",
-                        marker=dict(size=10, color="#5DADE2", line=dict(width=1, color="white")),
-                        name="Offres", hovertemplate="%{x:.0f} k€ — %{y} an(s)<extra></extra>",
-                    )
-                )
-
-                # Régression linéaire simple (numpy.polyfit, degré 1) — indicative seulement,
-                # l'échantillon réel étant souvent trop petit (quelques dizaines de points au
-                # mieux) pour une modélisation plus poussée. Ajustée expérience -> salaire (le
-                # sens naturel de la prédiction), mais tracée avec les axes inversés pour
-                # correspondre à l'affichage salaire en abscisse ci-dessus.
-                coefficients = np.polyfit(df_points["annees"], df_points["salaire"], 1)
-                pente, ordonnee_origine = coefficients[0], coefficients[1]
-                annees_min, annees_max = df_points["annees"].min(), df_points["annees"].max()
-                x_experience_ligne = [annees_min, annees_max]
-                y_salaire_ligne = [pente * x + ordonnee_origine for x in x_experience_ligne]
-                fig_courbe.add_trace(
-                    go.Scatter(
-                        x=[v / 1000 for v in y_salaire_ligne], y=x_experience_ligne, mode="lines",
-                        line=dict(color="#F5B041", width=2, dash="dash"),
-                        name="Tendance",
-                    )
-                )
-
-                fig_courbe.update_layout(
-                    height=350, margin=dict(t=10, l=10, r=10, b=10),
-                    xaxis_title="Salaire brut annuel (k€)", yaxis_title="Années d'expérience demandées",
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                )
-                st.plotly_chart(fig_courbe, use_container_width=True)
-                st.caption(
-                    f"📎 Source : **{nb_avec_salaire} offre(s)** sur {nb_total_offres} indiquent "
-                    "un salaire, tous types de contrat confondus — graphique ci-dessus calculé "
-                    "uniquement sur les offres CDI parmi elles, montants annualisés (un salaire "
-                    "mensuel est multiplié par 12 ; un salaire horaire est exclu, faute de "
-                    "pouvoir le convertir en annuel de façon fiable)."
-                )
-
-                # Mémorisé pour que "Tes points d'attention" propose une estimation basée sur le
-                # PROFIL du candidat (années d'expérience cumulées dans son CV) plutôt que
-                # d'afficher une fourchette brute tous niveaux confondus, qui pouvait laisser
-                # penser à tort que 60 000 € s'appliquait à un profil de quelques mois
-                # d'expérience alors que ce chiffre reflète le haut de l'échantillon (profils
-                # plus expérimentés), pas le profil du candidat.
+            if len(points_experience_salaire) >= 3:
+                df_points_silencieux = pd.DataFrame(points_experience_salaire)
+                coefficients = np.polyfit(df_points_silencieux["annees"], df_points_silencieux["salaire"], 1)
                 st.session_state["regression_salaire_experience"] = (
-                    pente, ordonnee_origine, annees_min, annees_max,
+                    coefficients[0], coefficients[1],
+                    df_points_silencieux["annees"].min(), df_points_silencieux["annees"].max(),
                 )
-
-                # --- Suggestion de salaire basée sur le profil du candidat ---
-                annees_experience_cv, nb_experiences_ignorees = calculer_annees_experience_cv(
-                    st.session_state.get("cv_experiences", [])
-                )
-                if not st.session_state.get("cv_experiences"):
-                    st.caption(
-                        "Ajoute tes expériences (avec leurs dates) dans l'onglet **🧾 Créer mon "
-                        "CV** pour obtenir une suggestion de salaire basée sur ton profil."
-                    )
-                else:
-                    salaire_suggere = pente * annees_experience_cv + ordonnee_origine
-                    hors_plage = not (annees_min <= annees_experience_cv <= annees_max)
-                    texte_avertissement_ignorees = (
-                        f" ({nb_experiences_ignorees} expérience(s) aux dates peu claires non "
-                        "comptabilisée(s))" if nb_experiences_ignorees else ""
-                    )
-                    st.markdown(
-                        f"**Avec {annees_experience_cv} an(s) d'expérience cumulée(s)**"
-                        f"{texte_avertissement_ignorees} **, le marché suggère environ "
-                        f"{salaire_suggere:,.0f} € brut annuel** pour ce métier, d'après la "
-                        "tendance ci-dessus.".replace(",", " ")
-                    )
-                    if hors_plage:
-                        st.caption(
-                            "⚠️ Ton expérience est en dehors de la plage observée dans "
-                            "l'échantillon — cette estimation est une extrapolation, à prendre "
-                            "avec plus de précaution."
-                        )
-                    st.caption(
-                        "Estimation approximative (dates d'expérience en texte libre, "
-                        "échantillon parfois restreint) — un repère de discussion, pas un "
-                        "chiffre garanti."
-                    )
 
 # ---------------------------------------------------------------------------
 # Onglet "Événements" — forums, salons, ateliers, job dating... via l'API
