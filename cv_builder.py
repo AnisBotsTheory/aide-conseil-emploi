@@ -333,11 +333,11 @@ def _section_sections_perso():
     Sections libres, ajoutées par l'utilisateur, affichées dans le bandeau
     latéral du CV au même titre que Langues/Compétences/Outils... Sert
     notamment à combler le vide de la colonne de gauche quand les sections
-    standards ne suffisent pas (ex: Savoir-être, Permis, Réseaux, Références).
+    standards ne suffisent pas (ex: Permis, Réseaux, Références, Bénévolat).
     """
     st.caption(
         "Ajoute tes propres sections dans le bandeau latéral si celles ci-dessus ne "
-        "suffisent pas (ex: Savoir-être, Permis, Réseaux, Références...)."
+        "suffisent pas (ex: Permis, Réseaux, Références, Bénévolat...)."
     )
 
     a_supprimer = None
@@ -1067,8 +1067,9 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
         "que vous visez (renseignez d'abord votre département, puis le poste).\n"
         "2. 🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
-        "renseigné : Top Recruteurs à démarcher, compétences et savoir-être les plus demandés, "
-        "dynamisme du département, et un plan d'action concret pour savoir par où commencer.\n"
+        "renseigné : Top Recruteurs à démarcher, compétences et actions/missions les plus "
+        "demandées, dynamisme du département, et un plan d'action concret pour savoir par "
+        "où commencer.\n"
         "3. 📊 **Compléments d'analyse** — pour aller plus loin : types de contrat, fourchette "
         "de salaire, niveau d'expérience demandé.\n"
         "4. 📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
@@ -1286,7 +1287,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         st.info(
             "💡 La colonne de gauche du CV (langues, compétences, outils...) risque d'avoir "
             "beaucoup de vide avec si peu d'éléments renseignés. Ajoute quelques langues, "
-            "compétences, ou crée une **section personnalisée** (ex: Savoir-être, Permis...) "
+            "compétences, ou crée une **section personnalisée** (ex: Permis, Bénévolat...) "
             "juste au-dessus pour mieux la remplir."
         )
 
