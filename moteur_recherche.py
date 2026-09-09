@@ -2987,6 +2987,23 @@ def _normaliser_experience_libelle(libelle_brut):
     return f"{mois_total} Mois"
 
 
+def _experience_en_annees(libelle_normalise):
+    """
+    Convertit un libellé d'expérience déjà normalisé (_normaliser_experience_libelle)
+    en valeur numérique d'années, pour construire un nuage de points
+    expérience/salaire. Retourne None si non convertible (ex: "Non précisé").
+    """
+    if libelle_normalise == "Débutant accepté":
+        return 0.0
+    correspondance = re.match(r"^(\d+)\s*An\(s\)$", libelle_normalise)
+    if correspondance:
+        return float(correspondance.group(1))
+    correspondance = re.match(r"^(\d+)\s*Mois$", libelle_normalise)
+    if correspondance:
+        return round(int(correspondance.group(1)) / 12, 2)
+    return None
+
+
 @st.cache_data(ttl=1800)
 def _agreger_contrats_et_salaires(toutes_offres):
     """
@@ -3016,6 +3033,10 @@ def _agreger_contrats_et_salaires(toutes_offres):
                     "Entreprise": _nom_entreprise_normalise(offre),
                     "Type de contrat": type_contrat,
                     "Salaire indiqué": libelle_salaire,
+                    # Ajouté pour construire le nuage de points expérience/salaire de
+                    # "Compléments d'analyse" — même libellé normalisé que celui utilisé
+                    # pour la répartition par niveau d'expérience, pas une donnée séparée.
+                    "Expérience requise": experience_libelle,
                 }
             )
 
@@ -3545,6 +3566,7 @@ __all__ = [
     "_formater_mois_fr",
     "evolution_offres_annuelle",
     "_agreger_contrats_et_salaires",
+    "_experience_en_annees",
     "repartition_contrats_et_salaires",
     "repartition_contrats_et_salaires_elargi",
     "_extraire_bornes_salaire",
