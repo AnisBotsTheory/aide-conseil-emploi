@@ -767,174 +767,145 @@ with tab_profil:
 
                 st.markdown("##### 🧠 Compétences")
                 st.caption("Tes compétences sont-elles à jour ?")
-                # --- Action 1 : compétences (soft skills) renseignées dans le CV ? ---
+                # --- Point 1 : au moins 6 compétences renseignées dans le CV ? ---
                 # Lit directement la sélection déjà faite dans "Créer mon CV" (widget
                 # _champ_liste_avec_ajout, clé "cv_competences_select") — aucune donnée recalculée.
                 competences_cv = st.session_state.get("cv_competences_select", [])
                 nb_comp = len(competences_cv)
-                NB_CIBLE_COMPETENCES = 6  # objectif minimal, pas seulement "au moins un élément"
-
-                st.markdown(
-                    "**Pourquoi c'est important :** les compétences sont un critère que les "
-                    "recruteurs recherchent en priorité dans une candidature — les renseigner "
-                    "(et les aligner avec la demande réelle du marché) augmente tes chances "
-                    "d'être identifié comme pertinent pour ce poste."
-                )
+                NB_CIBLE_COMPETENCES = 6
 
                 suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
                 df_comp_apercu, df_savoir_etre_apercu = None, None
                 if suggestions_apercu:
                     df_comp_apercu, _, _, _, df_savoir_etre_apercu, _ = suggestions_apercu
 
-                def _exemples_a_ajouter(df, deja_presents, nb_a_atteindre):
-                    """Libellés les plus demandés qui ne sont PAS déjà dans la liste du
-                    candidat, jusqu'à nb_a_atteindre exemples — sert à combler l'écart vers
-                    l'objectif de 5, ou à alimenter une comparaison une fois l'objectif atteint."""
-                    if df is None or df.empty or nb_a_atteindre <= 0:
-                        return []
-                    deja = {s.strip().lower() for s in deja_presents}
-                    return [lib for lib in df["libelle"] if lib.strip().lower() not in deja][:nb_a_atteindre]
-
                 nb_actions_affichees += 1
-
-                if nb_comp == 0:
-                    exemples = _exemples_a_ajouter(df_savoir_etre_apercu, competences_cv, NB_CIBLE_COMPETENCES)
-                    texte = f" Exemples pour ce métier : {', '.join(exemples)}." if exemples else ""
-                    st.warning(
-                        "**Aucune compétence renseignée dans ton CV.**"
-                        f"{texte} 👉 Vise au moins {NB_CIBLE_COMPETENCES} éléments dans l'onglet "
-                        "**🧾 Créer mon CV**."
-                    )
-                elif nb_comp < NB_CIBLE_COMPETENCES:
-                    exemples = _exemples_a_ajouter(
-                        df_savoir_etre_apercu, competences_cv, NB_CIBLE_COMPETENCES - nb_comp
-                    )
-                    suffixe = f" (exemples : {', '.join(exemples)})" if exemples else ""
-                    st.warning(
-                        f"**Encore un peu court** — {nb_comp}/{NB_CIBLE_COMPETENCES} compétences "
-                        f"renseignées{suffixe}. 👉 Complète dans l'onglet **🧾 Créer mon CV**."
+                if nb_comp >= NB_CIBLE_COMPETENCES:
+                    st.markdown(
+                        f"💡 Tu as renseigné **{nb_comp} compétences** dans ton CV — objectif "
+                        "atteint."
                     )
                 else:
-                    # Objectif atteint : au lieu de s'arrêter là, on compare avec ce que l'onglet
-                    # Expertise identifie comme le plus demandé pour ce métier, pour repérer
-                    # d'éventuelles compétences pertinentes que le candidat n'a pas pensé à
-                    # mentionner.
+                    st.markdown(
+                        f"💡 Tu as renseigné **{nb_comp} compétence(s)** dans ton CV — vise au "
+                        f"moins **{NB_CIBLE_COMPETENCES}** pour un CV bien référencé. 👉 "
+                        "Complète dans l'onglet **🧾 Créer mon CV**."
+                    )
+
+                # --- Point 2 : les 3 compétences les plus demandées sont-elles incluses ? ---
+                nb_actions_affichees += 1
+                if df_savoir_etre_apercu is not None and not df_savoir_etre_apercu.empty:
+                    top3_competences = set(df_savoir_etre_apercu["libelle"].head(3).str.strip().str.lower())
                     competences_cv_normalise = {s.strip().lower() for s in competences_cv}
-                    manquantes = []
-                    if df_savoir_etre_apercu is not None and not df_savoir_etre_apercu.empty:
-                        manquantes = [
-                            lib for lib in df_savoir_etre_apercu["libelle"].head(8)
-                            if lib.strip().lower() not in competences_cv_normalise
-                        ]
-                    if manquantes:
-                        st.info(
-                            "**Compétences déjà bien renseignées** dans ton CV. En les comparant "
-                            "à ce que l'onglet **🧠 Expertise** identifie comme le plus demandé "
-                            "pour ce métier, tu pourrais aussi envisager — "
-                            + ", ".join(manquantes[:3]) + ". 👉 À ajouter dans l'onglet "
-                            "**🧾 Créer mon CV** si ça correspond à ton profil."
+                    nb_top3_presentes = len(top3_competences & competences_cv_normalise)
+                    if nb_top3_presentes == 3:
+                        st.markdown(
+                            "💡 Tu as bien inclus les **3 compétences les plus demandées** pour "
+                            "ce métier — tu peux consulter le reste dans l'onglet **🧠 Expertise**."
                         )
                     else:
-                        st.success(
-                            "**Compétences bien renseignées** dans ton CV, et déjà alignées avec "
-                            "ce que le marché demande le plus pour ce métier — rien à compléter "
-                            "ici."
+                        st.markdown(
+                            f"💡 Tu as inclus {nb_top3_presentes}/3 des compétences les plus "
+                            "demandées pour ce métier. 👉 Consulte l'onglet **🧠 Expertise** pour "
+                            "identifier et ajouter les manquantes."
                         )
 
                 st.write("")
                 st.write("")
                 st.markdown("##### 🛠️ Actions/missions")
                 st.caption("Tes expériences couvrent-elles les missions attendues ?")
-                # --- Action 2 : les actions/missions les plus demandées apparaissent-elles
-                # dans le texte des expériences du CV ? ---
+                # --- Les actions/missions les plus demandées apparaissent-elles dans le texte
+                # des expériences du CV ? ---
                 # Contrairement aux compétences (des tags courts, adaptés à une liste à cocher),
                 # les actions/missions du référentiel France Travail sont formulées comme des
                 # tâches concrètes ("Piloter un budget") — plus naturel de vérifier si elles
                 # transparaissent DANS le texte des expériences que de les cocher séparément.
                 # Matching approximatif (rapidfuzz), pas une recherche de phrase exacte : les
                 # candidats reformulent presque toujours avec leurs propres mots.
-                st.markdown(
-                    "**Pourquoi c'est important :** France Travail formule souvent le "
-                    "savoir-faire du métier comme des actions/missions concrètes plutôt que "
-                    "des compétences isolées — les retrouver dans le texte de tes expériences "
-                    "(plutôt que comme une simple liste de tags) montre au recruteur que tu as "
-                    "réellement exercé ce qui est attendu sur ce poste."
-                )
-                st.caption(
-                    "ℹ️ Cette vérification regarde deux choses à la fois : si la mission est "
-                    "**présente** dans le texte, et **comment elle est formulée**. Si une "
-                    "mission ressort comme « à vérifier » ci-dessous alors que tu penses "
-                    "l'avoir déjà mentionnée, ce n'est pas forcément qu'elle est absente — ça "
-                    "peut aussi vouloir dire qu'elle gagnerait à être reformulée plus "
-                    "clairement, avec des mots plus proches de ceux utilisés par les "
-                    "recruteurs et les outils de tri par mots-clés."
-                )
-
                 if df_comp_apercu is not None and not df_comp_apercu.empty:
                     texte_experiences = " ".join(
                         (exp.get("description") or "") for exp in st.session_state.get("cv_experiences", [])
                     ).strip()
 
+                    nb_actions_affichees += 1
                     if not texte_experiences:
-                        nb_actions_affichees += 1
-                        exemples_actions = ", ".join(df_comp_apercu["libelle"].head(3))
-                        st.warning(
-                            "**Aucune expérience avec description de missions renseignée** — "
+                        st.markdown(
+                            "💡 Aucune expérience avec description de missions renseignée — "
                             "impossible de vérifier si tu couvres les actions/missions les plus "
-                            f"demandées (ex: {exemples_actions}). 👉 Ajoute au moins une "
-                            "expérience avec ses missions dans l'onglet **🧾 Créer mon CV**."
+                            "demandées. 👉 Ajoute au moins une expérience avec ses missions dans "
+                            "l'onglet **🧾 Créer mon CV**, puis consulte l'onglet **🧠 Expertise** "
+                            "pour voir lesquelles sont les plus demandées."
                         )
                     else:
-                        nb_actions_affichees += 1
                         SEUIL_MATCH_FLOU = 55  # matching approximatif, pas une phrase exacte
                         texte_experiences_normalise = texte_experiences.lower()
                         top_actions = df_comp_apercu["libelle"].head(8).tolist()
-                        actions_non_identifiees = [
-                            action for action in top_actions
-                            if fuzz.partial_ratio(action.lower(), texte_experiences_normalise) < SEUIL_MATCH_FLOU
-                        ]
-                        if actions_non_identifiees:
-                            st.warning(
-                                "**Ces actions/missions gagneraient à être clarifiées dans tes "
-                                "expériences** (absentes, ou formulées trop différemment pour "
-                                "être reconnues) : "
-                                + ", ".join(actions_non_identifiees[:4]) + ". 👉 Si tu les as "
-                                "réellement exercées, reformule-les dans tes descriptions de "
-                                "mission (onglet **🧾 Créer mon CV**) en te rapprochant de ces "
-                                "termes plutôt que de les laisser implicites."
+                        nb_identifiees = sum(
+                            1 for action in top_actions
+                            if fuzz.partial_ratio(action.lower(), texte_experiences_normalise) >= SEUIL_MATCH_FLOU
+                        )
+                        if nb_identifiees == len(top_actions):
+                            st.markdown(
+                                "💡 Bravo, tes expériences couvrent déjà (au moins "
+                                "approximativement) les actions/missions les plus demandées pour "
+                                "ce métier."
                             )
                         else:
-                            st.success(
-                                "**Tes expériences couvrent déjà (au moins approximativement) "
-                                "les actions/missions les plus demandées** pour ce métier — rien "
-                                "à compléter ici."
+                            st.markdown(
+                                f"💡 {nb_identifiees}/{len(top_actions)} des actions/missions les "
+                                "plus demandées semblent déjà apparaître dans tes expériences "
+                                "(vérification approximative, par ressemblance de texte). 👉 "
+                                "Complète tes descriptions de mission dans l'onglet **🧾 Créer "
+                                "mon CV**, et consulte l'onglet **🧠 Expertise** pour voir la "
+                                "liste complète."
                             )
 
                 st.write("")
                 st.write("")
                 st.markdown("##### 🏢 Recruteurs")
                 st.caption("Des entreprises à contacter ?")
-                # --- Action 3 : des recruteurs actifs identifiés pour ce poste ? ---
                 # Réutilise directement df_entreprises déjà récupéré dans le sous-onglet
                 # "Top Recruteurs" ci-dessus (même appel, mêmes paramètres) plutôt que de
-                # relancer un second appel identique. Noms d'entreprises volontairement PAS
-                # cités ici (certains sont anonymisés, une liste de 2-3 noms mélangeant une
-                # vraie entreprise et "Nom de l'entreprise anonymisé" n'avait pas de sens) —
-                # le détail complet reste dans le sous-onglet dédié.
-                if not df_entreprises.empty:
-                    nb_actions_affichees += 1
-                    st.info(
-                        f"**{len(df_entreprises)} entreprise(s) recrutent activement** sur ce "
-                        "métier et ce département. 👉 Consulte le sous-onglet **🏢 Top "
-                        "Recruteurs** pour candidater directement ou t'en inspirer pour une "
-                        "candidature spontanée."
+                # relancer un second appel identique. "Nom de l'entreprise anonymisé" exclu du
+                # COMPTE (ce n'est pas une entreprise identifiable à cibler). Complété par les
+                # entreprises à fort potentiel (La Bonne Boîte) pour les candidatures spontanées
+                # — rechercher_entreprises_potentiel_embauche est mise en cache (@st.cache_data),
+                # donc cet appel réutilise le résultat déjà récupéré dans "Top Recruteurs" sans
+                # nouvelle requête réseau.
+                nb_actions_affichees += 1
+                df_entreprises_nommees = (
+                    df_entreprises[
+                        df_entreprises["entreprise"].str.strip().str.lower() != "nom de l'entreprise anonymisé"
+                    ] if not df_entreprises.empty else df_entreprises
+                )
+                nb_recruteurs_actifs = len(df_entreprises_nommees)
+
+                entreprises_potentiel_action = (
+                    rechercher_entreprises_potentiel_embauche(codes_resolus_cv, departement_actif)
+                    if codes_resolus_cv else None
+                )
+                nb_potentiel = len(entreprises_potentiel_action) if entreprises_potentiel_action else 0
+
+                if nb_recruteurs_actifs == 0 and nb_potentiel == 0:
+                    st.markdown(
+                        "💡 Aucune entreprise identifiable pour cibler tes candidatures pour "
+                        "l'instant sur ce métier et ce département — essaie avec un département "
+                        "ou un poste plus large."
+                    )
+                else:
+                    st.markdown(
+                        f"💡 **{nb_recruteurs_actifs} entreprise(s)** recrutent actuellement sur "
+                        "ce métier dans ton département — à cibler en priorité pour tes "
+                        f"candidatures. **{nb_potentiel} entreprise(s)** supplémentaire(s) ont un "
+                        "fort potentiel de recrutement (même sans offre publiée) — une piste "
+                        "pour des candidatures spontanées. 👉 Détail dans le sous-onglet "
+                        "**🏢 Top Recruteurs**."
                     )
 
                 st.write("")
                 st.write("")
                 st.markdown("##### 💰 Salaire")
                 st.caption("Quel salaire viser ?")
-                # --- Action 4 : fourchette de salaire observée (repère de négociation) ---
                 # Relit "avance_resultats", déjà calculé par l'onglet "Compléments d'analyse"
                 # (celui-ci s'exécute avant dans le script, donc la valeur lue ici vient du
                 # run précédent — acceptable, comme pour jours_max_periode_offres : ne change
@@ -963,18 +934,17 @@ with tab_profil:
                         if valeurs_action:
                             nb_actions_affichees += 1
                             texte_salaire_action = (
-                                f"**Fourchette de salaire observée : {min(valeurs_action):,.0f} € à "
-                                f"{max(valeurs_action):,.0f} € brut annuel** (offres CDI avec salaire "
-                                "indiqué) — utile comme repère pour préparer une négociation. 👉 "
-                                "Détail dans l'onglet **📊 Compléments d'analyse**."
+                                f"💡 Fourchette de salaire observée : **{min(valeurs_action):,.0f} € "
+                                f"à {max(valeurs_action):,.0f} € brut annuel** (offres CDI avec "
+                                "salaire indiqué) — un repère utile pour bien négocier. 👉 Détail "
+                                "dans l'onglet **📊 Compléments d'analyse**."
                             ).replace(",", " ")
-                            st.info(texte_salaire_action)
+                            st.markdown(texte_salaire_action)
 
                 st.write("")
                 st.write("")
                 st.markdown("##### 📅 Événements")
                 st.caption("Des événements à ne pas manquer ?")
-                # --- Action 5 : des événements pertinents à venir ? ---
                 with st.spinner("Vérification des événements à venir..."):
                     evenements_action, _, _ = rechercher_evenements_emploi(
                         codes_resolus_cv, departement_actif, jours_max=90
@@ -984,11 +954,12 @@ with tab_profil:
                     prochain = min(evenements_action, key=lambda e: e.get("dateEvenement") or "9999")
                     date_prochain = (prochain.get("dateEvenement") or "")[:10]
                     titre_prochain = prochain.get("titre") or "un événement"
-                    st.info(
-                        f"**{len(evenements_action)} événement(s)** (forums, salons, job dating) "
-                        f"prévu(s) dans les 90 prochains jours pour ce métier, dont « {titre_prochain} »"
-                        f"{f' le {date_prochain}' if date_prochain else ''}. 👉 Détail dans l'onglet "
-                        "**📅 Événements**."
+                    st.markdown(
+                        f"💡 **{len(evenements_action)} événement(s)** (forums, salons, job "
+                        f"dating) prévu(s) dans les 90 prochains jours dans ta région pour ce "
+                        f"métier, dont « {titre_prochain} »"
+                        f"{f' le {date_prochain}' if date_prochain else ''}. 👉 Détail dans "
+                        "l'onglet **📅 Événements**."
                     )
                 # Pas d'événement trouvé : on ne l'affiche pas comme un manque — l'absence
                 # d'événement sur 90 jours est fréquente et ne reflète pas un problème côté
