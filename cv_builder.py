@@ -16,6 +16,7 @@ import streamlit as st
 import re
 import os
 import requests
+from datetime import date
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -1394,3 +1395,85 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 file_name=f"CV_{prenom}_{nom}{'' if langue_choisie == 'FR' else '_' + langue_choisie}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
+
+
+# ---------------------------------------------------------------------------
+# Calcul du nombre d'années d'expérience cumulées à partir du CV — utilisé
+# par "Compléments d'analyse" pour situer le profil de l'utilisateur sur la
+# courbe expérience/salaire et suggérer un salaire de marché.
+# ---------------------------------------------------------------------------
+_MOIS_FR_ABREGES = {
+    "jan": 1, "fev": 2, "fév": 2, "mar": 3, "avr": 4, "mai": 5, "jui": 6,
+    "jul": 7, "aou": 8, "aoû": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12, "déc": 12,
+}
+
+
+def _parser_mois_annee(texte):
+    """
+    Parse une date au format libre saisie par l'utilisateur dans les champs
+    Début/Fin d'une expérience (ex: "Jan. 2022", "Janvier 2022", "01/2022",
+    "2022") en (année, mois). Le mois est fixé à 6 (milieu d'année) si seule
+    l'année est identifiable, ou si le nom du mois n'est pas reconnu — ces
+    champs sont en texte libre, pas des sélecteurs de date structurés, donc
+    ce parsing reste approximatif par nature. Retourne None si rien
+    d'exploitable n'est trouvé (l'expérience est alors ignorée du calcul
+    plutôt que de fausser le total).
+    """
+    if not texte:
+        return None
+    texte = texte.strip().lower()
+
+    correspondance = re.match(r"^(\d{1,2})[/\-.](\d{4})$", texte)
+    if correspondance:
+        return int(correspondance.group(2)), int(correspondance.group(1))
+
+    correspondance = re.match(r"^(\d{4})$", texte)
+    if correspondance:
+        return int(correspondance.group(1)), 6
+
+    correspondance = re.match(r"^([a-zéûô]+)\.?\s+(\d{4})$", texte)
+    if correspondance:
+        annee = int(correspondance.group(2))
+        mois = _MOIS_FR_ABREGES.get(correspondance.group(1)[:3])
+        return annee, mois or 6
+
+    return None
+
+
+def calculer_annees_experience_cv(experiences):
+    """
+    Estime le nombre total d'années d'expérience professionnelle à partir des
+    dates saisies en texte libre dans les expériences du CV. Approximatif par
+    nature : dates non structurées, et chevauchements entre deux expériences
+    non détectés (somme brute des durées, pas une déduplication du calendrier
+    réel — pertinent seulement si les expériences ne se chevauchent pas,
+    ce qui est le cas courant sur un CV).
+
+    Retourne (total_annees, nb_experiences_ignorees) : les expériences dont
+    les dates ne sont pas exploitables sont ignorées plutôt que de fausser le
+    total, et leur nombre est renvoyé pour le signaler à l'utilisateur si non nul.
+    """
+    total_mois, nb_ignorees = 0, 0
+    aujourd_hui = date.today()
+    for exp in experiences or []:
+        debut = _parser_mois_annee(exp.get("date_debut", ""))
+        if debut is None:
+            nb_ignorees += 1
+            continue
+        annee_debut, mois_debut = debut
+
+        texte_fin = (exp.get("date_fin") or "").strip().lower()
+        if not texte_fin or "cours" in texte_fin:
+            annee_fin, mois_fin = aujourd_hui.year, aujourd_hui.month
+        else:
+            fin = _parser_mois_annee(texte_fin)
+            if fin is None:
+                nb_ignorees += 1
+                continue
+            annee_fin, mois_fin = fin
+
+        duree_mois = (annee_fin - annee_debut) * 12 + (mois_fin - mois_debut)
+        if duree_mois > 0:
+            total_mois += duree_mois
+
+    return round(total_mois / 12, 1), nb_ignorees
