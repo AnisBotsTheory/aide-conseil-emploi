@@ -1067,7 +1067,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "que vous visez (renseignez d'abord votre département, puis le poste).\n"
         "2. 🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
         "renseigné : Top Recruteurs à démarcher, compétences et savoir-être les plus demandés, "
-        "dynamisme du département.\n"
+        "dynamisme du département, et un plan d'action concret pour savoir par où commencer.\n"
         "3. 📊 **Compléments d'analyse** — pour aller plus loin : types de contrat, fourchette "
         "de salaire, niveau d'expérience demandé.\n"
         "4. 📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
