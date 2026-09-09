@@ -55,6 +55,11 @@ THEMES = {
         "bandeau_fond": "EAF2EA",
         "bandeau_texte": "2F5233",
     },
+    "🟤 Beige": {
+        "accent": "8B6F47",       # taupe/beige chaud, assez foncé pour rester lisible en texte
+        "bandeau_fond": "F5EFE6",
+        "bandeau_texte": "6B5335",
+    },
 }
 
 
@@ -409,9 +414,12 @@ def _definir_marges_cellule(cell, gauche=0.15, droite=0.15, haut=0.05, bas=0.05)
 def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0, espace_avant=12, encadre=False):
     """
     Ajoute un titre de section stylé (majuscules, gras, coloré). Si encadre=True,
-    ajoute un filet horizontal au-dessus ET en dessous du titre (utilisé pour les
+    ajoute un filet horizontal EN DESSOUS du titre uniquement (utilisé pour les
     titres de la colonne principale — "Expériences professionnelles", "Formation" —
-    afin de mieux les détacher visuellement du reste du contenu).
+    afin de mieux les détacher visuellement du reste du contenu). Un seul filet,
+    pas un au-dessus et un en dessous : deux filets encadrant un titre seul,
+    sans rapport avec un tableau ou un bloc englobant, alourdissaient inutilement
+    la mise en page.
     """
     p = cell_ou_doc.add_paragraph()
     p.paragraph_format.space_before = _pt(espace_avant, echelle)
@@ -419,13 +427,12 @@ def _titre_section(cell_ou_doc, texte, couleur_hex, taille=12, echelle=1.0, espa
     if encadre:
         pPr = p._p.get_or_add_pPr()
         bord = OxmlElement("w:pBdr")
-        for cote in ("top", "bottom"):
-            elem = OxmlElement(f"w:{cote}")
-            elem.set(qn("w:val"), "single")
-            elem.set(qn("w:sz"), "8")
-            elem.set(qn("w:space"), "4")
-            elem.set(qn("w:color"), couleur_hex)
-            bord.append(elem)
+        elem = OxmlElement("w:bottom")
+        elem.set(qn("w:val"), "single")
+        elem.set(qn("w:sz"), "8")
+        elem.set(qn("w:space"), "4")
+        elem.set(qn("w:color"), couleur_hex)
+        bord.append(elem)
         pPr.append(bord)
     run = p.add_run(texte.upper())
     run.bold = True
@@ -1084,18 +1091,13 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
     st.header("🧾 Créez votre CV")
     st.caption("Créez votre CV professionnel, prêt à l'emploi, au format Word.")
+    st.caption("ℹ️ La structure de ce CV s'inspire du format **Europass**.")
     st.markdown(
         "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
         "expériences, formations, compétences...), choisissez un thème de couleur, puis générez "
         "votre CV en un clic."
     )
     st.caption(
-        "ℹ️ La structure de ce CV s'inspire du format **Europass**, le modèle de référence "
-        "reconnu par la Commission européenne, avec quelques adaptations pour les usages "
-        "français actuels (ex: pas de date de naissance, nationalité ou genre, conformément "
-        "aux bonnes pratiques anti-discrimination)."
-    )
-    st.markdown(
         "**Le parcours complet de l'application :**\n"
         "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
         "que vous visez (renseignez d'abord votre département, puis le poste).\n"
@@ -1108,6 +1110,9 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "4. 📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
         "département."
     )
+
+    st.divider()
+    st.markdown("##### 🎨 Paramètres du CV")
 
     theme_choisi = st.radio(
         "🎨 Thème de couleur",
@@ -1236,7 +1241,12 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         email = c3.text_input("Email", key="cv_email")
         telephone = c4.text_input("Téléphone", key="cv_telephone")
         adresse = st.text_input(
-            "Adresse", key="cv_adresse", placeholder="ex: 27 rue de Pologne, 13010 Marseille"
+            "Ville", key="cv_adresse", placeholder="ex: Marseille (13)",
+            help=(
+                "Ville et département suffisent — l'adresse complète n'est pas nécessaire au "
+                "stade du CV (bonne pratique anti-discrimination : évite le biais lié au "
+                "quartier ou à la rue précise)."
+            ),
         )
         # Catégories officielles harmonisées au niveau européen (directive 2006/126/CE) —
         # Europass consacre une rubrique dédiée au permis de conduire ("Driving licence"),
