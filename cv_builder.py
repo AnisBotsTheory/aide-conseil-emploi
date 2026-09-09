@@ -70,6 +70,7 @@ LANGUES_CV = {
 LIBELLES = {
     "FR": {
         "contact": "Contact", "email": "E-mail", "telephone": "Téléphone", "adresse": "Adresse",
+        "permis": "Permis de conduire",
         "langues": "Langues", "competences": "Compétences", "outils": "Outils informatiques",
         "langages": "Langages informatiques", "certifications": "Certifications", "interets": "Centres d'intérêt",
         "experiences": "Expériences professionnelles", "formation": "Formation",
@@ -77,6 +78,7 @@ LIBELLES = {
     },
     "EN-GB": {
         "contact": "Contact", "email": "Email", "telephone": "Phone", "adresse": "Address",
+        "permis": "Driving Licence",
         "langues": "Languages", "competences": "Skills", "outils": "IT Tools",
         "langages": "Programming Languages", "certifications": "Certifications", "interets": "Interests",
         "experiences": "Professional Experience", "formation": "Education",
@@ -84,6 +86,7 @@ LIBELLES = {
     },
     "ES": {
         "contact": "Contacto", "email": "Correo electrónico", "telephone": "Teléfono", "adresse": "Dirección",
+        "permis": "Permiso de conducir",
         "langues": "Idiomas", "competences": "Competencias", "outils": "Herramientas informáticas",
         "langages": "Lenguajes informáticos", "certifications": "Certificaciones", "interets": "Intereses",
         "experiences": "Experiencia profesional", "formation": "Formación",
@@ -161,6 +164,7 @@ def _estimer_volume_contenu(data):
     for form in data.get("formations", []):
         volume += 40
     volume += len(data.get("langues", ""))
+    volume += len(data.get("permis", ""))
     volume += len(data.get("competences", ""))
     volume += len(data.get("outils", ""))
     volume += len(data.get("langages_informatiques", ""))
@@ -615,6 +619,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         ("📧", libelles["email"], data.get("email")),
         ("📱", libelles["telephone"], data.get("telephone")),
         ("🏠", libelles["adresse"], data.get("adresse")),
+        ("🚗", libelles["permis"], data.get("permis")),
     ]:
         if valeur:
             p = cell_bandeau.add_paragraph()
@@ -1205,6 +1210,21 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         adresse = st.text_input(
             "Adresse", key="cv_adresse", placeholder="ex: 27 rue de Pologne, 13010 Marseille"
         )
+        # Catégories officielles harmonisées au niveau européen (directive 2006/126/CE) —
+        # Europass consacre une rubrique dédiée au permis de conduire ("Driving licence"),
+        # actuellement absente de notre CV en tant que champ à part entière (seulement
+        # suggérée comme exemple de section personnalisée) ; multiselect plutôt que
+        # dropdown à choix unique, une personne pouvant détenir plusieurs catégories.
+        permis_choisis = st.multiselect(
+            "Permis de conduire",
+            options=["AM", "A1", "A2", "A", "B1", "B", "BE", "C1", "C1E", "C", "CE", "D1", "D1E", "D", "DE"],
+            key="cv_permis",
+            help=(
+                "Facultatif. AM: cyclomoteur · A1/A2/A: motocyclette · B1: quadricycle lourd · "
+                "B: voiture · BE: voiture + remorque · C1/C1E/C/CE: poids lourd · "
+                "D1/D1E/D/DE: minibus/autocar."
+            ),
+        )
 
         profil = st.text_area(
             "Profil / accroche (2-3 phrases qui résument votre parcours et votre projet)",
@@ -1304,6 +1324,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "email": email,
                 "telephone": telephone,
                 "adresse": adresse,
+                "permis": ", ".join(permis_choisis) if permis_choisis else "",
                 "profil": profil,
                 "disponibilite": disponibilite,
                 "experiences": st.session_state.cv_experiences,
