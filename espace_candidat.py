@@ -36,22 +36,40 @@ import streamlit.components.v1 as components
 from cv_builder import afficher_generateur_cv, calculer_annees_experience_cv
 from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées
 
+st.markdown(
+    """
+    <style>
+    /* Plafonne la largeur du contenu principal en mode "wide" (au lieu de la pleine
+    largeur de l'écran) tout en le gardant collé au bandeau latéral (pas de centrage
+    automatique, qui recréerait un vide entre le bandeau et le contenu). */
+    .block-container {
+        max-width: 75% !important;
+        margin-left: 0 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("🎯 Aide, Conseil, Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
 
 with st.sidebar:
     st.caption(
-        "**Le parcours complet de l'application :**\n\n"
-        "🧾 **Créer mon CV** — construisez votre CV et définissez le poste que vous visez "
-        "(renseignez d'abord votre département, puis le poste).\n\n"
-        "🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
+        "<div style='text-align: justify;'>"
+        "<b>Le parcours complet de l'application :</b><br><br>"
+        "🧾 <b>Créer mon CV</b> — construisez votre CV et définissez le poste que vous visez "
+        "(renseignez d'abord votre département, puis le poste).<br><br>"
+        "🎯 <b>Analyse principale</b> — se lance automatiquement dès que votre poste est "
         "renseigné : Top Recruteurs à démarcher, compétences et actions/missions les plus "
         "demandées, dynamisme du département, et un plan d'action concret pour savoir par où "
-        "commencer.\n\n"
-        "📊 **Compléments d'analyse** — pour aller plus loin : types de contrat, fourchette "
-        "de salaire, niveau d'expérience demandé.\n\n"
-        "📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
+        "commencer.<br><br>"
+        "📊 <b>Compléments d'analyse</b> — pour aller plus loin : types de contrat, fourchette "
+        "de salaire, niveau d'expérience demandé.<br><br>"
+        "📅 <b>Événements</b> — forums, salons et job dating à venir sur votre métier et votre "
         "département."
+        "</div>",
+        unsafe_allow_html=True,
     )
 
 st.divider()
