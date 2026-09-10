@@ -20,7 +20,7 @@ jamais dans les fichiers de page eux-mêmes.
 
 import streamlit as st
 
-st.set_page_config(page_title="Aide Conseil Emploi", layout="centered")
+st.set_page_config(page_title="Aide Conseil Emploi", layout="wide")
 
 page_candidat = st.Page("espace_candidat.py", title="Espace Candidat", icon="🎯", default=True)
 
