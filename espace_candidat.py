@@ -38,6 +38,19 @@ from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partag
 
 st.title("🎯 Aide Conseil Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
+st.caption(
+    "**Le parcours complet de l'application :**\n"
+    "1. 🧾 **Créer mon CV** — construisez votre CV et définissez le poste que vous visez "
+    "(renseignez d'abord votre département, puis le poste).\n"
+    "2. 🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
+    "renseigné : Top Recruteurs à démarcher, compétences et actions/missions les plus "
+    "demandées, dynamisme du département, et un plan d'action concret pour savoir par où "
+    "commencer.\n"
+    "3. 📊 **Compléments d'analyse** — pour aller plus loin : types de contrat, fourchette "
+    "de salaire, niveau d'expérience demandé.\n"
+    "4. 📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
+    "département."
+)
 
 
 st.divider()
@@ -919,9 +932,12 @@ with tab_profil:
                     )
                 else:
                     # Repli : régression pas encore disponible (Compléments d'analyse jamais
-                    # ouvert pour cette recherche) ou aucune expérience renseignée dans le CV —
-                    # fourchette brute, avec la précision "tous niveaux confondus" pour ne pas
-                    # laisser croire qu'elle est déjà personnalisée au profil du candidat.
+                    # ouvert pour cette recherche, ou pas assez d'offres avec à la fois une
+                    # ancienneté ET un salaire exploitables pour cette recherche précise) ou
+                    # aucune expérience renseignée dans le CV — fourchette brute, avec la
+                    # précision "tous niveaux confondus" pour ne pas laisser croire qu'elle est
+                    # déjà personnalisée au profil du candidat.
+                    salaire_affiche = False
                     avance_resultats_action = st.session_state.get("avance_resultats")
                     if avance_resultats_action:
                         _, df_salaires_action, _, _, _ = avance_resultats_action
@@ -940,6 +956,7 @@ with tab_profil:
                             ]
                             if valeurs_action:
                                 nb_actions_affichees += 1
+                                salaire_affiche = True
                                 texte_salaire_action = (
                                     "💡 Fourchette de salaire observée, **tous niveaux "
                                     f"d'expérience confondus : {min(valeurs_action):,.0f} € à "
@@ -950,6 +967,19 @@ with tab_profil:
                                     "d'années d'expérience."
                                 ).replace(",", " ")
                                 st.caption(texte_salaire_action)
+
+                    # Filet de sécurité : cette section ne doit jamais rester totalement
+                    # silencieuse. Si aucune des branches ci-dessus n'a rien affiché (pas
+                    # encore de recherche sur "Compléments d'analyse", ou aucune offre CDI
+                    # avec salaire plausible pour cette recherche précise), on le dit
+                    # explicitement plutôt que de laisser un vide sans explication.
+                    if not salaire_affiche:
+                        nb_actions_affichees += 1
+                        st.caption(
+                            "💡 Pas encore de données de salaire disponibles pour cette "
+                            "recherche. 👉 Ouvre l'onglet **📊 Compléments d'analyse** pour "
+                            "lancer le calcul, puis reviens ici."
+                        )
 
                 st.write("")
                 st.write("")
