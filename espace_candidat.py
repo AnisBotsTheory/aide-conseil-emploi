@@ -84,6 +84,35 @@ _VILLES_ARTICLE_OMIS = {
 }
 
 
+def _fourchette_salaire_par_experience_max(avance_resultats_val, annees_max_incluses):
+    """
+    Fourchette réelle (min, max) des salaires CDI plausibles (15 000 € -
+    200 000 €/an) parmi les offres dont l'ancienneté requise est <=
+    annees_max_incluses (ex: 1 pour couvrir "Débutant accepté" et "1 An(s)").
+    Utilisée pour donner un repère aux candidats sans expérience — une
+    fourchette OBSERVÉE sur de vraies offres, pas une extrapolation de
+    modèle, cohérent avec la philosophie du reste de l'app. Retourne None si
+    aucune donnée exploitable.
+    """
+    if not avance_resultats_val:
+        return None
+    _, df_salaires_val, _, _, _ = avance_resultats_val
+    df_cdi_val = (
+        df_salaires_val[df_salaires_val["Type de contrat"] == "CDI"]
+        if "Type de contrat" in df_salaires_val.columns else df_salaires_val.iloc[0:0]
+    )
+    valeurs = []
+    for _, ligne in df_cdi_val.iterrows():
+        annees_offre = _experience_en_annees(ligne.get("Expérience requise", ""))
+        if annees_offre is None or annees_offre > annees_max_incluses:
+            continue
+        borne_min, borne_max = _extraire_bornes_salaire(ligne["Salaire indiqué"])
+        for v in (borne_min, borne_max):
+            if v is not None and 15000 <= v <= 200000:
+                valeurs.append(v)
+    return (min(valeurs), max(valeurs)) if valeurs else None
+
+
 def _nom_ville_simplifie(libelle_brut):
     """
     Simplifie un libellé de lieu France Travail (souvent "code - Nom commune",
@@ -900,45 +929,92 @@ with tab_profil:
                 st.write("")
                 st.markdown("##### 💰 Salaire")
                 st.caption("Quel salaire viser ?")
-                # Relit "regression_salaire_experience", déjà calculée par l'onglet
-                # "Compléments d'analyse" (celui-ci s'exécute avant dans le script, donc la
-                # valeur lue ici vient du run précédent — acceptable, comme pour
-                # jours_max_periode_offres : ne change qu'après une nouvelle recherche).
-                # Priorité à une estimation PERSONNALISÉE au profil du candidat (années
-                # d'expérience cumulées dans son CV) plutôt qu'à la fourchette brute tous
-                # niveaux confondus — cette dernière pouvait laisser penser à tort qu'un haut
-                # de fourchette (ex: 60 000 €) s'appliquait à un profil de quelques mois
-                # d'expérience, alors qu'il reflète en réalité les profils les plus
-                # expérimentés de l'échantillon, pas celui du candidat.
+                # Relit "regression_salaire_experience" et "avance_resultats", déjà calculés
+                # par l'onglet "Compléments d'analyse" (celui-ci s'exécute avant dans le
+                # script, donc les valeurs lues ici viennent du run précédent — acceptable,
+                # comme pour jours_max_periode_offres : ne change qu'après une nouvelle
+                # recherche).
+                experiences_cv_action = st.session_state.get("cv_experiences", [])
+                annees_experience_cv_action, nb_ignorees_action = calculer_annees_experience_cv(
+                    experiences_cv_action
+                )
+                nb_experiences_utilisables_action = len(experiences_cv_action) - nb_ignorees_action
                 regression_salaire = st.session_state.get("regression_salaire_experience")
-                if regression_salaire and st.session_state.get("cv_experiences"):
-                    pente_action, ordonnee_action, annees_min_action, annees_max_action = regression_salaire
-                    annees_experience_cv_action, _ = calculer_annees_experience_cv(
-                        st.session_state.get("cv_experiences", [])
+                avance_resultats_action = st.session_state.get("avance_resultats")
+
+                salaire_affiche = False
+                afficher_repli_generique = True
+
+                if not experiences_cv_action:
+                    # Liste d'expériences totalement vide : peut vouloir dire "candidat
+                    # débutant" ou juste "CV pas encore rempli" — on ne devine pas, on
+                    # propose explicitement le cas via une case à cocher.
+                    st.caption("💡 Aucune expérience renseignée dans ton CV.")
+                    est_debutant = st.checkbox(
+                        "Je suis débutant, sans expérience professionnelle",
+                        key="salaire_est_debutant",
                     )
+                    if est_debutant:
+                        fourchette_debutant = _fourchette_salaire_par_experience_max(
+                            avance_resultats_action, annees_max_incluses=1
+                        )
+                        if fourchette_debutant:
+                            nb_actions_affichees += 1
+                            salaire_affiche = True
+                            afficher_repli_generique = False
+                            st.caption(
+                                "💡 Fourchette observée pour les profils débutants (0-1 an "
+                                f"d'expérience demandée) : **{fourchette_debutant[0]:,.0f} € à "
+                                f"{fourchette_debutant[1]:,.0f} € brut annuel** (offres CDI avec "
+                                "salaire indiqué) — un repère utile pour bien négocier."
+                                .replace(",", " ")
+                            )
+                elif nb_experiences_utilisables_action == 0:
+                    # Des expériences sont renseignées, mais AUCUNE n'a de date exploitable
+                    # (ni début renseigné, ni "En cours" coché côté fin) — pas de "0 an"
+                    # implicite qui sous-évaluerait le candidat : on l'explique et on
+                    # continue quand même vers la fourchette générale ci-dessous.
                     nb_actions_affichees += 1
+                    st.caption(
+                        "💡 Tes expériences n'ont pas encore de dates renseignées — impossible "
+                        "de calculer ton ancienneté. 👉 Complète les dates dans l'onglet "
+                        "**🧾 Créer mon CV** pour une estimation personnalisée."
+                    )
+                elif regression_salaire:
+                    # Priorité à une estimation PERSONNALISÉE au profil du candidat plutôt
+                    # qu'à la fourchette brute tous niveaux confondus — cette dernière pouvait
+                    # laisser penser à tort qu'un haut de fourchette (ex: 60 000 €) s'appliquait
+                    # à un profil de quelques mois d'expérience, alors qu'il reflète en réalité
+                    # les profils les plus expérimentés de l'échantillon, pas celui du candidat.
+                    pente_action, ordonnee_action, annees_min_action, annees_max_action = regression_salaire
+                    nb_actions_affichees += 1
+                    salaire_affiche = True
+                    afficher_repli_generique = False
                     salaire_suggere_action = pente_action * annees_experience_cv_action + ordonnee_action
                     hors_plage_action = not (annees_min_action <= annees_experience_cv_action <= annees_max_action)
                     texte_extrapolation = (
                         " (en dehors de l'échantillon observé, à prendre avec prudence)"
                         if hors_plage_action else ""
                     )
+                    texte_ignorees = (
+                        f" ({nb_ignorees_action} expérience(s) sans date exploitable non "
+                        "comptabilisée(s), estimation potentiellement sous-évaluée)"
+                        if nb_ignorees_action else ""
+                    )
                     st.caption(
                         f"💡 Avec **{annees_experience_cv_action} an(s) d'expérience** cumulée(s) "
-                        f"dans ton CV, le marché suggère environ "
+                        f"dans ton CV{texte_ignorees}, le marché suggère environ "
                         f"**{salaire_suggere_action:,.0f} € brut annuel** pour ce "
                         f"métier{texte_extrapolation} — un repère utile pour bien négocier. 👉 "
                         "Détail dans l'onglet **📊 Compléments d'analyse**.".replace(",", " ")
                     )
-                else:
+
+                if afficher_repli_generique:
                     # Repli : régression pas encore disponible (Compléments d'analyse jamais
                     # ouvert pour cette recherche, ou pas assez d'offres avec à la fois une
-                    # ancienneté ET un salaire exploitables pour cette recherche précise) ou
-                    # aucune expérience renseignée dans le CV — fourchette brute, avec la
+                    # ancienneté ET un salaire exploitables) — fourchette brute, avec la
                     # précision "tous niveaux confondus" pour ne pas laisser croire qu'elle est
                     # déjà personnalisée au profil du candidat.
-                    salaire_affiche = False
-                    avance_resultats_action = st.session_state.get("avance_resultats")
                     if avance_resultats_action:
                         _, df_salaires_action, _, _, _ = avance_resultats_action
                         df_salaires_cdi_action = (
