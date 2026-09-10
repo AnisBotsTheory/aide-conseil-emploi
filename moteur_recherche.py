@@ -261,6 +261,7 @@ def calculer_correspondance_recruteur(
 _DICTIONNAIRE_QUALITES_PROFESSIONNELLES = {
     "faire preuve d'autonomie": "Autonomie",
     "faire preuve de rigueur": "Rigueur",
+    "faire preuve de rigueur et de précision": "Rigueur et précision",
     "faire preuve de réactivité": "Réactivité",
     "faire preuve de persévérance": "Persévérance",
     "faire preuve de créativité": "Créativité",
@@ -276,6 +277,8 @@ _DICTIONNAIRE_QUALITES_PROFESSIONNELLES = {
     "organiser son travail selon les priorités et les objectifs": "Organisation",
     "travailler en équipe": "Travail d'équipe",
     "être à l'écoute, faire preuve d'empathie": "Écoute et empathie",
+    "être force de proposition": "Force de proposition",
+    "être ouvert aux changements": "Ouverture au changement",
 }
 
 
@@ -295,13 +298,25 @@ def _reformuler_qualite_professionnelle(phrase_brute):
     quelques gabarits de phrase récurrents ("Faire preuve de/d'...", "Avoir
     le/la/l'/de/du/des...", "Être...", "Savoir...") — on retire le préfixe
     verbal (et un article résiduel type "un/une/le/la/de/du/des/l'") pour ne
-    garder que la partie nominale. Repli imparfait par construction : une
-    phrase qui ne suit aucun de ces gabarits reste affichée telle quelle
+    garder que la partie nominale. Un nettoyage supplémentaire retire aussi
+    un "faire preuve de/d'" ou "être " résiduel plus loin dans la phrase (ex:
+    une deuxième proposition après une virgule, "Être à l'écoute, faire
+    preuve d'empathie") et un article parasite après "et" (ex: "rigueur ET DE
+    précision" -> "rigueur ET précision"). Repli imparfait par construction :
+    une phrase qui ne suit aucun de ces gabarits reste affichée telle quelle
     plutôt que d'être mal découpée.
     """
     phrase = (phrase_brute or "").strip().replace("’", "'")
     if not phrase:
         return phrase
+
+    # "Etre" sans accent sur la majuscule (pratique française courante, notamment sur
+    # des données générées automatiquement) -> normalisé vers "être" pour que le
+    # dictionnaire et les gabarits ci-dessous matchent dans les deux cas — sans ce
+    # correctif, "Etre force de proposition" ou "Etre ouvert aux changements" ne
+    # matchaient ni le dictionnaire ni le gabarit "^être...", et restaient affichés
+    # tels quels.
+    phrase = re.sub(r"^etre\b", "être", phrase, flags=re.IGNORECASE)
 
     correspondance = _DICTIONNAIRE_QUALITES_PROFESSIONNELLES.get(phrase.lower())
     if correspondance:
@@ -313,14 +328,22 @@ def _reformuler_qualite_professionnelle(phrase_brute):
         r"^être\s+(.+)$",
         r"^savoir\s+(.+)$",
     ]
+    reste = phrase
     for gabarit in gabarits:
-        correspondance_gabarit = re.match(gabarit, phrase, re.IGNORECASE)
+        correspondance_gabarit = re.match(gabarit, reste, re.IGNORECASE)
         if correspondance_gabarit:
             reste = correspondance_gabarit.group(1).strip()
             reste = re.sub(r"^(un|une|le|la|de|du|des)\s+", "", reste, flags=re.IGNORECASE)
             reste = re.sub(r"^l'", "", reste, flags=re.IGNORECASE).strip()
-            if reste:
-                return reste[0].upper() + reste[1:]
+            break
+
+    reste = re.sub(r"\bfaire preuve d[e']\s*", "", reste, flags=re.IGNORECASE)
+    reste = re.sub(r"\bêtre\s+", "", reste, flags=re.IGNORECASE)
+    reste = re.sub(r"\bet (?:de la |de l'|du |des |de |d')", "et ", reste, flags=re.IGNORECASE)
+    reste = reste.strip()
+
+    if reste and reste != phrase:
+        return reste[0].upper() + reste[1:]
     return phrase
 
 
