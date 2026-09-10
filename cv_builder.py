@@ -853,9 +853,12 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             run.font.size = _pt_avec_plancher(11, echelle)
 
             dates = f"{exp.get('date_debut', '')} - {exp.get('date_fin', '')}".strip(" -")
-            meta_parties = [x for x in [exp.get("entreprise", ""), dates] if x]
+            entreprise_maj = _majuscule_premiere_lettre(exp.get("entreprise", ""))
+            meta_parties = [x for x in [entreprise_maj, dates] if x]
             meta_texte = " | ".join(meta_parties)
-            lieu_pays = " · ".join(x for x in [exp.get("ville", ""), exp.get("pays", "")] if x)
+            ville_maj = _majuscule_premiere_lettre(exp.get("ville", ""))
+            pays_maj = _majuscule_premiere_lettre(exp.get("pays", ""))
+            lieu_pays = " · ".join(x for x in [ville_maj, pays_maj] if x)
             if lieu_pays:
                 meta_texte = f"{meta_texte} · {lieu_pays}" if meta_texte else lieu_pays
 
@@ -884,12 +887,15 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             p.paragraph_format.space_before = _pt(4, echelle)
             p.paragraph_format.space_after = Pt(0)
             diplome_maj = _majuscule_premiere_lettre(form.get("diplome", ""))
-            run = p.add_run(f"{diplome_maj} — {form.get('etablissement', '')}")
+            etablissement_maj = _majuscule_premiere_lettre(form.get("etablissement", ""))
+            run = p.add_run(f"{diplome_maj} — {etablissement_maj}")
             run.bold = True
             run.font.size = _pt_avec_plancher(10.5, echelle)
 
+            ville_form_maj = _majuscule_premiere_lettre(form.get("ville", ""))
+            pays_form_maj = _majuscule_premiere_lettre(form.get("pays", ""))
             meta = " · ".join(
-                x for x in [form.get("annee", ""), form.get("ville", ""), form.get("pays", "")] if x
+                x for x in [form.get("annee", ""), ville_form_maj, pays_form_maj] if x
             )
             if meta:
                 p_meta = cell_principale.add_paragraph()
@@ -1158,19 +1164,6 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
         "expériences, formations, compétences...), choisissez un thème de couleur, puis générez "
         "votre CV en un clic."
-    )
-    st.caption(
-        "**Le parcours complet de l'application :**\n"
-        "1. 🧾 **Créer mon CV** *(vous êtes ici)* — construisez votre CV et définissez le poste "
-        "que vous visez (renseignez d'abord votre département, puis le poste).\n"
-        "2. 🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
-        "renseigné : Top Recruteurs à démarcher, compétences et actions/missions les plus "
-        "demandées, dynamisme du département, et un plan d'action concret pour savoir par "
-        "où commencer.\n"
-        "3. 📊 **Compléments d'analyse** — pour aller plus loin : types de contrat, fourchette "
-        "de salaire, niveau d'expérience demandé.\n"
-        "4. 📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
-        "département."
     )
 
     st.divider()
