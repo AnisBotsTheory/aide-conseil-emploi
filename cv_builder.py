@@ -215,6 +215,18 @@ def _pt(base, echelle):
     return Pt(round(base * echelle * 2) / 2)
 
 
+def _pt_avec_plancher(base, echelle, plancher=8):
+    """
+    Comme _pt, mais n'autorise pas la taille à descendre sous `plancher` points
+    — au-delà d'un certain volume de contenu, l'échelle automatique pouvait
+    réduire le texte des puces jusqu'à 5.5pt (illisible) sans aucune limite
+    basse. Utilisé pour le texte porté par le CANDIDAT (missions, centres
+    d'intérêt...), pas pour les titres de section qui ont leurs propres
+    tailles de base plus grandes et moins sensibles à ce risque.
+    """
+    return Pt(max(plancher, round(base * echelle * 2) / 2))
+
+
 # ---------------------------------------------------------------------------
 # Initialisation de l'état
 # ---------------------------------------------------------------------------
@@ -235,8 +247,29 @@ def _init_cv_state():
 def _section_experiences():
     st.markdown("#### 💼 Expériences professionnelles")
 
+    suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
+    df_comp_suggestions = None
+    if suggestions_apercu:
+        df_comp_suggestions, _, _, _, _, _ = suggestions_apercu
+
     a_supprimer = None
     for i, exp in enumerate(st.session_state.cv_experiences):
+        # Une mission ajoutée au tour précédent (bouton "Ajouter les missions
+        # sélectionnées" plus bas) est fusionnée ICI, AVANT la création du widget
+        # text_area de description — même contrainte que pour
+        # _champ_liste_avec_ajout : écrire dans st.session_state après que le
+        # widget a déjà été instancié dans le même run lève une
+        # StreamlitWidgetAlreadyInstantiatedError.
+        cle_missions_en_attente = f"exp_missions_en_attente_{i}"
+        if cle_missions_en_attente in st.session_state:
+            lignes_a_ajouter = st.session_state.pop(cle_missions_en_attente)
+            lignes_existantes = [l.strip() for l in exp.get("description", "").split("\n") if l.strip()]
+            for ligne in lignes_a_ajouter:
+                if ligne not in lignes_existantes:
+                    lignes_existantes.append(ligne)
+            exp["description"] = "\n".join(lignes_existantes)
+            st.session_state[f"exp_description_{i}"] = exp["description"]
+
         with st.container(border=True):
             c1, c2 = st.columns(2)
             exp["poste"] = c1.text_input("Poste", value=exp.get("poste", ""), key=f"exp_poste_{i}")
@@ -256,12 +289,41 @@ def _section_experiences():
                 help="Format libre, ex: Déc. 2023, ou « En cours »",
             )
 
+            # Missions suggérées pour le poste CIBLÉ (même source que l'onglet Expertise,
+            # pas propre à l'intitulé de CETTE expérience passée) — aide à formuler une
+            # expérience déjà vécue avec les mots-clés que les recruteurs recherchent
+            # aujourd'hui pour le poste visé.
+            if df_comp_suggestions is not None and not df_comp_suggestions.empty:
+                top_missions = df_comp_suggestions["libelle"].head(8).tolist()
+                missions_choisies = st.multiselect(
+                    "💡 Missions suggérées pour le poste ciblé (optionnel)",
+                    options=top_missions,
+                    key=f"exp_missions_suggerees_{i}",
+                    help="Coche celles que tu as réellement exercées, puis clique sur Ajouter.",
+                )
+                if st.button("➕ Ajouter les missions sélectionnées", key=f"exp_ajouter_missions_{i}"):
+                    if missions_choisies:
+                        st.session_state[cle_missions_en_attente] = missions_choisies
+                        st.rerun()
+            else:
+                st.caption(
+                    "💡 Sélectionne un poste dans l'onglet **Analyse principale** pour voir "
+                    "apparaître ici des missions suggérées pour ce métier."
+                )
+
             exp["description"] = st.text_area(
                 "Missions / réalisations (une ligne = une puce)",
                 value=exp.get("description", ""),
                 key=f"exp_description_{i}",
                 height=100,
             )
+            nb_lignes_description = len([l for l in exp["description"].split("\n") if l.strip()])
+            if nb_lignes_description > 8:
+                st.caption(
+                    f"⚠️ {nb_lignes_description} missions renseignées — au-delà de 8, le CV "
+                    "risque de déborder d'une page ou d'utiliser une police trop petite pour "
+                    "rester lisible. Vise le plus percutant plutôt que l'exhaustif."
+                )
 
             if st.button("🗑️ Supprimer cette expérience", key=f"exp_supprimer_{i}"):
                 a_supprimer = i
@@ -455,7 +517,7 @@ def _puce(cell_ou_doc, texte, couleur_puce=None, taille=10, echelle=1.0, caracte
     # Espacement conforme à la valeur mesurée dans le format de référence (~3pt)
     p.paragraph_format.space_after = _pt(3, echelle)
     run = p.add_run(f"{caractere} {texte}")
-    run.font.size = _pt(taille, echelle)
+    run.font.size = _pt_avec_plancher(taille, echelle)
     if couleur_puce:
         run.font.color.rgb = RGBColor.from_string(couleur_puce)
     return p
@@ -788,7 +850,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             poste_maj = _majuscule_premiere_lettre(exp.get("poste", ""))
             run = p.add_run(poste_maj)
             run.bold = True
-            run.font.size = _pt(11, echelle)
+            run.font.size = _pt_avec_plancher(11, echelle)
 
             dates = f"{exp.get('date_debut', '')} - {exp.get('date_fin', '')}".strip(" -")
             meta_parties = [x for x in [exp.get("entreprise", ""), dates] if x]
@@ -802,7 +864,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
                 p_meta.paragraph_format.space_after = _pt(3, echelle)
                 run_meta = p_meta.add_run(meta_texte)
                 run_meta.italic = True
-                run_meta.font.size = _pt(9.5, echelle)
+                run_meta.font.size = _pt_avec_plancher(9.5, echelle)
                 run_meta.font.color.rgb = RGBColor.from_string(accent)
 
             description = exp.get("description", "").strip()
@@ -824,7 +886,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             diplome_maj = _majuscule_premiere_lettre(form.get("diplome", ""))
             run = p.add_run(f"{diplome_maj} — {form.get('etablissement', '')}")
             run.bold = True
-            run.font.size = _pt(10.5, echelle)
+            run.font.size = _pt_avec_plancher(10.5, echelle)
 
             meta = " · ".join(
                 x for x in [form.get("annee", ""), form.get("ville", ""), form.get("pays", "")] if x
@@ -834,7 +896,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
                 p_meta.paragraph_format.space_after = _pt(2, echelle)
                 run_meta = p_meta.add_run(meta)
                 run_meta.italic = True
-                run_meta.font.size = _pt(9.5, echelle)
+                run_meta.font.size = _pt_avec_plancher(9.5, echelle)
                 run_meta.font.color.rgb = RGBColor.from_string(accent)
 
     buffer = BytesIO()
