@@ -36,22 +36,23 @@ import streamlit.components.v1 as components
 from cv_builder import afficher_generateur_cv, calculer_annees_experience_cv
 from moteur_recherche import *  # noqa: F401,F403 — fonctions de calcul partagées
 
-st.title("🎯 Aide Conseil Emploi")
+st.title("🎯 Aide, Conseil, Emploi")
 st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
-st.caption(
-    "**Le parcours complet de l'application :**\n"
-    "1. 🧾 **Créer mon CV** — construisez votre CV et définissez le poste que vous visez "
-    "(renseignez d'abord votre département, puis le poste).\n"
-    "2. 🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
-    "renseigné : Top Recruteurs à démarcher, compétences et actions/missions les plus "
-    "demandées, dynamisme du département, et un plan d'action concret pour savoir par où "
-    "commencer.\n"
-    "3. 📊 **Compléments d'analyse** — pour aller plus loin : types de contrat, fourchette "
-    "de salaire, niveau d'expérience demandé.\n"
-    "4. 📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
-    "département."
-)
 
+with st.sidebar:
+    st.caption(
+        "**Le parcours complet de l'application :**\n\n"
+        "🧾 **Créer mon CV** — construisez votre CV et définissez le poste que vous visez "
+        "(renseignez d'abord votre département, puis le poste).\n\n"
+        "🎯 **Analyse principale** — se lance automatiquement dès que votre poste est "
+        "renseigné : Top Recruteurs à démarcher, compétences et actions/missions les plus "
+        "demandées, dynamisme du département, et un plan d'action concret pour savoir par où "
+        "commencer.\n\n"
+        "📊 **Compléments d'analyse** — pour aller plus loin : types de contrat, fourchette "
+        "de salaire, niveau d'expérience demandé.\n\n"
+        "📅 **Événements** — forums, salons et job dating à venir sur votre métier et votre "
+        "département."
+    )
 
 st.divider()
 
