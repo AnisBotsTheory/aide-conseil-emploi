@@ -1218,7 +1218,11 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         "expériences, formations, compétences...), choisissez un thème de couleur, puis "
         "générez votre CV en un clic au format Word."
     )
-    st.caption("ℹ️ La structure de ce CV s'inspire du format **Europass**.")
+    st.caption(
+        "<div style='margin-bottom: 0;'>ℹ️ La structure de ce CV s'inspire du format "
+        "<b>Europass</b>.</div>",
+        unsafe_allow_html=True,
+    )
 
     st.divider()
     st.markdown("##### 🎨 Paramètres du CV")
