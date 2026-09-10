@@ -244,6 +244,56 @@ def _init_cv_state():
 # ---------------------------------------------------------------------------
 # Sections dynamiques (expériences / formations)
 # ---------------------------------------------------------------------------
+_MOIS_NOMS = [
+    "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
+]
+
+
+def _selecteur_periode(cle_prefixe, autoriser_en_cours=False):
+    """
+    Affiche un sélecteur de période structuré (Mois + Année pour le début, Mois +
+    Année pour la fin) plutôt qu'un champ texte libre — élimine l'ambiguïté de
+    format ("Jan. 2022" / "01/2022" / "2022") qui obligeait à un parsing
+    approximatif pour calculer une durée (voir calculer_annees_experience_cv) :
+    le calcul devient exact plutôt qu'une estimation.
+
+    Retourne (texte_debut, texte_fin) déjà formatés en chaînes lisibles (ex:
+    "Janvier 2022"), pour rester compatible avec le reste du code qui affiche
+    ces dates telles quelles sur le CV généré.
+
+    Si autoriser_en_cours=True, une case à cocher "En cours" remplace la
+    sélection de fin par le texte "En cours" et désactive les listes de fin.
+    """
+    annee_actuelle = date.today().year
+    annees_options = list(range(annee_actuelle + 1, annee_actuelle - 60, -1))
+
+    en_cours = False
+    if autoriser_en_cours:
+        en_cours = st.checkbox("En cours (pas encore de date de fin)", key=f"{cle_prefixe}_en_cours")
+
+    c1, c2, c3, c4 = st.columns(4)
+    mois_debut = c1.selectbox("Début — mois", ["—"] + _MOIS_NOMS, key=f"{cle_prefixe}_mois_debut")
+    annee_debut = c2.selectbox("Début — année", ["—"] + annees_options, key=f"{cle_prefixe}_annee_debut")
+    mois_fin = c3.selectbox(
+        "Fin — mois", ["—"] + _MOIS_NOMS, key=f"{cle_prefixe}_mois_fin", disabled=en_cours,
+    )
+    annee_fin = c4.selectbox(
+        "Fin — année", ["—"] + annees_options, key=f"{cle_prefixe}_annee_fin", disabled=en_cours,
+    )
+
+    def _formater(mois, annee):
+        if mois != "—" and annee != "—":
+            return f"{mois} {annee}"
+        if annee != "—":
+            return str(annee)
+        return ""
+
+    texte_debut = _formater(mois_debut, annee_debut)
+    texte_fin = "En cours" if en_cours else _formater(mois_fin, annee_fin)
+    return texte_debut, texte_fin
+
+
 def _section_experiences():
     st.markdown("#### 💼 Expériences professionnelles")
 
@@ -275,18 +325,16 @@ def _section_experiences():
             exp["poste"] = c1.text_input("Poste", value=exp.get("poste", ""), key=f"exp_poste_{i}")
             exp["entreprise"] = c2.text_input("Entreprise", value=exp.get("entreprise", ""), key=f"exp_entreprise_{i}")
 
-            c3, c4, c5, c6 = st.columns(4)
+            c3, c4 = st.columns(2)
             exp["ville"] = c3.text_input("Ville", value=exp.get("ville", ""), key=f"exp_ville_{i}")
             exp["pays"] = c4.text_input("Pays", value=exp.get("pays", ""), key=f"exp_pays_{i}")
-            # Libellés courts (une seule ligne) pour que les 4 champs restent alignés sur
-            # la même rangée — l'exemple de format passe en info-bulle plutôt que dans le
-            # libellé, qui se mettait sur 2 lignes et décalait "Fin" par rapport aux autres.
-            exp["date_debut"] = c5.text_input(
-                "Début", value=exp.get("date_debut", ""), key=f"exp_debut_{i}", help="Format libre, ex: Jan. 2022"
-            )
-            exp["date_fin"] = c6.text_input(
-                "Fin", value=exp.get("date_fin", ""), key=f"exp_fin_{i}",
-                help="Format libre, ex: Déc. 2023, ou « En cours »",
+
+            # Sélecteurs Mois/Année plutôt qu'un champ texte libre : élimine l'ambiguïté de
+            # format ("Jan. 2022" / "01/2022" / "2022") qui obligeait à un parsing
+            # approximatif pour calculer une durée — le calcul d'années d'expérience devient
+            # exact plutôt qu'une estimation.
+            exp["date_debut"], exp["date_fin"] = _selecteur_periode(
+                f"exp_periode_{i}", autoriser_en_cours=True
             )
 
             # Missions suggérées pour le poste CIBLÉ (même source que l'onglet Expertise,
@@ -347,10 +395,16 @@ def _section_formations():
             form["diplome"] = c1.text_input("Diplôme", value=form.get("diplome", ""), key=f"form_diplome_{i}")
             form["etablissement"] = c2.text_input("Établissement", value=form.get("etablissement", ""), key=f"form_etab_{i}")
 
-            c3, c4, c5 = st.columns(3)
+            c3, c4 = st.columns(2)
             form["ville"] = c3.text_input("Ville", value=form.get("ville", ""), key=f"form_ville_{i}")
             form["pays"] = c4.text_input("Pays", value=form.get("pays", ""), key=f"form_pays_{i}")
-            form["annee"] = c5.text_input("Année (ex: sept 2017 / oct 2018)", value=form.get("annee", ""), key=f"form_annee_{i}")
+
+            # Début ET fin désormais, comme pour les expériences (auparavant un seul champ
+            # "Année" en texte libre, insuffisant pour une formation en cours ou étalée sur
+            # plusieurs années).
+            form["date_debut"], form["date_fin"] = _selecteur_periode(
+                f"form_periode_{i}", autoriser_en_cours=True
+            )
 
             if st.button("🗑️ Supprimer cette formation", key=f"form_supprimer_{i}"):
                 a_supprimer = i
@@ -894,8 +948,9 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
             ville_form_maj = _majuscule_premiere_lettre(form.get("ville", ""))
             pays_form_maj = _majuscule_premiere_lettre(form.get("pays", ""))
+            periode_form = f"{form.get('date_debut', '')} - {form.get('date_fin', '')}".strip(" -")
             meta = " · ".join(
-                x for x in [form.get("annee", ""), ville_form_maj, pays_form_maj] if x
+                x for x in [periode_form, ville_form_maj, pays_form_maj] if x
             )
             if meta:
                 p_meta = cell_principale.add_paragraph()
@@ -1159,7 +1214,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
     st.header("🧾 Créez votre CV")
     st.caption(
-        "Comment ça marche ici : renseignez vos informations ci-dessous (coordonnées, "
+        "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
         "expériences, formations, compétences...), choisissez un thème de couleur, puis "
         "générez votre CV en un clic au format Word."
     )
@@ -1466,26 +1521,36 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 # par "Compléments d'analyse" pour situer le profil de l'utilisateur sur la
 # courbe expérience/salaire et suggérer un salaire de marché.
 # ---------------------------------------------------------------------------
+_MOIS_NOM_VERS_NUMERO = {nom.lower(): i + 1 for i, nom in enumerate(_MOIS_NOMS)}
+
 _MOIS_FR_ABREGES = {
-    "jan": 1, "fev": 2, "fév": 2, "mar": 3, "avr": 4, "mai": 5, "jui": 6,
-    "jul": 7, "aou": 8, "aoû": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12, "déc": 12,
+    "jan": 1, "fev": 2, "fév": 2, "mar": 3, "avr": 4, "mai": 5,
+    "aou": 8, "aoû": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12, "déc": 12,
+    # "jui" est ambigu entre juin et juillet (mêmes 3 premières lettres) — traité
+    # séparément ci-dessous plutôt que dans cette table, pour éviter la collision.
 }
 
 
 def _parser_mois_annee(texte):
     """
-    Parse une date au format libre saisie par l'utilisateur dans les champs
-    Début/Fin d'une expérience (ex: "Jan. 2022", "Janvier 2022", "01/2022",
-    "2022") en (année, mois). Le mois est fixé à 6 (milieu d'année) si seule
-    l'année est identifiable, ou si le nom du mois n'est pas reconnu — ces
-    champs sont en texte libre, pas des sélecteurs de date structurés, donc
-    ce parsing reste approximatif par nature. Retourne None si rien
-    d'exploitable n'est trouvé (l'expérience est alors ignorée du calcul
-    plutôt que de fausser le total).
+    Parse une date en (année, mois). Depuis l'introduction des sélecteurs
+    Mois/Année dans "Créer mon CV" (_selecteur_periode), le format généré est
+    toujours exact ("Janvier 2022") — vérifié en priorité ci-dessous, sans
+    ambiguïté puisqu'on connaît le nom complet exact. Les formats libres plus
+    anciens ("Jan. 2022", "01/2022", "2022") restent gérés en repli, pour
+    compatibilité, avec un parsing par nature moins fiable (mois fixé à 6,
+    milieu d'année, si seule l'année est identifiable ou si le nom du mois
+    n'est pas reconnu). Retourne None si rien d'exploitable n'est trouvé
+    (l'expérience est alors ignorée du calcul plutôt que de fausser le total).
     """
     if not texte:
         return None
     texte = texte.strip().lower()
+
+    # Nom de mois complet exact (généré par _selecteur_periode) — prioritaire, fiable.
+    correspondance = re.match(r"^([a-zéûô]+)\s+(\d{4})$", texte)
+    if correspondance and correspondance.group(1) in _MOIS_NOM_VERS_NUMERO:
+        return int(correspondance.group(2)), _MOIS_NOM_VERS_NUMERO[correspondance.group(1)]
 
     correspondance = re.match(r"^(\d{1,2})[/\-.](\d{4})$", texte)
     if correspondance:
@@ -1495,10 +1560,19 @@ def _parser_mois_annee(texte):
     if correspondance:
         return int(correspondance.group(1)), 6
 
+    # Repli sur une abréviation libre ("Jan.", "juil.", "déc."...) — mois éventuellement
+    # incertain (juin/juillet partagent "jui"), résolu explicitement ci-dessous plutôt
+    # que par une simple troncature à 3 lettres.
     correspondance = re.match(r"^([a-zéûô]+)\.?\s+(\d{4})$", texte)
     if correspondance:
         annee = int(correspondance.group(2))
-        mois = _MOIS_FR_ABREGES.get(correspondance.group(1)[:3])
+        mot_mois = correspondance.group(1)
+        if mot_mois.startswith("juil"):
+            mois = 7
+        elif mot_mois.startswith("juin"):
+            mois = 6
+        else:
+            mois = _MOIS_FR_ABREGES.get(mot_mois[:3])
         return annee, mois or 6
 
     return None
@@ -1506,16 +1580,17 @@ def _parser_mois_annee(texte):
 
 def calculer_annees_experience_cv(experiences):
     """
-    Estime le nombre total d'années d'expérience professionnelle à partir des
-    dates saisies en texte libre dans les expériences du CV. Approximatif par
-    nature : dates non structurées, et chevauchements entre deux expériences
-    non détectés (somme brute des durées, pas une déduplication du calendrier
-    réel — pertinent seulement si les expériences ne se chevauchent pas,
-    ce qui est le cas courant sur un CV).
+    Calcule le nombre total d'années d'expérience professionnelle à partir des
+    dates des expériences du CV, saisies via les sélecteurs Mois/Année
+    (_selecteur_periode) — donc exact pour ces dates, contrairement à un
+    parsing de texte libre. Reste néanmoins une SOMME BRUTE des durées, sans
+    déduplication du calendrier réel si deux expériences se chevauchent
+    (cas rare sur un CV, mais non détecté ici).
 
-    Retourne (total_annees, nb_experiences_ignorees) : les expériences dont
-    les dates ne sont pas exploitables sont ignorées plutôt que de fausser le
-    total, et leur nombre est renvoyé pour le signaler à l'utilisateur si non nul.
+    Retourne (total_annees, nb_experiences_ignorees) : une expérience dont le
+    début (ou la fin, si "En cours" n'est pas coché) n'a pas été renseigné est
+    ignorée plutôt que de fausser le total, et son décompte est renvoyé pour
+    le signaler à l'utilisateur si non nul.
     """
     total_mois, nb_ignorees = 0, 0
     aujourd_hui = date.today()
