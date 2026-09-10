@@ -40,11 +40,17 @@ st.markdown(
     """
     <style>
     /* Plafonne la largeur du contenu principal en mode "wide" (au lieu de la pleine
-    largeur de l'écran) tout en le gardant collé au bandeau latéral (pas de centrage
-    automatique, qui recréerait un vide entre le bandeau et le contenu). */
+    largeur de l'écran) tout en le gardant collé au bandeau latéral. Le centrage
+    observé venait du conteneur PARENT (flexbox avec alignement centré), pas de la
+    marge du bloc lui-même — "margin-left: 0" seul sur .block-container n'y changeait
+    donc rien : il faut aussi forcer l'alignement du parent à gauche. */
+    [data-testid="stMain"], .main {
+        align-items: flex-start !important;
+    }
     .block-container {
         max-width: 75% !important;
-        margin-left: 0 !important;
+        margin: 0 !important;
+        align-self: flex-start !important;
     }
     </style>
     """,
