@@ -715,9 +715,8 @@ with tab_profil:
                     "commencer."
                 )
                 st.caption(
-                    "5 points à passer en revue, dans cet ordre : ton CV (compétences, puis "
-                    "missions), les entreprises à contacter, un repère de salaire, et les "
-                    "événements à venir."
+                    "Voici 5 points à passer en revue en fonction des postes sélectionnés, ta "
+                    "région et tes années d'expérience."
                 )
 
                 nb_actions_affichees = 0
@@ -916,7 +915,7 @@ with tab_profil:
                             ]
                             valeurs_action = [
                                 v for bornes_paire in bornes_action for v in bornes_paire
-                                if v is not None and v >= 15000
+                                if v is not None and 15000 <= v <= 200000
                             ]
                             if valeurs_action:
                                 nb_actions_affichees += 1
@@ -1178,15 +1177,24 @@ with tab_avance:
                         if borne_max is not None:
                             toutes_valeurs.append(borne_max)
 
-                    # Seuil de plausibilité : un montant mensuel annualisé (×12) peut
+                    # Seuils de plausibilité : un montant mensuel annualisé (×12) peut
                     # légitimement donner un total très bas s'il s'agit en réalité d'une
                     # indemnité d'alternance/stage plutôt qu'un salaire de poste à temps
                     # plein (ex: 250 €/mois -> 3 000 €/an, mathématiquement correct mais
-                    # non représentatif du "salaire de ce métier") — exclu de la jauge pour
-                    # ne pas fausser la lecture, sans être un signe d'erreur de calcul.
-                    SEUIL_SALAIRE_PLAUSIBLE = 15000
+                    # non représentatif du "salaire de ce métier"). À l'inverse, un montant
+                    # très élevé (constaté : 400 000 €/450 000 € — cohérent avec un salaire
+                    # ANNUEL de 33 333 €/37 500 € multiplié par erreur par 12, la périodicité
+                    # "Mensuel" de l'offre étant probablement erronée à la source) est tout
+                    # aussi peu plausible. Les deux bornes sont exclues de la jauge pour ne
+                    # pas fausser la lecture, sans être un signe d'erreur de calcul de notre
+                    # côté.
+                    SEUIL_SALAIRE_PLAUSIBLE_MIN = 15000
+                    SEUIL_SALAIRE_PLAUSIBLE_MAX = 200000
                     nb_valeurs_avant_filtre = len(toutes_valeurs)
-                    toutes_valeurs = [v for v in toutes_valeurs if v >= SEUIL_SALAIRE_PLAUSIBLE]
+                    toutes_valeurs = [
+                        v for v in toutes_valeurs
+                        if SEUIL_SALAIRE_PLAUSIBLE_MIN <= v <= SEUIL_SALAIRE_PLAUSIBLE_MAX
+                    ]
                     nb_valeurs_exclues = nb_valeurs_avant_filtre - len(toutes_valeurs)
 
                     if not toutes_valeurs:
@@ -1194,9 +1202,11 @@ with tab_avance:
                     else:
                         if nb_valeurs_exclues:
                             st.caption(
-                                f"ℹ️ {nb_valeurs_exclues} montant(s) sous {SEUIL_SALAIRE_PLAUSIBLE:,.0f} €/an "
-                                "exclu(s) de la jauge (probable indemnité d'alternance/stage plutôt "
-                                "qu'un salaire de poste à temps plein).".replace(",", " ")
+                                f"ℹ️ {nb_valeurs_exclues} montant(s) hors de la plage "
+                                f"{SEUIL_SALAIRE_PLAUSIBLE_MIN:,.0f} € - {SEUIL_SALAIRE_PLAUSIBLE_MAX:,.0f} €/an "
+                                "exclu(s) de la jauge (probable indemnité d'alternance/stage, ou "
+                                "montant mal annualisé, plutôt qu'un salaire de poste réaliste)."
+                                .replace(",", " ")
                             )
                         # Pas d'arrondi calé dynamiquement sur l'étendue réelle des valeurs,
                         # plutôt qu'un arrondi fixe au 5 000 € — avec beaucoup d'offres, un pas
@@ -1288,7 +1298,12 @@ with tab_avance:
                 if annees is None:
                     continue
                 borne_min, borne_max = _extraire_bornes_salaire(ligne["Salaire indiqué"])
-                valeurs_bornes = [v for v in (borne_min, borne_max) if v is not None and v >= 15000]
+                # Mêmes seuils de plausibilité que la jauge (15 000 € - 200 000 €) — exclut à
+                # la fois les indemnités d'alternance/stage ET les montants mal annualisés
+                # (ex: 400 000 €/450 000 € constatés en usage réel — cohérent avec un salaire
+                # annuel de 33 333 €/37 500 € multiplié par erreur par 12), qui auraient sinon
+                # gravement faussé la régression et donc la suggestion personnalisée.
+                valeurs_bornes = [v for v in (borne_min, borne_max) if v is not None and 15000 <= v <= 200000]
                 if not valeurs_bornes:
                     continue
                 points_experience_salaire.append(
@@ -1296,11 +1311,25 @@ with tab_avance:
                 )
             if len(points_experience_salaire) >= 3:
                 df_points_silencieux = pd.DataFrame(points_experience_salaire)
-                coefficients = np.polyfit(df_points_silencieux["annees"], df_points_silencieux["salaire"], 1)
-                st.session_state["regression_salaire_experience"] = (
-                    coefficients[0], coefficients[1],
-                    df_points_silencieux["annees"].min(), df_points_silencieux["annees"].max(),
-                )
+                # Garde-fou : si toutes les offres exploitables ont la MÊME ancienneté
+                # requise (ex: uniquement des "Débutant accepté"), il n'y a aucune variance
+                # en abscisse — un ajustement linéaire est mathématiquement dégénéré
+                # (numpy peut renvoyer des coefficients NaN plutôt que lever une erreur
+                # explicite), ce qui produisait un résultat silencieusement invalide côté
+                # "Tes points d'attention" plutôt qu'un message clair. On stocke alors un
+                # repère plus simple : la pente à 0 (pas de tendance déductible), l'ordonnée
+                # à l'origine étant la moyenne observée.
+                if df_points_silencieux["annees"].nunique() < 2:
+                    st.session_state["regression_salaire_experience"] = (
+                        0.0, df_points_silencieux["salaire"].mean(),
+                        df_points_silencieux["annees"].min(), df_points_silencieux["annees"].max(),
+                    )
+                else:
+                    coefficients = np.polyfit(df_points_silencieux["annees"], df_points_silencieux["salaire"], 1)
+                    st.session_state["regression_salaire_experience"] = (
+                        coefficients[0], coefficients[1],
+                        df_points_silencieux["annees"].min(), df_points_silencieux["annees"].max(),
+                    )
 
 # ---------------------------------------------------------------------------
 # Onglet "Événements" — forums, salons, ateliers, job dating... via l'API
