@@ -158,6 +158,27 @@ with tab_profil:
             "(recherche par code ROME et fenêtre glissante ici, contre mots-clés libres et "
             "offres actives en temps réel sur France Travail)."
         )
+    # Réduit la taille du libellé de cet expander précis, pour qu'il reste visuellement en
+    # retrait par rapport aux intitulés des sous-onglets ("Tes points d'attention", "Top
+    # Recruteurs"...) juste en dessous — st.expander n'a pas de paramètre de taille de
+    # police natif, d'où ce ciblage par texte (même technique et même limite que l'effet
+    # lumineux sur l'onglet "Tes points d'attention" : pas une API officielle, à vérifier
+    # visuellement une fois déployé).
+    components.html(
+        """
+        <script>
+        (function() {
+            const resumes = window.parent.document.querySelectorAll('[data-testid="stExpander"] summary');
+            resumes.forEach(function(resume) {
+                if (resume.textContent.includes("À propos de cette analyse")) {
+                    resume.style.fontSize = "0.8rem";
+                }
+            });
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
     codes_par_poste_cv = st.session_state.get("cv_codes_par_poste", {})
     codes_resolus_cv = [c for c in codes_par_poste_cv.values() if c]
