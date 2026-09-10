@@ -58,7 +58,11 @@ st.markdown(
 )
 
 st.title("🎯 Aide, Conseil, Emploi")
-st.write("Orientation des chercheurs d'emploi selon les tendances du marché.")
+st.markdown(
+    "<p style='margin-bottom: 0;'>Orientation des chercheurs d'emploi selon les tendances "
+    "du marché.</p>",
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
     st.caption(
@@ -67,9 +71,9 @@ with st.sidebar:
         "🧾 <b>Créer mon CV</b> — construisez votre CV et définissez le poste que vous visez "
         "(renseignez d'abord votre département, puis le poste).<br><br>"
         "🎯 <b>Analyse principale</b> — se lance automatiquement dès que votre poste est "
-        "renseigné : Top Recruteurs à démarcher, compétences et actions/missions les plus "
-        "demandées, dynamisme du département, et un plan d'action concret pour savoir par où "
-        "commencer.<br><br>"
+        "renseigné : tes points d'attention comme point de départ, Top Recruteurs à "
+        "démarcher, compétences et actions/missions les plus demandées, et dynamisme du "
+        "département.<br><br>"
         "📊 <b>Compléments d'analyse</b> — pour aller plus loin : types de contrat, fourchette "
         "de salaire, niveau d'expérience demandé.<br><br>"
         "📅 <b>Événements</b> — forums, salons et job dating à venir sur votre métier et votre "
