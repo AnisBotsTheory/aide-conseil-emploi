@@ -61,20 +61,22 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Bannière décorative fixe, collée au bord DROIT de l'écran.
+# Bannière décorative fixe, positionnée dans l'espace VIDE à droite du contenu
+# (entre le bord droit de .block-container — qui ne fait que 75% de large,
+# cf. CSS ci-dessus — et le bord droit de la fenêtre), pas collée au bord de
+# la fenêtre elle-même.
 #
-# En Streamlit, la seule manière d'ajouter un élément visuel sans faire bouger
-# ni redimensionner quoi que ce soit d'existant (block-container, onglets,
-# bandeau latéral) est un élément en position "fixed" : il sort du flux normal
-# du document, donc aucun reflow n'est déclenché ailleurs sur la page.
+# Cet espace vide n'a pas une largeur fixe en pixels : elle dépend de la
+# largeur de la fenêtre ET de la présence/largeur du bandeau latéral gauche
+# (ouvert, fermé, redimensionné par l'utilisateur...) — impossible à calculer
+# de façon fiable en CSS pur. Un petit script mesure donc la position réelle
+# de .block-container au moment du rendu (getBoundingClientRect) et positionne
+# la bannière exactement dans l'espace restant à droite, recalculé à chaque
+# redimensionnement de fenêtre.
 #
-# L'image est encodée en base64 et injectée directement dans le HTML (pas de
-# dépendance à un hébergement externe ni à st.image, qui suit le flux normal
-# et ne peut pas être "collé" à un bord de la fenêtre).
-#
-# pointer-events: none sur le conteneur laisse les clics traverser jusqu'aux
-# éléments qui seraient en dessous (utile si un futur élément Streamlit venait
-# à occuper le même espace à droite).
+# La bannière reste en position: fixed (sort du flux normal) : aucun impact
+# sur block-container, les onglets ou le bandeau latéral. pointer-events: none
+# laisse les clics traverser jusqu'à ce qu'il pourrait y avoir en dessous.
 # ---------------------------------------------------------------------------
 _CHEMIN_BANNIERE_DROITE = Path(__file__).parent / "banniere_droite.jpg"
 if _CHEMIN_BANNIERE_DROITE.exists():
@@ -85,11 +87,10 @@ if _CHEMIN_BANNIERE_DROITE.exists():
         .banniere-droite-fixe {{
             position: fixed;
             top: 0;
-            right: 0;
             height: 100vh;
-            width: 70px;
             z-index: 999999;
             pointer-events: none;
+            display: none; /* affichée uniquement une fois positionnée par le script ci-dessous */
         }}
         .banniere-droite-fixe img {{
             height: 100%;
@@ -103,6 +104,44 @@ if _CHEMIN_BANNIERE_DROITE.exists():
         </div>
         """,
         unsafe_allow_html=True,
+    )
+    components.html(
+        """
+        <script>
+        (function() {
+            const MARGE = 14;       // petit espace entre le texte et la bannière, et entre la bannière et le bord
+            const LARGEUR_MIN = 40; // en dessous de cette largeur disponible, on masque plutôt que déformer
+
+            function positionnerBanniereDroite() {
+                const doc = window.parent.document;
+                const conteneur = doc.querySelector('.block-container');
+                const banniere = doc.querySelector('.banniere-droite-fixe');
+                if (!conteneur || !banniere) return;
+
+                const rectConteneur = conteneur.getBoundingClientRect();
+                const largeurFenetre = window.parent.innerWidth;
+                const gauche = rectConteneur.right + MARGE;
+                const largeurDisponible = largeurFenetre - gauche - MARGE;
+
+                if (largeurDisponible >= LARGEUR_MIN) {
+                    banniere.style.left = gauche + "px";
+                    banniere.style.width = largeurDisponible + "px";
+                    banniere.style.display = "block";
+                } else {
+                    banniere.style.display = "none";
+                }
+            }
+
+            positionnerBanniereDroite();
+            // Le layout Streamlit peut encore bouger juste après le premier rendu
+            // (polices, widgets...) — quelques recalculs différés pour rattraper ça.
+            setTimeout(positionnerBanniereDroite, 300);
+            setTimeout(positionnerBanniereDroite, 1000);
+            window.parent.addEventListener('resize', positionnerBanniereDroite);
+        })();
+        </script>
+        """,
+        height=0,
     )
 
 st.title("🎯 Aide, Conseil, Emploi")
