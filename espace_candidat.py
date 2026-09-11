@@ -76,7 +76,7 @@ st.markdown(
 # éléments qui seraient en dessous (utile si un futur élément Streamlit venait
 # à occuper le même espace à droite).
 # ---------------------------------------------------------------------------
-_CHEMIN_BANNIERE_DROITE = Path(__file__).parent / "assets" / "banniere_droite.jpg"
+_CHEMIN_BANNIERE_DROITE = Path(__file__).parent / "banniere_droite.jpg"
 if _CHEMIN_BANNIERE_DROITE.exists():
     _banniere_droite_b64 = base64.b64encode(_CHEMIN_BANNIERE_DROITE.read_bytes()).decode()
     st.markdown(
