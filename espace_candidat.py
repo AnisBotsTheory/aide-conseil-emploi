@@ -66,19 +66,17 @@ st.markdown(
 
 with st.sidebar:
     st.caption(
-        "<div style='text-align: justify;'>"
         "<b>Le parcours complet de l'application :</b><br><br>"
         "🧾 <b>Créer mon CV</b> — construisez votre CV et définissez le poste que vous visez "
         "(renseignez d'abord votre département, puis le poste).<br><br>"
         "🎯 <b>Analyse principale</b> — se lance automatiquement dès que votre poste est "
-        "renseigné : tes points d'attention comme point de départ, Top Recruteurs à "
-        "démarcher, compétences et actions/missions les plus demandées, et dynamisme du "
+        "renseigné : tes points d'attention comme point de départ, top recruteurs à "
+        "démarcher, compétences et tâches/missions les plus demandées, et dynamisme du "
         "département.<br><br>"
         "📊 <b>Compléments d'analyse</b> — pour aller plus loin : types de contrat, fourchette "
         "de salaire, niveau d'expérience demandé.<br><br>"
         "📅 <b>Événements</b> — forums, salons et job dating à venir sur votre métier et votre "
-        "département."
-        "</div>",
+        "département.",
         unsafe_allow_html=True,
     )
 
@@ -218,8 +216,8 @@ with tab_profil:
     )
     with st.expander("ℹ️ À propos de cette analyse"):
         st.caption(
-            "Elle n'a pas vocation à être une plateforme de recrutement. Pour consulter et "
-            "postuler aux offres correspondant à votre recherche, rendez-vous sur "
+            "Cette application n'a pas vocation à être une plateforme de recrutement. Pour "
+            "consulter et postuler aux offres correspondant à votre recherche, rendez-vous sur "
             f"[candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer par votre "
             "département une fois sur place)."
         )
@@ -377,7 +375,7 @@ with tab_profil:
             with sous_tab_recruteurs:
                 st.markdown(
                     "Deux façons de repérer une entreprise à contacter pour ce métier : celles "
-                    "qui recrutent **déjà visiblement**, et celles qui ont un **fort potentiel** "
+                    "qui recrutent **déjà actuellement**, et celles qui ont un **fort potentiel** "
                     "d'embauche même sans offre publiée."
                 )
                 with st.spinner("Récupération des recruteurs actifs..."):
@@ -493,19 +491,6 @@ with tab_profil:
                         )
                         st.dataframe(df_potentiel, use_container_width=True, hide_index=True)
 
-                with st.expander("🔧 Diagnostic technique La Bonne Boîte (temporaire)"):
-                    st.caption(
-                        "Teste directement l'appel API pour le(s) poste(s) et le département "
-                        "actuellement sélectionnés, et affiche la vraie réponse brute des deux "
-                        "endpoints (nombreEntreprise et recherche) — utile pour vérifier pourquoi "
-                        "une liste reste vide ou pour confirmer que l'intégration répond bien."
-                    )
-                    if st.button("Lancer le diagnostic", key="btn_diagnostic_lbb_tendance"):
-                        codes_diag = codes_resolus_cv if codes_resolus_cv else ["M1805"]
-                        with st.spinner("Test de l'appel La Bonne Boîte en cours..."):
-                            resultats_diag_lbb = diagnostiquer_la_bonne_boite(codes_diag, departement_actif)
-                        st.json(resultats_diag_lbb)
-
                 st.divider()
                 st.info(
                     "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
@@ -517,8 +502,8 @@ with tab_profil:
 
             with sous_tab_certifs:
                 st.markdown(
-                    "Ce que le marché demande réellement pour ce métier : certifications, "
-                    "compétences et actions/missions les plus citées dans les offres."
+                    "Besoin métier sur les offres identifiées : certifications, compétences "
+                    "et tâches/missions les plus citées dans les offres."
                 )
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
@@ -561,11 +546,9 @@ with tab_profil:
                     st.divider()
                     st.markdown("##### 🧠 Compétences les plus demandées")
                     st.caption(
-                        "ℹ️ Les compétences représentent les soft skills propres à chaque "
-                        "personne (comportement, posture professionnelle). Elles proviennent "
-                        "directement des annonces publiées sur France Travail pour le(s) "
-                        "poste(s) sélectionné(s) dans votre CV, sur le département renseigné. "
-                        f"Échantillon : **{nb_total_suggestions} offre(s)**."
+                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
+                        "Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
+                        f"**{nb_total_suggestions} offre(s)**."
                     )
                     if df_savoir_etre.empty:
                         st.info("Aucune compétence identifiée dans les offres de cet échantillon.")
@@ -578,39 +561,19 @@ with tab_profil:
                             hide_index=True,
                         )
 
-                    with st.expander("🔧 Diagnostic technique Compétences (temporaire)"):
-                        st.caption(
-                            "Récupère quelques offres brutes pour le poste actuel et affiche "
-                            "directement le contenu du champ 'qualitesProfessionnelles' tel que "
-                            "renvoyé par l'API — utile pour vérifier qu'il est bien rempli en pratique "
-                            "quand la liste ci-dessus reste vide."
-                        )
-                        if st.button("Lancer le diagnostic", key="btn_diagnostic_savoir_etre"):
-                            code_diag_se = codes_resolus_cv[0] if codes_resolus_cv else "M1805"
-                            with st.spinner("Récupération d'un échantillon d'offres..."):
-                                resultats_diag_se = diagnostiquer_savoir_etre(code_diag_se, departement_actif)
-                            st.json(resultats_diag_se)
-
                     st.divider()
-                    st.markdown("##### 🛠️ Actions/missions les plus demandées")
+                    st.markdown("##### 🛠️ Tâches/missions les plus demandées")
                     st.caption(
-                        "ℹ️ France Travail formule souvent ces éléments comme des actions ou "
-                        "missions concrètes plutôt que comme des compétences isolées (ex: "
-                        "« Piloter un budget », « Organiser un chantier ») — à retrouver plutôt "
-                        "reformulées dans le texte de tes expériences que comme une simple liste "
-                        "de tags (voir l'onglet **🧭 Par où commencer**, qui vérifie si elles "
-                        "apparaissent déjà dans tes expériences). Proviennent directement des "
-                        "annonces publiées sur France Travail pour le(s) poste(s) sélectionné(s) "
-                        "dans votre CV, sur le département renseigné (hors outils, langages et "
-                        f"certifications, affichés séparément). Échantillon : "
+                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
+                        "Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
                         f"**{nb_total_suggestions} offre(s)**."
                     )
                     if df_comp.empty:
-                        st.info("Aucune action/mission identifiée dans les offres de cet échantillon.")
+                        st.info("Aucune tâche/mission identifiée dans les offres de cet échantillon.")
                     else:
                         st.dataframe(
                             df_comp.drop(columns=["pourcentage"]).rename(
-                                columns={"libelle": "Action/mission", "nombre_offres": "Occurrences"}
+                                columns={"libelle": "Tâche/mission", "nombre_offres": "Occurrences"}
                             ),
                             use_container_width=True,
                             hide_index=True,
@@ -775,17 +738,6 @@ with tab_profil:
                     )
                     st.plotly_chart(fig_dyn, use_container_width=True)
 
-                    with st.expander("🔧 Diagnostic technique Dynamisme (temporaire)"):
-                        st.caption(
-                            "Teste directement l'appel API pour ton département et affiche le "
-                            "statut HTTP et la réponse brute — utile pour confirmer que l'appel se "
-                            "déroule bien plutôt que de se fier uniquement à la valeur affichée."
-                        )
-                        if st.button("Lancer le diagnostic", key="btn_diagnostic_dynamisme"):
-                            with st.spinner("Test de l'appel Dynamisme en cours..."):
-                                resultats_diag_dyn = diagnostiquer_dynamisme_territoire(departement_actif)
-                            st.json(resultats_diag_dyn)
-
             # -----------------------------------------------------------------
             # Sous-onglet "Plan d'action" — déplacé ici depuis un onglet racine
             # séparé : il n'exécute AUCUN nouveau calcul, relit les mêmes
@@ -801,12 +753,6 @@ with tab_profil:
             # -----------------------------------------------------------------
             with sous_tab_action:
                 st.caption(
-                    "Ce que ces résultats suggèrent concrètement de faire, à partir des mêmes "
-                    "données que les sous-onglets précédents — pas une recommandation « boîte "
-                    "noire », juste une lecture directe de ta recherche pour savoir par où "
-                    "commencer."
-                )
-                st.caption(
                     "Voici 5 points à passer en revue en fonction des postes sélectionnés, ta "
                     "région et tes années d'expérience."
                 )
@@ -814,7 +760,7 @@ with tab_profil:
                 nb_actions_affichees = 0
 
                 st.markdown("##### 🧠 Compétences")
-                st.caption("Tes compétences sont-elles à jour ?")
+                st.caption("As-tu mis en évidence toutes tes compétences ?")
                 # --- Point 1 : au moins 6 compétences renseignées dans le CV ? ---
                 # Lit directement la sélection déjà faite dans "Créer mon CV" (widget
                 # _champ_liste_avec_ajout, clé "cv_competences_select") — aucune donnée recalculée.
@@ -860,7 +806,7 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
-                st.markdown("##### 🛠️ Actions/missions")
+                st.markdown("##### 🛠️ Tâches/missions")
                 st.caption("Tes expériences couvrent-elles les missions attendues ?")
                 # --- Les actions/missions les plus demandées apparaissent-elles dans le texte
                 # des expériences du CV ? ---
@@ -879,7 +825,7 @@ with tab_profil:
                     if not texte_experiences:
                         st.caption(
                             "💡 Aucune expérience avec description de missions renseignée — "
-                            "impossible de vérifier si tu couvres les actions/missions les plus "
+                            "impossible de vérifier si tu couvres les tâches/missions les plus "
                             "demandées. 👉 Ajoute au moins une expérience avec ses missions dans "
                             "l'onglet **🧾 Créer mon CV**, puis consulte l'onglet **🧠 Expertise** "
                             "pour voir lesquelles sont les plus demandées."
@@ -895,12 +841,12 @@ with tab_profil:
                         if nb_identifiees == len(top_actions):
                             st.caption(
                                 "💡 Bravo, tes expériences couvrent déjà (au moins "
-                                "approximativement) les actions/missions les plus demandées pour "
+                                "approximativement) les tâches/missions les plus demandées pour "
                                 "ce métier."
                             )
                         else:
                             st.caption(
-                                f"💡 {nb_identifiees}/{len(top_actions)} des actions/missions les "
+                                f"💡 {nb_identifiees}/{len(top_actions)} des tâches/missions les "
                                 "plus demandées semblent déjà apparaître dans tes expériences "
                                 "(vérification approximative, par ressemblance de texte). 👉 "
                                 "Complète tes descriptions de mission dans l'onglet **🧾 Créer "
@@ -1204,11 +1150,13 @@ with tab_avance:
                 polices_contrats = [
                     round(10 + 8 * ((v / valeur_max) ** 0.5), 1) for v in tailles_base
                 ]
-                # Écartement horizontal entre sphères (x2.4, au lieu de positions 0,1,2...) pour
-                # garantir un espace visible entre elles même quand il y a plusieurs types de
-                # contrat — sans ça, des sphères voisines se touchaient ou se chevauchaient
-                # (constaté avec 5 types de contrat affichés simultanément).
-                positions_x = [i * 2.4 for i in range(len(df_contrats_tri))]
+                # Écartement horizontal entre sphères, ADAPTATIF à la taille de l'échantillon :
+                # un écart fixe (2.4) pensé pour de gros échantillons laissait un vide
+                # disproportionné entre de petites sphères (valeur max < 15, donc des cercles
+                # physiquement petits qui n'ont pas besoin d'autant d'espace pour ne pas se
+                # toucher) — réduit à 1.4 dans ce cas.
+                ecart_x = 2.4 if valeur_max >= 15 else 1.4
+                positions_x = [i * ecart_x for i in range(len(df_contrats_tri))]
                 fig_contrats = go.Figure(
                     go.Scatter(
                         x=positions_x,
@@ -1585,14 +1533,3 @@ with tab_evenements:
                     "Lien": st.column_config.LinkColumn("Lien", display_text="Voir la fiche")
                 },
             )
-
-        with st.expander("🔧 Diagnostic technique Événements emploi (temporaire)"):
-            st.caption(
-                "Teste directement l'appel API pour le poste et le département actuellement "
-                "sélectionnés, et affiche la vraie réponse brute — utile pour vérifier "
-                "pourquoi une liste reste vide ou pour confirmer que l'intégration répond bien."
-            )
-            if st.button("Lancer le diagnostic", key="btn_diagnostic_evenements"):
-                with st.spinner("Test de l'appel Événements en cours..."):
-                    resultats_diag_evt = diagnostiquer_evenements(codes_resolus_evt, departement_evt)
-                st.json(resultats_diag_evt)
