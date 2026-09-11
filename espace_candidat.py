@@ -495,9 +495,7 @@ with tab_profil:
                 st.info(
                     "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
                     "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
-                    "(source : Apec, « Pratiques de recrutement des cadres » 2026). Nous n'avons pas "
-                    "trouvé de repère aussi solidement sourcé pour les postes non-cadres — à prendre "
-                    "avec prudence si tu cherches un point de comparaison sur ce type de poste."
+                    "(source : Apec, « Pratiques de recrutement des cadres » 2026)."
                 )
 
             with sous_tab_certifs:
@@ -782,8 +780,9 @@ with tab_profil:
                 else:
                     st.caption(
                         f"💡 Tu as renseigné **{nb_comp} compétence(s)** dans ton CV — vise au "
-                        f"moins **{NB_CIBLE_COMPETENCES}** pour un CV bien référencé. 👉 "
-                        "Complète dans l'onglet **🧾 Créer mon CV**."
+                        f"moins **{NB_CIBLE_COMPETENCES}** pour un CV bien référencé. <br>👉 "
+                        "Complète dans l'onglet **🧾 Créer mon CV**.",
+                        unsafe_allow_html=True,
                     )
 
                 # --- Point 2 : les 3 compétences les plus demandées sont-elles incluses ? ---
@@ -800,8 +799,9 @@ with tab_profil:
                     else:
                         st.caption(
                             f"💡 Tu as inclus {nb_top3_presentes}/3 des compétences les plus "
-                            "demandées pour ce métier. 👉 Consulte l'onglet **🧠 Expertise** pour "
-                            "identifier et ajouter les manquantes."
+                            "demandées pour ce métier. <br>👉 Consulte l'onglet **🧠 Expertise** pour "
+                            "identifier et ajouter les manquantes.",
+                            unsafe_allow_html=True,
                         )
 
                 st.write("")
@@ -826,9 +826,10 @@ with tab_profil:
                         st.caption(
                             "💡 Aucune expérience avec description de missions renseignée — "
                             "impossible de vérifier si tu couvres les tâches/missions les plus "
-                            "demandées. 👉 Ajoute au moins une expérience avec ses missions dans "
+                            "demandées. <br>👉 Ajoute au moins une expérience avec ses missions dans "
                             "l'onglet **🧾 Créer mon CV**, puis consulte l'onglet **🧠 Expertise** "
-                            "pour voir lesquelles sont les plus demandées."
+                            "pour voir lesquelles sont les plus demandées.",
+                            unsafe_allow_html=True,
                         )
                     else:
                         SEUIL_MATCH_FLOU = 55  # matching approximatif, pas une phrase exacte
@@ -848,10 +849,11 @@ with tab_profil:
                             st.caption(
                                 f"💡 {nb_identifiees}/{len(top_actions)} des tâches/missions les "
                                 "plus demandées semblent déjà apparaître dans tes expériences "
-                                "(vérification approximative, par ressemblance de texte). 👉 "
+                                "(vérification approximative, par ressemblance de texte). <br>👉 "
                                 "Complète tes descriptions de mission dans l'onglet **🧾 Créer "
                                 "mon CV**, et consulte l'onglet **🧠 Expertise** pour voir la "
-                                "liste complète."
+                                "liste complète.",
+                                unsafe_allow_html=True,
                             )
 
                 st.write("")
@@ -890,14 +892,16 @@ with tab_profil:
                     st.caption(
                         f"💡 **{nb_recruteurs_actifs} entreprise(s)** recrutent actuellement sur "
                         "ce métier dans ton département — à cibler pour une **candidature "
-                        "ciblée** (réponse à une offre publiée). 👉 Détail dans le sous-onglet "
-                        "**🏢 Top Recruteurs**."
+                        "ciblée** (réponse à une offre publiée). <br>👉 Détail dans le sous-onglet "
+                        "**🏢 Top Recruteurs**.",
+                        unsafe_allow_html=True,
                     )
                     st.caption(
                         f"💡 **{nb_potentiel} entreprise(s)** supplémentaire(s) ont un fort "
                         "potentiel de recrutement (même sans offre publiée) — une piste pour "
-                        "une **candidature spontanée**. 👉 Détail dans le sous-onglet **🏢 Top "
-                        "Recruteurs**."
+                        "une **candidature spontanée**. <br>👉 Détail dans le sous-onglet **🏢 Top "
+                        "Recruteurs**.",
+                        unsafe_allow_html=True,
                     )
 
                 st.write("")
@@ -952,8 +956,9 @@ with tab_profil:
                     nb_actions_affichees += 1
                     st.caption(
                         "💡 Tes expériences n'ont pas encore de dates renseignées — impossible "
-                        "de calculer ton ancienneté. 👉 Complète les dates dans l'onglet "
-                        "**🧾 Créer mon CV** pour une estimation personnalisée."
+                        "de calculer ton ancienneté. <br>👉 Complète les dates dans l'onglet "
+                        "**🧾 Créer mon CV** pour une estimation personnalisée.",
+                        unsafe_allow_html=True,
                     )
                 elif regression_salaire:
                     # Priorité à une estimation PERSONNALISÉE au profil du candidat plutôt
@@ -977,11 +982,14 @@ with tab_profil:
                         if nb_ignorees_action else ""
                     )
                     st.caption(
-                        f"💡 Avec **{annees_experience_cv_action} an(s) d'expérience** cumulée(s) "
-                        f"dans ton CV{texte_ignorees}, le marché suggère environ "
-                        f"**{salaire_suggere_action:,.0f} € brut annuel** pour ce "
-                        f"métier{texte_extrapolation} — un repère utile pour bien négocier. 👉 "
-                        "Détail dans l'onglet **📊 Compléments d'analyse**.".replace(",", " ")
+                        (
+                            f"💡 Avec **{annees_experience_cv_action} an(s) d'expérience** cumulée(s) "
+                            f"dans ton CV{texte_ignorees}, le marché suggère environ "
+                            f"**{salaire_suggere_action:,.0f} € brut annuel** pour ce "
+                            f"métier{texte_extrapolation} — un repère utile pour bien négocier. <br>👉 "
+                            "Détail dans l'onglet **📊 Compléments d'analyse**."
+                        ).replace(",", " "),
+                        unsafe_allow_html=True,
                     )
 
                 if afficher_repli_generique:
@@ -1012,12 +1020,12 @@ with tab_profil:
                                     "💡 Fourchette de salaire observée, **tous niveaux "
                                     f"d'expérience confondus : {min(valeurs_action):,.0f} € à "
                                     f"{max(valeurs_action):,.0f} € brut annuel** (offres CDI "
-                                    "avec salaire indiqué). 👉 Renseigne tes expériences dans "
+                                    "avec salaire indiqué). <br>👉 Renseigne tes expériences dans "
                                     "**🧾 Créer mon CV** et ouvre l'onglet **📊 Compléments "
                                     "d'analyse** pour une estimation basée sur ton propre nombre "
                                     "d'années d'expérience."
                                 ).replace(",", " ")
-                                st.caption(texte_salaire_action)
+                                st.caption(texte_salaire_action, unsafe_allow_html=True)
 
                     # Filet de sécurité : cette section ne doit jamais rester totalement
                     # silencieuse. Si aucune des branches ci-dessus n'a rien affiché (pas
@@ -1028,8 +1036,9 @@ with tab_profil:
                         nb_actions_affichees += 1
                         st.caption(
                             "💡 Pas encore de données de salaire disponibles pour cette "
-                            "recherche. 👉 Ouvre l'onglet **📊 Compléments d'analyse** pour "
-                            "lancer le calcul, puis reviens ici."
+                            "recherche. <br>👉 Ouvre l'onglet **📊 Compléments d'analyse** pour "
+                            "lancer le calcul, puis reviens ici.",
+                            unsafe_allow_html=True,
                         )
 
                 st.write("")
@@ -1049,8 +1058,9 @@ with tab_profil:
                         f"💡 **{len(evenements_action)} événement(s)** (forums, salons, job "
                         f"dating) prévu(s) dans les 90 prochains jours dans ta région pour ce "
                         f"métier, dont « {titre_prochain} »"
-                        f"{f' le {date_prochain}' if date_prochain else ''}. 👉 Détail dans "
-                        "l'onglet **📅 Événements**."
+                        f"{f' le {date_prochain}' if date_prochain else ''}. <br>👉 Détail dans "
+                        "l'onglet **📅 Événements**.",
+                        unsafe_allow_html=True,
                     )
                 # Pas d'événement trouvé : on ne l'affiche pas comme un manque — l'absence
                 # d'événement sur 90 jours est fréquente et ne reflète pas un problème côté
