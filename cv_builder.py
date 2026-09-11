@@ -814,16 +814,6 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         for interet in interets_list:
             _puce(cell_bandeau, interet, taille=9, echelle=echelle, caractere="▪")
 
-    # --- Mention Europass, discrète, tout en bas du bandeau — légitimité de la structure
-    # du CV (déjà annoncée côté app dans "Créer mon CV", reprise ici sur le document
-    # lui-même). Taille et couleur volontairement en retrait, pas un élément à mettre
-    # en avant visuellement.
-    p_europass = cell_bandeau.add_paragraph()
-    p_europass.paragraph_format.space_before = _pt(14, echelle)
-    run_europass = p_europass.add_run("Structure inspirée du format Europass")
-    run_europass.italic = True
-    run_europass.font.size = _pt(7, echelle)
-    run_europass.font.color.rgb = RGBColor.from_string("999999")
 
     # =======================================================================
     # COLONNE PRINCIPALE
@@ -933,7 +923,7 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
 
     # --- Formation ---
     formations = [f for f in data.get("formations", []) if f.get("diplome") or f.get("etablissement")]
-    formations = _trier_par_date(formations, "annee")
+    formations = _trier_par_date(formations, "date_fin", "date_debut")
     if formations:
         _titre_section(cell_principale, libelles["formation"], accent, taille=16, echelle=echelle, encadre=True)
         for form in formations:
@@ -1201,7 +1191,7 @@ def _section_suggestions_competences(fonction_analyse_competences):
             st.caption(f"✅ Listes enrichies automatiquement à partir de {nb_total} offre(s) trouvée(s).")
         st.caption(
             "Remplis tes compétences ci-dessous — le détail de ce que le marché demande "
-            "(pourcentages, actions/missions, certifications) est disponible dans l'onglet "
+            "(pourcentages, tâches/missions, certifications) est disponible dans l'onglet "
             "**Analyse principale → Expertise**."
         )
 
@@ -1315,41 +1305,6 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             )
             _selecteur_poste_recherche(titre_recherche)
 
-        with st.expander("🔧 Diagnostic technique ROMEO 2 (temporaire)"):
-            st.caption(
-                "Outil de mise au point — teste chaque combinaison endpoint/champ candidate "
-                "et affiche la vraie réponse de l'API, pour identifier la bonne configuration."
-            )
-            if st.button("Lancer le diagnostic", key="btn_diagnostic_romeo"):
-                with st.spinner("Test des combinaisons ROMEO en cours..."):
-                    resultats_diag = diagnostiquer_romeo(titre_recherche.strip() or "chef de projet")
-                st.json(resultats_diag)
-
-        with st.expander("🔧 Diagnostic technique La Bonne Boîte (temporaire)"):
-            st.caption(
-                "Outil de mise au point — teste /nombreEntreprise ET /recherche (les deux "
-                "endpoints utilisés par l'app) pour le département actuellement renseigné "
-                "ci-dessus, et affiche la vraie réponse de chacun."
-            )
-            if st.button("Lancer le diagnostic", key="btn_diagnostic_lbb"):
-                departement_diag_lbb = st.session_state.get("cv_departement")
-                if not departement_diag_lbb:
-                    st.warning("Renseigne d'abord un département de résidence ci-dessus.")
-                else:
-                    with st.spinner("Test des endpoints La Bonne Boîte en cours..."):
-                        resultats_diag_lbb = diagnostiquer_la_bonne_boite(departement=departement_diag_lbb)
-                    st.json(resultats_diag_lbb)
-
-        with st.expander("🔧 Diagnostic technique Fiches métiers (temporaire)"):
-            st.caption(
-                "Outil de mise au point — URL de base et scope probables, mais chemin exact "
-                "de l'endpoint non confirmé : teste plusieurs variantes et affiche la vraie réponse."
-            )
-            if st.button("Lancer le diagnostic", key="btn_diagnostic_fiche_metier"):
-                with st.spinner("Test des endpoints Fiches métiers en cours..."):
-                    resultats_diag_fiche = diagnostiquer_fiche_metier()
-                st.json(resultats_diag_fiche)
-
         c3, c4 = st.columns(2)
         email = c3.text_input("Email", key="cv_email")
         telephone = c4.text_input("Téléphone", key="cv_telephone")
@@ -1460,10 +1415,8 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
     if nb_sections_remplies <= 2:
         st.info(
-            "💡 La colonne de gauche du CV (langues, compétences, outils...) risque d'avoir "
-            "beaucoup de vide avec si peu d'éléments renseignés. Ajoute quelques langues, "
-            "compétences, ou crée une **section personnalisée** (ex: Permis, Bénévolat...) "
-            "juste au-dessus pour mieux la remplir."
+            "💡 N'hésitez pas à ajouter des sections personnalisées afin d'éviter que le "
+            "bandeau latéral de gauche ne soit vide."
         )
 
     st.divider()
