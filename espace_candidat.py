@@ -493,9 +493,11 @@ with tab_profil:
 
                 st.divider()
                 st.info(
-                    "📊 Repère général (indépendant de la recherche ci-dessus) : la durée moyenne "
-                    "d'un recrutement de cadre en France est stable à 12 semaines depuis 2022 "
-                    "(source : Apec, « Pratiques de recrutement des cadres » 2026)."
+                    "📊 Repère général (indépendant de la recherche ci-dessus) : la durée "
+                    "moyenne d'un recrutement de cadre en France est stable à 12 semaines "
+                    "depuis 2022.<br>(Source : Apec, « Pratiques de recrutement des cadres » "
+                    "2026.)",
+                    unsafe_allow_html=True,
                 )
 
             with sous_tab_certifs:
