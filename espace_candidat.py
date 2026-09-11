@@ -19,6 +19,9 @@ recruteurs" deviennent des pistes de candidature spontanée ou ciblée plutôt
 qu'un moteur de recherche d'offres.
 """
 
+import base64
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 import re
@@ -56,6 +59,51 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# ---------------------------------------------------------------------------
+# Bannière décorative fixe, collée au bord DROIT de l'écran.
+#
+# En Streamlit, la seule manière d'ajouter un élément visuel sans faire bouger
+# ni redimensionner quoi que ce soit d'existant (block-container, onglets,
+# bandeau latéral) est un élément en position "fixed" : il sort du flux normal
+# du document, donc aucun reflow n'est déclenché ailleurs sur la page.
+#
+# L'image est encodée en base64 et injectée directement dans le HTML (pas de
+# dépendance à un hébergement externe ni à st.image, qui suit le flux normal
+# et ne peut pas être "collé" à un bord de la fenêtre).
+#
+# pointer-events: none sur le conteneur laisse les clics traverser jusqu'aux
+# éléments qui seraient en dessous (utile si un futur élément Streamlit venait
+# à occuper le même espace à droite).
+# ---------------------------------------------------------------------------
+_CHEMIN_BANNIERE_DROITE = Path(__file__).parent / "assets" / "banniere_droite.jpg"
+if _CHEMIN_BANNIERE_DROITE.exists():
+    _banniere_droite_b64 = base64.b64encode(_CHEMIN_BANNIERE_DROITE.read_bytes()).decode()
+    st.markdown(
+        f"""
+        <style>
+        .banniere-droite-fixe {{
+            position: fixed;
+            top: 0;
+            right: 0;
+            height: 100vh;
+            width: 70px;
+            z-index: 999999;
+            pointer-events: none;
+        }}
+        .banniere-droite-fixe img {{
+            height: 100%;
+            width: 100%;
+            object-fit: cover;
+            opacity: 0.92;
+        }}
+        </style>
+        <div class="banniere-droite-fixe">
+            <img src="data:image/jpeg;base64,{_banniere_droite_b64}" />
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.title("🎯 Aide, Conseil, Emploi")
 st.markdown(
@@ -495,9 +543,8 @@ with tab_profil:
                 st.info(
                     "📊 Repère général (indépendant de la recherche ci-dessus) : la durée "
                     "moyenne d'un recrutement de cadre en France est stable à 12 semaines "
-                    "depuis 2022.<br>(Source : Apec, « Pratiques de recrutement des cadres » "
-                    "2026.)",
-                    unsafe_allow_html=True,
+                    "depuis 2022.  \n(Source : Apec, « Pratiques de recrutement des cadres » "
+                    "2026.)"
                 )
 
             with sous_tab_certifs:
