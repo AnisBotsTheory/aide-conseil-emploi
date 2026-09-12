@@ -430,6 +430,16 @@ def _section_experiences(fonction_analyse_competences=None):
                             # demandées sur ces métiers — plus fiable qu'une recherche par
                             # mots-clés seule, qui ne remonte que les offres contenant
                             # l'intitulé exact dans leur titre/texte.
+                            #
+                            # Recherche à l'échelle NATIONALE (pas restreinte au département
+                            # de résidence) : contrairement à "Analyse principale"/"Top
+                            # recruteurs" (qui cherche des entreprises PRÈS de l'utilisateur),
+                            # l'objectif ici est de couvrir les tâches/missions typiques du
+                            # métier dans son ensemble — un seul département donnait un
+                            # échantillon trop restreint pour des métiers pourtant courants
+                            # (ex: "Data analyst"), pour une variable (le contenu du métier)
+                            # qui n'a de toute façon pas de raison de varier selon le
+                            # département.
                             appellations_proches_exp = suggerer_postes(poste_texte, max_resultats=8)
                             referentiel_appellations_exp = get_referentiel_appellations()
                             codes_resolus_exp = []
@@ -443,9 +453,7 @@ def _section_experiences(fonction_analyse_competences=None):
                                 )
                                 code_exp = _extraire_code_rome(item_poste_exp) if item_poste_exp else None
                                 if not code_exp:
-                                    df_resolu_label_exp = resoudre_codes_rome(
-                                        mots_cles=label_exp, departement=st.session_state["cv_departement"]
-                                    )
+                                    df_resolu_label_exp = resoudre_codes_rome(mots_cles=label_exp)
                                     code_exp = (
                                         df_resolu_label_exp.iloc[0]["code_rome"]
                                         if not df_resolu_label_exp.empty else None
@@ -455,7 +463,7 @@ def _section_experiences(fonction_analyse_competences=None):
 
                             df_c, _, _, _, _, nb_t = fonction_analyse_competences(
                                 codes_rome=codes_resolus_exp, mots_cles_libres=poste_texte,
-                                departement=st.session_state["cv_departement"], jours_max=None,
+                                departement=None, jours_max=None,
                             )
                         st.session_state[cle_cache_resultat] = (df_c, nb_t)
                         st.session_state[cle_cache_poste] = poste_normalise
@@ -469,7 +477,10 @@ def _section_experiences(fonction_analyse_competences=None):
                     )
 
                 if df_missions_exp is not None and not df_missions_exp.empty:
-                    top_missions_exp = df_missions_exp["libelle"].head(8).tolist()
+                    # Jusqu'à 15 missions affichées (au lieu de 8) — c'est déjà la limite
+                    # maximale calculée en amont par _agreger_competences, donc ce n'est
+                    # plus l'affichage qui tronque artificiellement la liste.
+                    top_missions_exp = df_missions_exp["libelle"].head(15).tolist()
                     missions_choisies_exp = st.multiselect(
                         "🔍 Missions suggérées pour ce poste",
                         options=top_missions_exp,
