@@ -1408,6 +1408,11 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         key="cv_theme",
     )
 
+    st.markdown(
+        "<hr style='margin: 0.6rem 0; border-color: rgba(250,250,250,0.15);' />",
+        unsafe_allow_html=True,
+    )
+
     langue_choisie_label = st.radio(
         "🌍 Langue du CV",
         list(LANGUES_CV.keys()),
@@ -1420,6 +1425,11 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
             "⚠️ La traduction automatique n'est pas configurée pour l'instant (clé DeepL "
             "manquante) — le CV sera généré en français malgré la langue choisie."
         )
+
+    st.markdown(
+        "<hr style='margin: 0.6rem 0; border-color: rgba(250,250,250,0.15);' />",
+        unsafe_allow_html=True,
+    )
 
     photo_uploadee = st.file_uploader(
         "📷 Photo (facultatif, format carré recommandé)", type=["png", "jpg", "jpeg"], key="cv_photo"
