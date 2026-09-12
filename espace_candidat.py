@@ -125,7 +125,7 @@ if _CHEMIN_BANNIERE_DROITE.exists():
             const MARGE_HAUT = 70;             // réserve la barre d'outils Streamlit (Share/étoile/crayon)
             const MARGE_BAS = 70;              // réserve le bouton "Manage app" (Streamlit Community Cloud)
             const LARGEUR_MIN = 30;            // en dessous, pas assez de place : on masque plutôt que déformer
-            const HAUTEUR_BANNIERE_CIBLE = 260; // "taille réduite" cible, jamais dépassée même si la place ne manque pas
+            const HAUTEUR_BANNIERE_CIBLE = 480; // taille cible, jamais dépassée même si la place ne manque pas
 
             function positionnerBanniereDroite() {
                 const doc = window.parent.document;
