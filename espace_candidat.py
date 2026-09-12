@@ -229,8 +229,8 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.markdown("#### ✨ Les *PLUS* de ACE!")
-    st.markdown("##### Les 4 essentiels")
+    st.markdown("### ✨ Les *PLUS* de ACE!")
+    st.markdown("#### Les 4 essentiels")
     st.caption(
         "🧾 <b>Créer mon CV</b> — <b>un CV professionnel aligné sur les critères "
         "Europass</b>, prêt en quelques minutes. Déjà un CV ? Renseignez quand même votre "
