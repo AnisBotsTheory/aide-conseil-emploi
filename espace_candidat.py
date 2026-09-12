@@ -401,12 +401,6 @@ with tab_profil:
             f"[candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer par votre "
             "département une fois sur place)."
         )
-        st.caption(
-            "📎 Les données utilisées proviennent des offres publiées sur France Travail. Le "
-            "total affiché peut toutefois différer de celui obtenu directement sur le site "
-            "(recherche par code ROME et fenêtre glissante ici, contre mots-clés libres et "
-            "offres actives en temps réel sur France Travail)."
-        )
     # Réduit la taille du libellé de cet expander précis, pour qu'il reste visuellement en
     # retrait par rapport aux intitulés des sous-onglets ("Tes points d'attention", "Top
     # Recruteurs"...) juste en dessous — st.expander n'a pas de paramètre de taille de
