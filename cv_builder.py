@@ -32,6 +32,7 @@ from moteur_recherche import (
     diagnostiquer_romeo,
     diagnostiquer_la_bonne_boite,
     diagnostiquer_fiche_metier,
+    _normaliser_texte,
 )
 from io import BytesIO
 
@@ -249,6 +250,20 @@ _MOIS_NOMS = [
     "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
 ]
 
+# Couleur d'erreur alignée sur le rouge par défaut de Streamlit (st.error) —
+# utilisée pour les messages "Champ requis" affichés sous chaque champ vide.
+_COULEUR_ERREUR_CHAMP = "#ff4b4b"
+
+
+def _caption_erreur_champ():
+    """Petit message rouge "Champ requis", à afficher juste sous un champ obligatoire
+    laissé vide (expériences et formations sont désormais entièrement obligatoires,
+    pour éviter les CV incomplets/de moindre qualité)."""
+    st.caption(
+        f"<span style='color:{_COULEUR_ERREUR_CHAMP}'>⚠️ Champ requis</span>",
+        unsafe_allow_html=True,
+    )
+
 
 def _selecteur_periode(cle_prefixe, autoriser_en_cours=False):
     """
@@ -294,15 +309,32 @@ def _selecteur_periode(cle_prefixe, autoriser_en_cours=False):
     return texte_debut, texte_fin
 
 
-def _section_experiences():
-    st.markdown("#### 💼 Expériences professionnelles")
+def _section_experiences(fonction_analyse_competences=None):
+    """
+    Affiche et gère la section "Expériences professionnelles". Tous les champs
+    de chaque expérience sont désormais OBLIGATOIRES (poste, entreprise, ville,
+    pays, dates, description des missions) — un CV avec des champs vides donne
+    un rendu de moindre qualité, donc un message rouge "Champ requis" apparaît
+    sous chaque champ manquant, en plus d'un message global si au moins une
+    expérience est incomplète. Retourne True si toutes les expériences déjà
+    ajoutées sont complètes (True aussi si aucune expérience n'a été ajoutée),
+    False sinon — utilisé par afficher_generateur_cv() pour bloquer la
+    génération du CV tant que ce n'est pas le cas.
 
-    suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
-    df_comp_suggestions = None
-    if suggestions_apercu:
-        df_comp_suggestions, _, _, _, _, _ = suggestions_apercu
+    fonction_analyse_competences : callable optionnel (analyser_competences_elargi),
+    utilisé pour les suggestions de missions PROPRES à chaque expérience (voir
+    plus bas) — indépendant des suggestions déjà affichées dans l'onglet
+    Compétences pour le poste recherché globalement.
+    """
+    st.markdown("#### 💼 Expériences professionnelles")
+    st.caption(
+        "Tous les champs de chaque expérience sont obligatoires pour obtenir un CV "
+        "de bonne qualité."
+    )
 
     a_supprimer = None
+    au_moins_une_experience_incomplete = False
+
     for i, exp in enumerate(st.session_state.cv_experiences):
         # Une mission ajoutée au tour précédent (bouton "Ajouter les missions
         # sélectionnées" plus bas) est fusionnée ICI, AVANT la création du widget
@@ -322,12 +354,42 @@ def _section_experiences():
 
         with st.container(border=True):
             c1, c2 = st.columns(2)
-            exp["poste"] = c1.text_input("Poste", value=exp.get("poste", ""), key=f"exp_poste_{i}")
-            exp["entreprise"] = c2.text_input("Entreprise", value=exp.get("entreprise", ""), key=f"exp_entreprise_{i}")
+            exp["poste"] = c1.text_input("Poste *", value=exp.get("poste", ""), key=f"exp_poste_{i}")
+            poste_texte = exp["poste"].strip()
+            if not poste_texte:
+                with c1:
+                    _caption_erreur_champ()
+                au_moins_une_experience_incomplete = True
+            elif not poste_texte[0].isupper():
+                # Pas un vrai garde-fou technique (la comparaison avec le poste recherché
+                # plus bas est normalisée, insensible à la casse) — juste une aide à la
+                # cohérence de l'intitulé tel qu'il apparaîtra sur le CV final, et à la
+                # pertinence de la recherche par mots-clés côté France Travail.
+                c1.caption(
+                    "💡 Veuillez ajouter une majuscule au début de votre intitulé "
+                    "(ex : « Chef de projet »)."
+                )
+
+            exp["entreprise"] = c2.text_input(
+                "Entreprise *", value=exp.get("entreprise", ""), key=f"exp_entreprise_{i}"
+            )
+            if not exp["entreprise"].strip():
+                with c2:
+                    _caption_erreur_champ()
+                au_moins_une_experience_incomplete = True
 
             c3, c4 = st.columns(2)
-            exp["ville"] = c3.text_input("Ville", value=exp.get("ville", ""), key=f"exp_ville_{i}")
-            exp["pays"] = c4.text_input("Pays", value=exp.get("pays", ""), key=f"exp_pays_{i}")
+            exp["ville"] = c3.text_input("Ville *", value=exp.get("ville", ""), key=f"exp_ville_{i}")
+            if not exp["ville"].strip():
+                with c3:
+                    _caption_erreur_champ()
+                au_moins_une_experience_incomplete = True
+
+            exp["pays"] = c4.text_input("Pays *", value=exp.get("pays", ""), key=f"exp_pays_{i}")
+            if not exp["pays"].strip():
+                with c4:
+                    _caption_erreur_champ()
+                au_moins_une_experience_incomplete = True
 
             # Sélecteurs Mois/Année plutôt qu'un champ texte libre : élimine l'ambiguïté de
             # format ("Jan. 2022" / "01/2022" / "2022") qui obligeait à un parsing
@@ -336,35 +398,88 @@ def _section_experiences():
             exp["date_debut"], exp["date_fin"] = _selecteur_periode(
                 f"exp_periode_{i}", autoriser_en_cours=True
             )
+            if not exp["date_debut"] or not exp["date_fin"]:
+                _caption_erreur_champ()
+                au_moins_une_experience_incomplete = True
 
-            # Missions suggérées pour le poste CIBLÉ (même source que l'onglet Expertise,
-            # pas propre à l'intitulé de CETTE expérience passée) — aide à formuler une
-            # expérience déjà vécue avec les mots-clés que les recruteurs recherchent
-            # aujourd'hui pour le poste visé.
-            if df_comp_suggestions is not None and not df_comp_suggestions.empty:
-                top_missions = df_comp_suggestions["libelle"].head(8).tolist()
-                missions_choisies = st.multiselect(
-                    "💡 Missions suggérées pour le poste ciblé (optionnel)",
-                    options=top_missions,
-                    key=f"exp_missions_suggerees_{i}",
-                    help="Coche celles que tu as réellement exercées, puis clique sur Ajouter.",
+            # -----------------------------------------------------------------
+            # Suggestions de missions pour CE poste précis (l'intitulé tapé
+            # ci-dessus pour CETTE expérience) — pas le poste ciblé par la
+            # recherche globale. Une seule boîte, déclenchée automatiquement dès
+            # que le champ Poste est rempli :
+            #   - si l'intitulé (normalisé) correspond au poste recherché
+            #     globalement -> les données déjà chargées pour "Analyse
+            #     principale" sont réutilisées telles quelles (pas de nouvel
+            #     appel : c'est exactement la même recherche) ;
+            #   - sinon -> une recherche libre dédiée à cet intitulé est lancée
+            #     (et mise en cache par expérience, pour ne relancer l'appel que
+            #     si l'intitulé a changé, pas à chaque interaction ailleurs sur
+            #     la page).
+            # -----------------------------------------------------------------
+            if poste_texte:
+                poste_normalise = _normaliser_texte(poste_texte)
+                postes_recherche_normalises = {
+                    _normaliser_texte(p) for p in st.session_state.get("cv_postes_recherche", [])
+                }
+                titre_recherche_normalise = _normaliser_texte(st.session_state.get("cv_titre", ""))
+                correspond_au_poste_recherche = bool(poste_normalise) and (
+                    poste_normalise == titre_recherche_normalise
+                    or poste_normalise in postes_recherche_normalises
                 )
-                if st.button("➕ Ajouter les missions sélectionnées", key=f"exp_ajouter_missions_{i}"):
-                    if missions_choisies:
-                        st.session_state[cle_missions_en_attente] = missions_choisies
-                        st.rerun()
-            else:
-                st.caption(
-                    "💡 Sélectionne un poste dans l'onglet **Analyse principale** pour voir "
-                    "apparaître ici des missions suggérées pour ce métier."
-                )
+
+                df_missions_exp, nb_total_missions_exp = None, None
+
+                if correspond_au_poste_recherche:
+                    suggestions_apercu = st.session_state.get("cv_suggestions_apercu")
+                    if suggestions_apercu:
+                        df_missions_exp, _, _, _, _, nb_total_missions_exp = suggestions_apercu
+                elif fonction_analyse_competences and st.session_state.get("cv_departement"):
+                    cle_cache_poste = f"exp_missions_poste_recherche_{i}"
+                    cle_cache_resultat = f"exp_missions_resultat_{i}"
+                    if st.session_state.get(cle_cache_poste) != poste_normalise:
+                        with st.spinner("Recherche des missions pour ce poste..."):
+                            df_c, _, _, _, _, nb_t = fonction_analyse_competences(
+                                codes_rome=[], mots_cles_libres=poste_texte,
+                                departement=st.session_state["cv_departement"], jours_max=None,
+                            )
+                        st.session_state[cle_cache_resultat] = (df_c, nb_t)
+                        st.session_state[cle_cache_poste] = poste_normalise
+                    resultat_cache = st.session_state.get(cle_cache_resultat)
+                    if resultat_cache:
+                        df_missions_exp, nb_total_missions_exp = resultat_cache
+                elif not st.session_state.get("cv_departement"):
+                    st.caption(
+                        "💡 Renseigne ton département dans les informations générales "
+                        "pour voir apparaître des suggestions de missions pour ce poste."
+                    )
+
+                if df_missions_exp is not None and not df_missions_exp.empty:
+                    top_missions_exp = df_missions_exp["libelle"].head(8).tolist()
+                    missions_choisies_exp = st.multiselect(
+                        "🔍 Missions suggérées pour ce poste",
+                        options=top_missions_exp,
+                        key=f"exp_missions_suggerees_{i}",
+                        help="Coche celles que tu as réellement exercées, puis clique sur Ajouter.",
+                    )
+                    if st.button("➕ Ajouter les missions sélectionnées", key=f"exp_ajouter_missions_{i}"):
+                        if missions_choisies_exp:
+                            st.session_state[cle_missions_en_attente] = missions_choisies_exp
+                            st.rerun()
+                elif poste_texte and st.session_state.get("cv_departement") and not correspond_au_poste_recherche:
+                    st.caption(
+                        "Aucune mission identifiée pour cet intitulé — essaie une formulation "
+                        "un peu plus générique."
+                    )
 
             exp["description"] = st.text_area(
-                "Missions / réalisations (une ligne = une puce)",
+                "Missions / réalisations (une ligne = une puce) *",
                 value=exp.get("description", ""),
                 key=f"exp_description_{i}",
                 height=100,
             )
+            if not exp["description"].strip():
+                _caption_erreur_champ()
+                au_moins_une_experience_incomplete = True
             nb_lignes_description = len([l for l in exp["description"].split("\n") if l.strip()])
             if nb_lignes_description > 8:
                 st.caption(
@@ -384,20 +499,60 @@ def _section_experiences():
         st.session_state.cv_experiences.append({})
         st.rerun()
 
+    if au_moins_une_experience_incomplete:
+        st.error(
+            "⚠️ Merci de compléter tous les champs de chaque expérience professionnelle "
+            "avant de générer ton CV."
+        )
+
+    return not au_moins_une_experience_incomplete
+
 
 def _section_formations():
+    """
+    Affiche et gère la section "Formation". Mêmes règles que pour les expériences :
+    tous les champs de chaque formation déjà ajoutée sont obligatoires. Retourne
+    True si toutes les formations sont complètes (ou si aucune n'a été ajoutée),
+    False sinon.
+    """
     st.markdown("#### 🎓 Formation")
+    st.caption(
+        "Tous les champs de chaque formation sont obligatoires pour obtenir un CV "
+        "de bonne qualité."
+    )
 
     a_supprimer = None
+    au_moins_une_formation_incomplete = False
+
     for i, form in enumerate(st.session_state.cv_formations):
         with st.container(border=True):
             c1, c2 = st.columns(2)
-            form["diplome"] = c1.text_input("Diplôme", value=form.get("diplome", ""), key=f"form_diplome_{i}")
-            form["etablissement"] = c2.text_input("Établissement", value=form.get("etablissement", ""), key=f"form_etab_{i}")
+            form["diplome"] = c1.text_input("Diplôme *", value=form.get("diplome", ""), key=f"form_diplome_{i}")
+            if not form["diplome"].strip():
+                with c1:
+                    _caption_erreur_champ()
+                au_moins_une_formation_incomplete = True
+
+            form["etablissement"] = c2.text_input(
+                "Établissement *", value=form.get("etablissement", ""), key=f"form_etab_{i}"
+            )
+            if not form["etablissement"].strip():
+                with c2:
+                    _caption_erreur_champ()
+                au_moins_une_formation_incomplete = True
 
             c3, c4 = st.columns(2)
-            form["ville"] = c3.text_input("Ville", value=form.get("ville", ""), key=f"form_ville_{i}")
-            form["pays"] = c4.text_input("Pays", value=form.get("pays", ""), key=f"form_pays_{i}")
+            form["ville"] = c3.text_input("Ville *", value=form.get("ville", ""), key=f"form_ville_{i}")
+            if not form["ville"].strip():
+                with c3:
+                    _caption_erreur_champ()
+                au_moins_une_formation_incomplete = True
+
+            form["pays"] = c4.text_input("Pays *", value=form.get("pays", ""), key=f"form_pays_{i}")
+            if not form["pays"].strip():
+                with c4:
+                    _caption_erreur_champ()
+                au_moins_une_formation_incomplete = True
 
             # Début ET fin désormais, comme pour les expériences (auparavant un seul champ
             # "Année" en texte libre, insuffisant pour une formation en cours ou étalée sur
@@ -405,6 +560,9 @@ def _section_formations():
             form["date_debut"], form["date_fin"] = _selecteur_periode(
                 f"form_periode_{i}", autoriser_en_cours=True
             )
+            if not form["date_debut"] or not form["date_fin"]:
+                _caption_erreur_champ()
+                au_moins_une_formation_incomplete = True
 
             if st.button("🗑️ Supprimer cette formation", key=f"form_supprimer_{i}"):
                 a_supprimer = i
@@ -416,6 +574,14 @@ def _section_formations():
     if st.button("➕ Ajouter une formation"):
         st.session_state.cv_formations.append({})
         st.rerun()
+
+    if au_moins_une_formation_incomplete:
+        st.error(
+            "⚠️ Merci de compléter tous les champs de chaque formation avant de "
+            "générer ton CV."
+        )
+
+    return not au_moins_une_formation_incomplete
 
 
 _NIVEAUX_LANGUE = ["Notion A1-A2", "Intermédiaire B1-B2", "Avancée - C1", "Bilingue - C2"]
@@ -1342,10 +1508,10 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         )
 
     with st.expander("💼 Expériences professionnelles"):
-        _section_experiences()
+        experiences_completes = _section_experiences(fonction_analyse_competences)
 
     with st.expander("🎓 Formation"):
-        _section_formations()
+        formations_completes = _section_formations()
 
     with st.expander("🌍 Langues"):
         _section_langues()
@@ -1424,6 +1590,16 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     if st.button("📄 Générer mon CV", type="primary"):
         if not nom or not prenom:
             st.error("Merci de renseigner au minimum votre nom et prénom.")
+        elif not experiences_completes:
+            st.error(
+                "Merci de compléter tous les champs de tes expériences professionnelles "
+                "avant de générer ton CV."
+            )
+        elif not formations_completes:
+            st.error(
+                "Merci de compléter tous les champs de tes formations avant de générer "
+                "ton CV."
+            )
         else:
             data = {
                 "nom": nom,
