@@ -250,20 +250,6 @@ _MOIS_NOMS = [
     "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
 ]
 
-# Couleur d'erreur alignée sur le rouge par défaut de Streamlit (st.error) —
-# utilisée pour les messages "Champ requis" affichés sous chaque champ vide.
-_COULEUR_ERREUR_CHAMP = "#ff4b4b"
-
-
-def _caption_erreur_champ():
-    """Petit message rouge "Champ requis", à afficher juste sous un champ obligatoire
-    laissé vide (expériences et formations sont désormais entièrement obligatoires,
-    pour éviter les CV incomplets/de moindre qualité)."""
-    st.caption(
-        f"<span style='color:{_COULEUR_ERREUR_CHAMP}'>⚠️ Champ requis</span>",
-        unsafe_allow_html=True,
-    )
-
 
 def _selecteur_periode(cle_prefixe, autoriser_en_cours=False):
     """
@@ -327,10 +313,7 @@ def _section_experiences(fonction_analyse_competences=None):
     Compétences pour le poste recherché globalement.
     """
     st.markdown("#### 💼 Expériences professionnelles")
-    st.caption(
-        "Tous les champs de chaque expérience sont obligatoires pour obtenir un CV "
-        "de bonne qualité."
-    )
+    st.caption("Les champs marqués d'un * sont obligatoires.")
 
     a_supprimer = None
     au_moins_une_experience_incomplete = False
@@ -357,8 +340,6 @@ def _section_experiences(fonction_analyse_competences=None):
             exp["poste"] = c1.text_input("Poste *", value=exp.get("poste", ""), key=f"exp_poste_{i}")
             poste_texte = exp["poste"].strip()
             if not poste_texte:
-                with c1:
-                    _caption_erreur_champ()
                 au_moins_une_experience_incomplete = True
             elif not poste_texte[0].isupper():
                 # Pas un vrai garde-fou technique (la comparaison avec le poste recherché
@@ -374,21 +355,15 @@ def _section_experiences(fonction_analyse_competences=None):
                 "Entreprise *", value=exp.get("entreprise", ""), key=f"exp_entreprise_{i}"
             )
             if not exp["entreprise"].strip():
-                with c2:
-                    _caption_erreur_champ()
                 au_moins_une_experience_incomplete = True
 
             c3, c4 = st.columns(2)
             exp["ville"] = c3.text_input("Ville *", value=exp.get("ville", ""), key=f"exp_ville_{i}")
             if not exp["ville"].strip():
-                with c3:
-                    _caption_erreur_champ()
                 au_moins_une_experience_incomplete = True
 
             exp["pays"] = c4.text_input("Pays *", value=exp.get("pays", ""), key=f"exp_pays_{i}")
             if not exp["pays"].strip():
-                with c4:
-                    _caption_erreur_champ()
                 au_moins_une_experience_incomplete = True
 
             # Sélecteurs Mois/Année plutôt qu'un champ texte libre : élimine l'ambiguïté de
@@ -399,7 +374,6 @@ def _section_experiences(fonction_analyse_competences=None):
                 f"exp_periode_{i}", autoriser_en_cours=True
             )
             if not exp["date_debut"] or not exp["date_fin"]:
-                _caption_erreur_champ()
                 au_moins_une_experience_incomplete = True
 
             # -----------------------------------------------------------------
@@ -519,7 +493,6 @@ def _section_experiences(fonction_analyse_competences=None):
                 height=100,
             )
             if not exp["description"].strip():
-                _caption_erreur_champ()
                 au_moins_une_experience_incomplete = True
             nb_lignes_description = len([l for l in exp["description"].split("\n") if l.strip()])
             if nb_lignes_description > 8:
@@ -557,10 +530,7 @@ def _section_formations():
     False sinon.
     """
     st.markdown("#### 🎓 Formation")
-    st.caption(
-        "Tous les champs de chaque formation sont obligatoires pour obtenir un CV "
-        "de bonne qualité."
-    )
+    st.caption("Les champs marqués d'un * sont obligatoires.")
 
     a_supprimer = None
     au_moins_une_formation_incomplete = False
@@ -570,29 +540,21 @@ def _section_formations():
             c1, c2 = st.columns(2)
             form["diplome"] = c1.text_input("Diplôme *", value=form.get("diplome", ""), key=f"form_diplome_{i}")
             if not form["diplome"].strip():
-                with c1:
-                    _caption_erreur_champ()
                 au_moins_une_formation_incomplete = True
 
             form["etablissement"] = c2.text_input(
                 "Établissement *", value=form.get("etablissement", ""), key=f"form_etab_{i}"
             )
             if not form["etablissement"].strip():
-                with c2:
-                    _caption_erreur_champ()
                 au_moins_une_formation_incomplete = True
 
             c3, c4 = st.columns(2)
             form["ville"] = c3.text_input("Ville *", value=form.get("ville", ""), key=f"form_ville_{i}")
             if not form["ville"].strip():
-                with c3:
-                    _caption_erreur_champ()
                 au_moins_une_formation_incomplete = True
 
             form["pays"] = c4.text_input("Pays *", value=form.get("pays", ""), key=f"form_pays_{i}")
             if not form["pays"].strip():
-                with c4:
-                    _caption_erreur_champ()
                 au_moins_une_formation_incomplete = True
 
             # Début ET fin désormais, comme pour les expériences (auparavant un seul champ
@@ -602,7 +564,6 @@ def _section_formations():
                 f"form_periode_{i}", autoriser_en_cours=True
             )
             if not form["date_debut"] or not form["date_fin"]:
-                _caption_erreur_champ()
                 au_moins_une_formation_incomplete = True
 
             if st.button("🗑️ Supprimer cette formation", key=f"form_supprimer_{i}"):
@@ -1421,7 +1382,12 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         unsafe_allow_html=True,
     )
 
-    st.divider()
+    # Séparateur compact fait main (au lieu de st.divider(), dont la marge par défaut est
+    # plus large et créait un espace vide disproportionné avant/après le trait).
+    st.markdown(
+        "<hr style='margin: 0.6rem 0; border-color: rgba(250,250,250,0.15);' />",
+        unsafe_allow_html=True,
+    )
     st.markdown("##### 🎨 Paramètres du CV")
 
     theme_choisi = st.radio(
