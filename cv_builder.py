@@ -447,8 +447,40 @@ def _section_experiences(fonction_analyse_competences=None):
                     cle_cache_resultat = f"exp_missions_resultat_{i}"
                     if st.session_state.get(cle_cache_poste) != poste_normalise:
                         with st.spinner("Recherche des missions pour ce poste..."):
+                            # Même mécanisme que "Titre du poste recherché" en haut
+                            # (suggerer_postes, matching sémantique contre le référentiel
+                            # ROME) mais sans étiquettes à cliquer : les 8 appellations les
+                            # plus proches sont prises automatiquement, puis résolues en
+                            # codes ROME (même résolution que pour les étiquettes du champ
+                            # du haut) pour aller chercher les tâches/missions réellement
+                            # demandées sur ces métiers — plus fiable qu'une recherche par
+                            # mots-clés seule, qui ne remonte que les offres contenant
+                            # l'intitulé exact dans leur titre/texte.
+                            appellations_proches_exp = suggerer_postes(poste_texte, max_resultats=8)
+                            referentiel_appellations_exp = get_referentiel_appellations()
+                            codes_resolus_exp = []
+                            for label_exp in appellations_proches_exp:
+                                item_poste_exp = next(
+                                    (
+                                        a for a in referentiel_appellations_exp
+                                        if a.get("libelle", "").strip() == label_exp
+                                    ),
+                                    None,
+                                )
+                                code_exp = _extraire_code_rome(item_poste_exp) if item_poste_exp else None
+                                if not code_exp:
+                                    df_resolu_label_exp = resoudre_codes_rome(
+                                        mots_cles=label_exp, departement=st.session_state["cv_departement"]
+                                    )
+                                    code_exp = (
+                                        df_resolu_label_exp.iloc[0]["code_rome"]
+                                        if not df_resolu_label_exp.empty else None
+                                    )
+                                if code_exp and code_exp not in codes_resolus_exp:
+                                    codes_resolus_exp.append(code_exp)
+
                             df_c, _, _, _, _, nb_t = fonction_analyse_competences(
-                                codes_rome=[], mots_cles_libres=poste_texte,
+                                codes_rome=codes_resolus_exp, mots_cles_libres=poste_texte,
                                 departement=st.session_state["cv_departement"], jours_max=None,
                             )
                         st.session_state[cle_cache_resultat] = (df_c, nb_t)
