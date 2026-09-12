@@ -1389,7 +1389,9 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
     )
     st.caption(
         "<div style='margin-bottom: 0;'>ℹ️ La structure de ce CV s'inspire du format "
-        "<b>Europass</b>.</div>",
+        "<b>Europass</b>, un dispositif européen (mis en place en 2005) qui propose des "
+        "formats standardisés pour présenter ses compétences et qualifications, reconnu "
+        "et facilement comparable dans toute l'Europe.</div>",
         unsafe_allow_html=True,
     )
 
