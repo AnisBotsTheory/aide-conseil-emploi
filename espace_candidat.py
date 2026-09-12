@@ -231,9 +231,10 @@ st.markdown(
 with st.sidebar:
     st.caption(
         "<b>Ce que l'application vous apporte :</b><br><br>"
-        "🧾 <b>Créer mon CV</b> — un CV structuré et professionnel en quelques minutes, "
-        "point de départ de toute l'analyse qui suit (commencez par le département, puis "
-        "le poste).<br><br>"
+        "🧾 <b>Créer mon CV</b> — un CV structuré et professionnel en quelques minutes. "
+        "Déjà un CV ? Renseignez quand même votre département et le poste recherché : ce "
+        "sont ces deux informations qui déclenchent l'analyse personnalisée ci-dessous."
+        "<br><br>"
         "🎯 <b>Analyse principale</b> — sachez précisément où concentrer vos efforts : les "
         "entreprises qui recrutent près de chez vous, ce que les recruteurs attendent "
         "vraiment, et si le marché est porteur dans votre région.<br><br>"
