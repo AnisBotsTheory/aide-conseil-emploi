@@ -422,9 +422,18 @@ def _section_experiences(fonction_analyse_competences=None):
                     _normaliser_texte(p) for p in st.session_state.get("cv_postes_recherche", [])
                 }
                 titre_recherche_normalise = _normaliser_texte(st.session_state.get("cv_titre", ""))
+                # La réutilisation des données déjà chargées n'est fiable que si la recherche
+                # globale porte sur un seul poste précis (texte libre identique, ou une seule
+                # étiquette ROME sélectionnée) : avec PLUSIEURS postes ciblés en même temps,
+                # "cv_suggestions_apercu" agrège leurs missions ensemble, et une expérience qui
+                # correspond à l'un d'eux se verrait à tort proposer des missions polluées par
+                # les AUTRES postes de la sélection globale (ex: "Data analyst" + "Vendeur"
+                # sélectionnés ensemble en haut -> des missions de caisse remontent pour
+                # l'expérience "Data analyst"). Dans ce cas, on relance une recherche dédiée,
+                # comme pour un poste complètement différent.
                 correspond_au_poste_recherche = bool(poste_normalise) and (
                     poste_normalise == titre_recherche_normalise
-                    or poste_normalise in postes_recherche_normalises
+                    or (poste_normalise in postes_recherche_normalises and len(postes_recherche_normalises) == 1)
                 )
 
                 df_missions_exp, nb_total_missions_exp = None, None
