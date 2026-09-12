@@ -229,20 +229,22 @@ st.markdown(
 )
 
 with st.sidebar:
+    st.markdown("#### ✨ Les + de ACE !")
     st.caption(
-        "<b>Ce que l'application vous apporte :</b><br><br>"
-        "🧾 <b>Créer mon CV</b> — un CV professionnel aligné sur les critères <b>Europass</b>, "
-        "prêt en quelques minutes. Déjà un CV ? Renseignez quand même votre département et "
-        "le poste recherché : ce sont ces deux informations qui déclenchent l'analyse "
-        "personnalisée ci-dessous."
+        "🧾 <b>Créer mon CV</b> — <b>un CV professionnel aligné sur les critères "
+        "Europass</b>, prêt en quelques minutes. Déjà un CV ? Renseignez quand même votre "
+        "département et le poste recherché : ce sont ces deux informations qui "
+        "déclenchent l'analyse personnalisée ci-dessous."
         "<br><br>"
-        "🎯 <b>Analyse principale</b> — sachez précisément où concentrer vos efforts : les "
-        "entreprises qui recrutent près de chez vous, ce que les recruteurs attendent "
-        "vraiment, et si le marché est porteur dans votre région.<br><br>"
-        "📊 <b>Compléments d'analyse</b> — négociez en confiance : découvrez les salaires "
-        "réellement proposés et les profils recherchés sur votre métier.<br><br>"
-        "📅 <b>Événements</b> — ne manquez aucune occasion de rencontrer un recruteur en "
-        "direct, forums et job dating près de chez vous.",
+        "🎯 <b>Analyse principale</b> — <b>sachez précisément où concentrer vos "
+        "efforts</b> : les entreprises qui recrutent près de chez vous, ce que les "
+        "recruteurs attendent vraiment, et si le marché est porteur dans votre "
+        "région.<br><br>"
+        "📊 <b>Compléments d'analyse</b> — <b>négociez en confiance</b> : découvrez les "
+        "salaires réellement proposés et les profils recherchés sur votre métier."
+        "<br><br>"
+        "📅 <b>Événements</b> — <b>ne manquez aucune occasion de rencontrer un recruteur "
+        "en direct</b>, forums et job dating près de chez vous.",
         unsafe_allow_html=True,
     )
 
@@ -1755,3 +1757,4 @@ with tab_evenements:
                         "Lien": st.column_config.LinkColumn("Lien", display_text="Voir la fiche")
                     },
                 )
+                    
