@@ -345,6 +345,24 @@ def _nom_ville_simplifie(libelle_brut):
     return nom
 
 
+def _lieu_evenement(evenement, departement):
+    """
+    Détermine le libellé de lieu utilisé pour filtrer les événements par ville :
+    la ville normalisée (même fonction que le classement des villes, pour
+    regrouper les variantes d'un même lieu) si l'événement en fournit une,
+    sinon le département de la recherche en repli (tous les événements sont de
+    toute façon déjà filtrés sur ce département côté API, donc ce repli reste
+    cohérent même pour un événement 100% en ligne sans ville précise).
+    Appliqué à TOUS les événements, présentiel ET distanciel — pertinent aussi
+    pour situer l'activité en ligne par rapport à une région/ville donnée.
+    """
+    ville_brute = (evenement.get("ville") or "").strip()
+    if ville_brute:
+        return _nom_ville_simplifie(ville_brute)
+    nom_departement = DEPARTEMENTS_VERS_NOM.get(departement, departement)
+    return f"{nom_departement} (département)"
+
+
 # ---------------------------------------------------------------------------
 # Onglet 0 : Créer mon CV (exécuté en premier : sa synchronisation vers
 # "Métier recherché" doit être en place avant que ce champ ne soit affiché)
@@ -967,15 +985,32 @@ with tab_profil:
                 st.caption("Tes expériences couvrent-elles les missions attendues ?")
                 # --- Les actions/missions les plus demandées apparaissent-elles dans le texte
                 # des expériences du CV ? ---
+                # Garde-fou : cette comparaison n'a de sens que si au moins une expérience a un
+                # intitulé de poste qui correspond (normalisé) au poste recherché — sinon on
+                # comparerait le texte d'un métier différent aux tâches demandées pour le poste
+                # ciblé, ce qui induirait en erreur (ex: viser "Chef de projet" avec une seule
+                # expérience de "Serveur" ne devrait pas signaler un manque de missions).
+                postes_recherche_normalises_action = {_normaliser_texte(p) for p in postes_cv}
+                if titre_libre_cv:
+                    postes_recherche_normalises_action.add(_normaliser_texte(titre_libre_cv))
+                experiences_alignees_action = [
+                    exp for exp in st.session_state.get("cv_experiences", [])
+                    if exp.get("poste", "").strip()
+                    and _normaliser_texte(exp["poste"]) in postes_recherche_normalises_action
+                ]
+
                 # Contrairement aux compétences (des tags courts, adaptés à une liste à cocher),
                 # les actions/missions du référentiel France Travail sont formulées comme des
                 # tâches concrètes ("Piloter un budget") — plus naturel de vérifier si elles
                 # transparaissent DANS le texte des expériences que de les cocher séparément.
                 # Matching approximatif (rapidfuzz), pas une recherche de phrase exacte : les
                 # candidats reformulent presque toujours avec leurs propres mots.
-                if df_comp_apercu is not None and not df_comp_apercu.empty:
+                if experiences_alignees_action and df_comp_apercu is not None and not df_comp_apercu.empty:
+                    # Seul le texte des expériences ALIGNÉES avec le poste recherché est
+                    # comparé — une expérience passée dans un métier différent n'a aucune
+                    # raison de couvrir les tâches demandées pour le poste ciblé.
                     texte_experiences = " ".join(
-                        (exp.get("description") or "") for exp in st.session_state.get("cv_experiences", [])
+                        (exp.get("description") or "") for exp in experiences_alignees_action
                     ).strip()
 
                     nb_actions_affichees += 1
@@ -1679,24 +1714,42 @@ with tab_evenements:
                     f"domaine du poste recherché en compte {total_grand_domaine} au total sur la "
                     "période, mais couvre bien d'autres métiers que celui recherché."
                 )
-            df_evenements = pd.DataFrame(
-                [
-                    {
-                        "Titre": e.get("titre") or "N/C",
-                        "Date": (e.get("dateEvenement") or "")[:10],
-                        "Ville": e.get("ville") or "N/C",
-                        "Type": e.get("type") or "N/C",
-                        "Modalités": ", ".join(e.get("modalites") or []) or "N/C",
-                        "Lien": e.get("urlDetailEvenement") or "",
-                    }
-                    for e in evenements
-                ]
+
+            # Filtre ville — appliqué à TOUS les événements (présentiel ET distanciel,
+            # cf. _lieu_evenement) : la liste déroulante ne propose que les lieux
+            # réellement présents dans les résultats de cette recherche, pas un
+            # référentiel générique de villes. Filtrage entièrement côté client, sur
+            # les événements déjà récupérés — pas de nouvel appel API.
+            for e in evenements:
+                e["_lieu_filtre"] = _lieu_evenement(e, departement_evt)
+            lieux_disponibles = sorted({e["_lieu_filtre"] for e in evenements})
+            ville_choisie = st.selectbox(
+                "Ville", ["Toutes les villes"] + lieux_disponibles, key="evt_ville",
             )
-            st.dataframe(
-                df_evenements,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Lien": st.column_config.LinkColumn("Lien", display_text="Voir la fiche")
-                },
-            )
+            if ville_choisie != "Toutes les villes":
+                evenements = [e for e in evenements if e["_lieu_filtre"] == ville_choisie]
+
+            if not evenements:
+                st.info(f"Aucun événement trouvé pour « {ville_choisie} » sur cette période.")
+            else:
+                df_evenements = pd.DataFrame(
+                    [
+                        {
+                            "Titre": e.get("titre") or "N/C",
+                            "Date": (e.get("dateEvenement") or "")[:10],
+                            "Ville": e.get("ville") or "N/C",
+                            "Type": e.get("type") or "N/C",
+                            "Modalités": ", ".join(e.get("modalites") or []) or "N/C",
+                            "Lien": e.get("urlDetailEvenement") or "",
+                        }
+                        for e in evenements
+                    ]
+                )
+                st.dataframe(
+                    df_evenements,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Lien": st.column_config.LinkColumn("Lien", display_text="Voir la fiche")
+                    },
+                )
