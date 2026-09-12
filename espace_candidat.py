@@ -219,6 +219,14 @@ st.markdown(
     "du marché.</p>",
     unsafe_allow_html=True,
 )
+st.caption(
+    "Cette application est un outil de **conseil personnalisé**, qui s'appuie sur des "
+    "techniques de **Business Intelligence** et utilise les données de **France Travail** "
+    "afin d'analyser les besoins liés au poste et au département sélectionnés, ainsi vous "
+    "apporter des éléments de décision sur : les entreprises qui recrutent près de chez "
+    "vous, les compétences et le savoir-être demandés, et le dynamisme économique de "
+    "votre département — de quoi construire votre stratégie de recherche d'emploi."
+)
 
 with st.sidebar:
     st.caption(
@@ -379,14 +387,6 @@ with tab_profil:
     lien_recherche_ft = (
         f"https://candidat.francetravail.fr/offres/recherche?motsCles={mots_cles_lien_ft}"
         if mots_cles_lien_ft else "https://candidat.francetravail.fr/offres/recherche"
-    )
-    st.caption(
-        "Cette application est un outil de **conseil**, qui s'appuie sur des techniques de "
-        "**Business Intelligence** et utilise les données de **France Travail** afin "
-        "d'analyser les besoins liés au poste et au département sélectionnés, ainsi vous "
-        "apporter des éléments de décision sur : les entreprises qui recrutent près de chez "
-        "vous, les compétences et le savoir-être demandés, et le dynamisme économique de "
-        "votre département — de quoi construire votre stratégie de recherche d'emploi."
     )
     with st.expander("ℹ️ À propos de cette analyse"):
         st.caption(
