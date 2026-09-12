@@ -54,10 +54,42 @@ st.markdown(
         max-width: 75% !important;
         margin: 0 !important;
         align-self: flex-start !important;
+        padding-top: 2rem !important;
     }
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+# La règle CSS ci-dessus (padding-top sur .block-container) ne suffit pas à elle
+# seule : la marge par défaut de Streamlit en haut du contenu est en réalité
+# posée sur un élément et/ou avec une spécificité qu'une simple règle externe
+# n'écrase pas de façon fiable selon les versions de Streamlit. On force donc la
+# valeur directement en JavaScript sur l'élément réellement rendu, ce qui
+# l'emporte quoi qu'il arrive (même technique que les autres ajustements visuels
+# de cette page, ex. l'effet lumineux sur l'onglet "Par où commencer").
+components.html(
+    """
+    <script>
+    (function() {
+        function reduireMargeHautContenu() {
+            const doc = window.parent.document;
+            const conteneur = doc.querySelector('.block-container');
+            if (conteneur) {
+                conteneur.style.setProperty('padding-top', '2rem', 'important');
+            }
+        }
+        reduireMargeHautContenu();
+        // Quelques recalculs différés : le conteneur peut ne pas encore exister au
+        // tout premier rendu, ou Streamlit peut réappliquer son style par défaut
+        // juste après (rerun, changement d'onglet...).
+        setTimeout(reduireMargeHautContenu, 300);
+        setTimeout(reduireMargeHautContenu, 1000);
+        setTimeout(reduireMargeHautContenu, 2500);
+    })();
+    </script>
+    """,
+    height=0,
 )
 
 # ---------------------------------------------------------------------------
