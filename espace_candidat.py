@@ -229,7 +229,8 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.markdown("#### ✨ Les + de ACE !")
+    st.markdown("#### ✨ Les *PLUS* de ACE!")
+    st.caption("Les 4 essentiels")
     st.caption(
         "🧾 <b>Créer mon CV</b> — <b>un CV professionnel aligné sur les critères "
         "Europass</b>, prêt en quelques minutes. Déjà un CV ? Renseignez quand même votre "
@@ -1757,4 +1758,3 @@ with tab_evenements:
                         "Lien": st.column_config.LinkColumn("Lien", display_text="Voir la fiche")
                     },
                 )
-                    
