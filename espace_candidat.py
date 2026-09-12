@@ -66,13 +66,23 @@ st.markdown(
 # cf. CSS ci-dessus — et le bord droit de la fenêtre), pas collée au bord de
 # la fenêtre elle-même.
 #
-# Cet espace vide n'a pas une largeur fixe en pixels : elle dépend de la
-# largeur de la fenêtre ET de la présence/largeur du bandeau latéral gauche
-# (ouvert, fermé, redimensionné par l'utilisateur...) — impossible à calculer
-# de façon fiable en CSS pur. Un petit script mesure donc la position réelle
-# de .block-container au moment du rendu (getBoundingClientRect) et positionne
-# la bannière exactement dans l'espace restant à droite, recalculé à chaque
-# redimensionnement de fenêtre.
+# Taille RÉDUITE et contrainte en HAUTEUR (pas seulement en largeur) : l'image
+# d'origine est un montage vertical (160x800, ratio 1:5) — la contraindre
+# seulement en largeur (comme dans une version précédente) donnait encore une
+# hauteur d'environ 900px, soit quasiment tout l'écran, ce qui recouvrait la
+# barre d'outils Streamlit en haut (Share/étoile/crayon) et le bouton
+# "Manage app" en bas. Ici, la hauteur est plafonnée à HAUTEUR_BANNIERE_CIBLE
+# ET une marge de sécurité (MARGE_HAUT/MARGE_BAS) est réservée en haut et en
+# bas pour ne jamais chevaucher ces éléments — la largeur en découle ensuite
+# du ratio de l'image (pas de object-fit: cover, donc pas de rognage : les 3
+# parties du montage restent visibles en entier).
+#
+# Cet espace vide n'a pas une largeur/hauteur fixe en pixels : ça dépend de la
+# taille de la fenêtre ET du bandeau latéral gauche (ouvert/fermé/redimension-
+# né) — impossible à calculer de façon fiable en CSS pur. Un petit script
+# mesure donc la position réelle de .block-container au moment du rendu
+# (getBoundingClientRect) et positionne la bannière en conséquence, recalculé
+# à chaque redimensionnement de fenêtre.
 #
 # La bannière reste en position: fixed (sort du flux normal) : aucun impact
 # sur block-container, les onglets ou le bandeau latéral. pointer-events: none
@@ -86,17 +96,18 @@ if _CHEMIN_BANNIERE_DROITE.exists():
         <style>
         .banniere-droite-fixe {{
             position: fixed;
-            top: 0;
-            height: 100vh;
             z-index: 999999;
             pointer-events: none;
             display: none; /* affichée uniquement une fois positionnée par le script ci-dessous */
         }}
         .banniere-droite-fixe img {{
-            height: 100%;
+            display: block;
             width: 100%;
-            object-fit: cover;
-            opacity: 0.92;
+            height: 100%;      /* la hauteur du conteneur est déjà calculée au bon ratio en JS */
+            object-fit: contain; /* garde les proportions, aucun rognage : les 3 parties restent visibles */
+            border-radius: 8px;
+            opacity: 0.95;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.35);
         }}
         </style>
         <div class="banniere-droite-fixe">
@@ -109,8 +120,12 @@ if _CHEMIN_BANNIERE_DROITE.exists():
         """
         <script>
         (function() {
-            const MARGE = 14;       // petit espace entre le texte et la bannière, et entre la bannière et le bord
-            const LARGEUR_MIN = 40; // en dessous de cette largeur disponible, on masque plutôt que déformer
+            const RATIO_HAUTEUR_LARGEUR = 800 / 160; // ratio réel de l'image (5:1)
+            const MARGE = 14;                 // espace entre le texte/bord et la bannière
+            const MARGE_HAUT = 70;             // réserve la barre d'outils Streamlit (Share/étoile/crayon)
+            const MARGE_BAS = 70;              // réserve le bouton "Manage app" (Streamlit Community Cloud)
+            const LARGEUR_MIN = 30;            // en dessous, pas assez de place : on masque plutôt que déformer
+            const HAUTEUR_BANNIERE_CIBLE = 260; // "taille réduite" cible, jamais dépassée même si la place ne manque pas
 
             function positionnerBanniereDroite() {
                 const doc = window.parent.document;
@@ -120,16 +135,38 @@ if _CHEMIN_BANNIERE_DROITE.exists():
 
                 const rectConteneur = conteneur.getBoundingClientRect();
                 const largeurFenetre = window.parent.innerWidth;
-                const gauche = rectConteneur.right + MARGE;
-                const largeurDisponible = largeurFenetre - gauche - MARGE;
+                const hauteurFenetre = window.parent.innerHeight;
 
-                if (largeurDisponible >= LARGEUR_MIN) {
-                    banniere.style.left = gauche + "px";
-                    banniere.style.width = largeurDisponible + "px";
-                    banniere.style.display = "block";
-                } else {
+                const debutEspaceVide = rectConteneur.right + MARGE;
+                const largeurDisponible = largeurFenetre - debutEspaceVide - MARGE;
+                const hauteurDisponible = hauteurFenetre - MARGE_HAUT - MARGE_BAS;
+
+                if (largeurDisponible < LARGEUR_MIN || hauteurDisponible < 60) {
                     banniere.style.display = "none";
+                    return;
                 }
+
+                // Hauteur "réduite" cible, sans jamais dépasser la place verticale
+                // réellement disponible entre les deux marges de sécurité.
+                let hauteurBanniere = Math.min(HAUTEUR_BANNIERE_CIBLE, hauteurDisponible);
+                let largeurBanniere = hauteurBanniere / RATIO_HAUTEUR_LARGEUR;
+
+                // Si la largeur calculée dépasse l'espace vide disponible, on recalcule
+                // à partir de la largeur cette fois — l'image reste entièrement visible
+                // (jamais rognée), juste un peu plus petite que la cible si besoin.
+                if (largeurBanniere > largeurDisponible) {
+                    largeurBanniere = largeurDisponible;
+                    hauteurBanniere = largeurBanniere * RATIO_HAUTEUR_LARGEUR;
+                }
+
+                const gauche = debutEspaceVide + (largeurDisponible - largeurBanniere) / 2;
+                const haut = MARGE_HAUT + (hauteurDisponible - hauteurBanniere) / 2;
+
+                banniere.style.left = gauche + "px";
+                banniere.style.top = haut + "px";
+                banniere.style.width = largeurBanniere + "px";
+                banniere.style.height = hauteurBanniere + "px";
+                banniere.style.display = "block";
             }
 
             positionnerBanniereDroite();
