@@ -230,17 +230,17 @@ st.markdown(
 
 with st.sidebar:
     st.caption(
-        "<b>Le parcours complet de l'application :</b><br><br>"
-        "🧾 <b>Créer mon CV</b> — construisez votre CV et définissez le poste que vous visez "
-        "(renseignez d'abord votre département, puis le poste).<br><br>"
-        "🎯 <b>Analyse principale</b> — se lance automatiquement dès que votre poste est "
-        "renseigné : tes points d'attention comme point de départ, top recruteurs à "
-        "démarcher, compétences et tâches/missions les plus demandées, et dynamisme du "
-        "département.<br><br>"
-        "📊 <b>Compléments d'analyse</b> — pour aller plus loin : types de contrat, fourchette "
-        "de salaire, niveau d'expérience demandé.<br><br>"
-        "📅 <b>Événements</b> — forums, salons et job dating à venir sur votre métier et votre "
-        "département.",
+        "<b>Ce que l'application vous apporte :</b><br><br>"
+        "🧾 <b>Créer mon CV</b> — un CV structuré et professionnel en quelques minutes, "
+        "point de départ de toute l'analyse qui suit (commencez par le département, puis "
+        "le poste).<br><br>"
+        "🎯 <b>Analyse principale</b> — sachez précisément où concentrer vos efforts : les "
+        "entreprises qui recrutent près de chez vous, ce que les recruteurs attendent "
+        "vraiment, et si le marché est porteur dans votre région.<br><br>"
+        "📊 <b>Compléments d'analyse</b> — négociez en confiance : découvrez les salaires "
+        "réellement proposés et les profils recherchés sur votre métier.<br><br>"
+        "📅 <b>Événements</b> — ne manquez aucune occasion de rencontrer un recruteur en "
+        "direct, forums et job dating près de chez vous.",
         unsafe_allow_html=True,
     )
 
