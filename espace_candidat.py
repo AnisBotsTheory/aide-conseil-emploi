@@ -689,11 +689,6 @@ with tab_profil:
                     st.info("Aucune suggestion disponible pour l'instant.")
                 else:
                     df_comp, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
-                    st.caption(
-                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
-                        "Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
-                        f"**{nb_total_suggestions} offre(s)**."
-                    )
 
                     st.markdown("##### 🧠 Compétences les plus demandées")
                     st.caption(
@@ -1010,7 +1005,7 @@ with tab_profil:
                 nb_actions_affichees += 1
                 df_entreprises_nommees = (
                     df_entreprises[
-                        df_entreprises["entreprise"].str.strip().str.lower() != "nom de l'entreprise anonymisé"
+                        df_entreprises["entreprise"].str.strip().str.lower() != LABEL_ENTREPRISE_ANONYME.lower()
                     ] if not df_entreprises.empty else df_entreprises
                 )
                 nb_recruteurs_actifs = len(df_entreprises_nommees)
@@ -1284,7 +1279,10 @@ with tab_avance:
                         "avec la fourchette ci-dessous."
                     )
             if nb_total_offres == 0:
-                st.info("Aucune offre trouvée pour ces critères.")
+                st.info(
+                    "Aucune offre trouvée pour ces critères. Essaie d'élargir ta recherche "
+                    "(poste plus générique, ou un autre poste depuis l'onglet **🧾 Créer mon CV**)."
+                )
             elif nb_avec_salaire == 0:
                 st.info("Aucune des offres trouvées n'indique de salaire.")
             else:
@@ -1303,13 +1301,24 @@ with tab_avance:
                     # triées croissant — pas une simple barre continue du minimum absolu au
                     # maximum absolu, mais une graduation qui matérialise les paliers réels
                     # observés (ex: 30 000 € puis 50 000 € puis 60 000 € puis 80 000 €).
-                    bornes = [_extraire_bornes_salaire(s) for s in df_salaires_cdi["Salaire indiqué"]]
+                    #
+                    # Chaque valeur (min ou max) est associée au niveau d'expérience de
+                    # l'offre dont elle provient (colonne "Expérience requise", déjà
+                    # normalisée avec les mêmes catégories que le graphique "Répartition
+                    # par niveau d'expérience" juste au-dessus) — permet d'afficher au
+                    # survol non seulement le montant et le nombre d'offres, mais aussi
+                    # le(s) niveau(x) d'expérience associé(s) à cette tranche de salaire.
                     toutes_valeurs = []
-                    for borne_min, borne_max in bornes:
+                    experiences_valeurs = []
+                    for _, ligne_salaire_cdi in df_salaires_cdi.iterrows():
+                        borne_min, borne_max = _extraire_bornes_salaire(ligne_salaire_cdi["Salaire indiqué"])
+                        experience_ligne = ligne_salaire_cdi.get("Expérience requise") or "Non précisé"
                         if borne_min is not None:
                             toutes_valeurs.append(borne_min)
+                            experiences_valeurs.append(experience_ligne)
                         if borne_max is not None:
                             toutes_valeurs.append(borne_max)
+                            experiences_valeurs.append(experience_ligne)
 
                     # Seuils de plausibilité : un montant mensuel annualisé (×12) peut
                     # légitimement donner un total très bas s'il s'agit en réalité d'une
@@ -1324,12 +1333,11 @@ with tab_avance:
                     # côté.
                     SEUIL_SALAIRE_PLAUSIBLE_MIN = 15000
                     SEUIL_SALAIRE_PLAUSIBLE_MAX = 200000
-                    nb_valeurs_avant_filtre = len(toutes_valeurs)
-                    toutes_valeurs = [
-                        v for v in toutes_valeurs
+                    valeurs_et_experiences_filtrees = [
+                        (v, exp) for v, exp in zip(toutes_valeurs, experiences_valeurs)
                         if SEUIL_SALAIRE_PLAUSIBLE_MIN <= v <= SEUIL_SALAIRE_PLAUSIBLE_MAX
                     ]
-                    nb_valeurs_exclues = nb_valeurs_avant_filtre - len(toutes_valeurs)
+                    toutes_valeurs = [v for v, _ in valeurs_et_experiences_filtrees]
 
                     if not toutes_valeurs:
                         st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
@@ -1345,7 +1353,14 @@ with tab_avance:
                             pas_arrondi = max(1000, round(plage_valeurs / nb_blocs_cible / 1000) * 1000)
                         else:
                             pas_arrondi = 1000
-                        compteur_valeurs = Counter(round(v / pas_arrondi) * pas_arrondi for v in toutes_valeurs)
+                        compteur_valeurs = Counter()
+                        # Un Counter d'expérience par graduation, pour retrouver le(s)
+                        # niveau(x) d'expérience le(s) plus représenté(s) sur cette tranche.
+                        experiences_par_graduation = {}
+                        for valeur_brute, experience_associee in valeurs_et_experiences_filtrees:
+                            valeur_arrondie = round(valeur_brute / pas_arrondi) * pas_arrondi
+                            compteur_valeurs[valeur_arrondie] += 1
+                            experiences_par_graduation.setdefault(valeur_arrondie, Counter())[experience_associee] += 1
                         valeurs_graduees = sorted(compteur_valeurs.keys())
                         if len(valeurs_graduees) == 1:
                             st.metric("Salaire annuel indiqué", f"{valeurs_graduees[0]:,.0f} €".replace(",", " "))
@@ -1361,12 +1376,18 @@ with tab_avance:
                             ]
                             # Chaque bloc représente la tranche menant à sa graduation de DROITE
                             # (ex: le bloc entre 30 000 € et 50 000 € "mène" à 50 000 €) — au
-                            # survol, on affiche combien d'offres ont un montant qui arrondit à
-                            # cette borne précise.
-                            textes_survol = [
-                                f"{v:,.0f} € — {compteur_valeurs[v]} offre(s)".replace(",", " ")
-                                for v in valeurs_graduees[1:]
-                            ]
+                            # survol, on affiche le montant, le nombre d'offres, et le(s) 2
+                            # niveaux d'expérience les plus fréquents parmi les offres qui
+                            # composent cette graduation.
+                            textes_survol = []
+                            for v in valeurs_graduees[1:]:
+                                niveaux_principaux = [
+                                    niveau for niveau, _ in experiences_par_graduation.get(v, Counter()).most_common(2)
+                                ]
+                                niveaux_texte = ", ".join(niveaux_principaux) if niveaux_principaux else "Non précisé"
+                                textes_survol.append(
+                                    f"{v:,.0f} € — {compteur_valeurs[v]} offre(s) — {niveaux_texte}".replace(",", " ")
+                                )
                             fig_jauge = go.Figure(
                                 go.Bar(
                                     x=segments_largeur,
@@ -1403,10 +1424,67 @@ with tab_avance:
                         f"📎 Source : **{len(df_salaires_cdi)} offre(s) CDI** avec salaire indiqué."
                     )
             st.divider()
+            st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
+            st.caption("De « Débutant accepté » à plusieurs années requises.")
+            if df_experience.empty:
+                st.info(
+                    "Aucune donnée de niveau d'expérience disponible pour ces critères. Essaie "
+                    "d'élargir ta recherche (poste plus générique, ou un autre poste depuis "
+                    "l'onglet **🧾 Créer mon CV**)."
+                )
+            else:
+                # Catégorie "Expérience exigée" trop vague pour être affichée telle quelle
+                # (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit rien de la
+                # durée réellement demandée) — fusionnée dans "Non précisé" plutôt que
+                # retirée : la supprimer purement et simplement faisait perdre ces offres du
+                # total affiché, créant un écart avec le total de "Répartition par type de
+                # contrat" (qui, lui, compte bien TOUTES les offres). La fusion garde les deux
+                # totaux alignés.
+                df_experience_fusion = df_experience.copy()
+                df_experience_fusion["experience"] = df_experience_fusion["experience"].replace(
+                    {"Expérience exigée": "Non précisé"}
+                )
+                df_experience_tri = (
+                    df_experience_fusion.groupby("experience", as_index=False)["nombre_offres"]
+                    .sum()
+                    .sort_values("nombre_offres", ascending=False)
+                )
+                try:
+                    fig_experience = px.treemap(
+                        df_experience_tri,
+                        path=[px.Constant(""), "experience"],
+                        values="nombre_offres",
+                        color="nombre_offres",
+                        color_continuous_scale="Tealgrn",
+                    )
+                    fig_experience.update_traces(
+                        textinfo="label+value", texttemplate="%{label}<br>%{value}",
+                        marker=dict(line=dict(width=2, color="#0e1117")),
+                        # Infobulle réduite au strict nécessaire (libellé + nombre d'offres) —
+                        # par défaut, un treemap Plotly affiche aussi le % du parent, le % de
+                        # la racine et le chemin complet au survol, jugé trop chargé ici.
+                        hovertemplate="%{label}<br>%{value} offre(s)<extra></extra>",
+                    )
+                    fig_experience.update_layout(
+                        height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_experience, use_container_width=True)
+                except Exception:
+                    st.dataframe(
+                        df_experience_tri.rename(columns={"experience": "Expérience", "nombre_offres": "Nombre d'offres"}),
+                        use_container_width=True, hide_index=True,
+                    )
+
+            st.divider()
             st.markdown("#### 📋 Répartition par type de contrat")
             st.caption("Quels contrats sont réellement proposés — CDI, CDD, intérim...")
             if df_contrats.empty:
-                st.info("Aucune donnée de type de contrat disponible pour ces critères.")
+                st.info(
+                    "Aucune donnée de type de contrat disponible pour ces critères. Essaie "
+                    "d'élargir ta recherche (poste plus générique, ou un autre poste depuis "
+                    "l'onglet **🧾 Créer mon CV**)."
+                )
             else:
                 df_contrats_tri = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
                 # Palette distincte par type de contrat (au lieu d'un dégradé de bleu par
@@ -1478,56 +1556,6 @@ with tab_avance:
                     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 )
                 st.plotly_chart(fig_contrats, use_container_width=True)
-
-            st.divider()
-            st.divider()
-            st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
-            st.caption("De « Débutant accepté » à plusieurs années requises.")
-            if df_experience.empty:
-                st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
-            else:
-                # Catégorie "Expérience exigée" trop vague pour être affichée telle quelle
-                # (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit rien de la
-                # durée réellement demandée) — fusionnée dans "Non précisé" plutôt que
-                # retirée : la supprimer purement et simplement faisait perdre ces offres du
-                # total affiché, créant un écart avec le total de "Répartition par type de
-                # contrat" (qui, lui, compte bien TOUTES les offres). La fusion garde les deux
-                # totaux alignés.
-                df_experience_fusion = df_experience.copy()
-                df_experience_fusion["experience"] = df_experience_fusion["experience"].replace(
-                    {"Expérience exigée": "Non précisé"}
-                )
-                df_experience_tri = (
-                    df_experience_fusion.groupby("experience", as_index=False)["nombre_offres"]
-                    .sum()
-                    .sort_values("nombre_offres", ascending=False)
-                )
-                try:
-                    fig_experience = px.treemap(
-                        df_experience_tri,
-                        path=[px.Constant(""), "experience"],
-                        values="nombre_offres",
-                        color="nombre_offres",
-                        color_continuous_scale="Tealgrn",
-                    )
-                    fig_experience.update_traces(
-                        textinfo="label+value", texttemplate="%{label}<br>%{value}",
-                        marker=dict(line=dict(width=2, color="#0e1117")),
-                        # Infobulle réduite au strict nécessaire (libellé + nombre d'offres) —
-                        # par défaut, un treemap Plotly affiche aussi le % du parent, le % de
-                        # la racine et le chemin complet au survol, jugé trop chargé ici.
-                        hovertemplate="%{label}<br>%{value} offre(s)<extra></extra>",
-                    )
-                    fig_experience.update_layout(
-                        height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
-                        paper_bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(fig_experience, use_container_width=True)
-                except Exception:
-                    st.dataframe(
-                        df_experience_tri.rename(columns={"experience": "Expérience", "nombre_offres": "Nombre d'offres"}),
-                        use_container_width=True, hide_index=True,
-                    )
 
             # --- Calcul silencieux expérience/salaire, PAS affiché ici (jauge ci-dessus
             # conservée comme seule visualisation de salaire visible) — sert uniquement à
@@ -1641,7 +1669,9 @@ with tab_evenements:
             )
         elif not evenements:
             st.info(
-                f"Aucun événement trouvé pour ces critères dans les {fenetre_jours} prochains jours."
+                f"Aucun événement trouvé pour ces critères dans les {fenetre_jours} prochains "
+                "jours. Essaie d'élargir la période, la modalité, ou un autre poste depuis "
+                "l'onglet **🧾 Créer mon CV**."
             )
         else:
             # Transparence sur le filtrage : le grand domaine ROME (une lettre, ex: "M" pour
