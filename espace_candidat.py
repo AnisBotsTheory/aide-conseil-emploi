@@ -1354,11 +1354,20 @@ with tab_avance:
             if df_experience.empty:
                 st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
             else:
-                # Catégorie "Expérience exigée" retirée à la demande : trop vague pour être
-                # exploitable (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit
-                # rien de la durée réellement demandée).
+                # Catégorie "Expérience exigée" trop vague pour être affichée telle quelle
+                # (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit rien de la
+                # durée réellement demandée) — fusionnée dans "Non précisé" plutôt que
+                # retirée : la supprimer purement et simplement faisait perdre ces offres du
+                # total affiché, créant un écart avec le total de "Répartition par type de
+                # contrat" (qui, lui, compte bien TOUTES les offres). La fusion garde les deux
+                # totaux alignés.
+                df_experience_fusion = df_experience.copy()
+                df_experience_fusion["experience"] = df_experience_fusion["experience"].replace(
+                    {"Expérience exigée": "Non précisé"}
+                )
                 df_experience_tri = (
-                    df_experience[df_experience["experience"] != "Expérience exigée"]
+                    df_experience_fusion.groupby("experience", as_index=False)["nombre_offres"]
+                    .sum()
                     .sort_values("nombre_offres", ascending=False)
                 )
                 try:
@@ -1453,14 +1462,6 @@ with tab_avance:
                     if not toutes_valeurs:
                         st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
                     else:
-                        if nb_valeurs_exclues:
-                            st.caption(
-                                f"ℹ️ {nb_valeurs_exclues} montant(s) hors de la plage "
-                                f"{SEUIL_SALAIRE_PLAUSIBLE_MIN:,.0f} € - {SEUIL_SALAIRE_PLAUSIBLE_MAX:,.0f} €/an "
-                                "exclu(s) de la jauge (probable indemnité d'alternance/stage, ou "
-                                "montant mal annualisé, plutôt qu'un salaire de poste réaliste)."
-                                .replace(",", " ")
-                            )
                         # Pas d'arrondi calé dynamiquement sur l'étendue réelle des valeurs,
                         # plutôt qu'un arrondi fixe au 5 000 € — avec beaucoup d'offres, un pas
                         # fixe pouvait produire des dizaines de graduations illisibles et
@@ -1527,11 +1528,7 @@ with tab_avance:
                     # d'un gros st.metric qui lui donnait plus de poids visuel que ce n'est
                     # qu'un indicateur de taille d'échantillon).
                     st.caption(
-                        f"📎 Source : **{nb_avec_salaire} offre(s)** sur {nb_total_offres} indiquent "
-                        "un salaire, tous types de contrat confondus — jauge ci-dessus calculée "
-                        "uniquement sur les offres CDI parmi elles, montants annualisés (un salaire "
-                        "mensuel est multiplié par 12 ; un salaire horaire est exclu, faute de "
-                        "pouvoir le convertir en annuel de façon fiable)."
+                        f"📎 Source : **{len(df_salaires_cdi)} offre(s) CDI** avec salaire indiqué."
                     )
 
             # --- Calcul silencieux expérience/salaire, PAS affiché ici (jauge ci-dessus
