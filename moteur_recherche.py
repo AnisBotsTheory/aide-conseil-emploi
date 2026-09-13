@@ -3061,6 +3061,13 @@ def _normaliser_experience_libelle(libelle_brut):
       qu'elles représentent la même durée — les deux se rejoignent sous
       "2 An(s)" (conversion en mois puis reformulation en années quand c'est
       un multiple de 12).
+    - "0 An(s)"/"0 Mois" -> "Débutant accepté" : une durée d'expérience NULLE
+      dit exactement la même chose que "Débutant accepté" avec un mot
+      différent — les compter séparément dans "Répartition par niveau
+      d'expérience" créait une catégorie "0 Mois" artificielle en plus de
+      "Débutant accepté", et faisait apparaître un écart de total avec
+      "Répartition par type de contrat" une fois cette catégorie filtrée
+      ailleurs dans le code. La fusion à la source évite les deux problèmes.
     """
     if not libelle_brut:
         return "Non précisé"
@@ -3072,6 +3079,8 @@ def _normaliser_experience_libelle(libelle_brut):
 
     valeur, unite = int(correspondance.group(1)), correspondance.group(2).lower()
     mois_total = valeur * 12 if unite.startswith("an") else valeur
+    if mois_total == 0:
+        return "Débutant accepté"
     if mois_total >= 12 and mois_total % 12 == 0:
         return f"{mois_total // 12} An(s)"
     return f"{mois_total} Mois"
