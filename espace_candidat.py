@@ -1269,134 +1269,6 @@ with tab_avance:
                 "publiée(s) sur France Travail — identique à l'onglet Analyse principale pour "
                 "cette même recherche."
             )
-
-            st.divider()
-            st.markdown("#### 📋 Répartition par type de contrat")
-            st.caption("Quels contrats sont réellement proposés — CDI, CDD, intérim...")
-            if df_contrats.empty:
-                st.info("Aucune donnée de type de contrat disponible pour ces critères.")
-            else:
-                df_contrats_tri = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
-                # Palette distincte par type de contrat (au lieu d'un dégradé de bleu par
-                # volume, qui rendait les petites sphères ternes/grises) — une couleur vive
-                # propre à chaque type, cycle si plus de types que de couleurs prévues.
-                palette_contrats = ["#2E86DE", "#EE5A6F", "#10AC84", "#F9A826", "#8854D0", "#01A3A4"]
-                couleurs_contrats = [
-                    palette_contrats[i % len(palette_contrats)] for i in range(len(df_contrats_tri))
-                ]
-                # Taille proportionnelle à l'AIRE du nombre d'offres brut, SANS compression
-                # supplémentaire (une racine carrée avait été appliquée en plus du sizemode="area"
-                # déjà en place, ce qui écrasait trop l'écart entre les valeurs — un 50 rendait
-                # quasiment la même taille qu'un 20, un 10 la même taille qu'un 5). La lisibilité
-                # du texte dans les petites sphères est assurée autrement : un plancher de taille
-                # (sizemin) ET une police PAR SPHÈRE, plus petite pour les petites valeurs plutôt
-                # que de gonfler artificiellement leur taille.
-                tailles_base = df_contrats_tri["nombre_offres"]
-                valeur_max = tailles_base.max()
-                # Police entre 10 et 18 pt, sur la racine carrée du ratio à la valeur max (la
-                # racine carrée reflète le rayon, dimension realmente perçue visuellement, pas
-                # l'aire) — reste lisible même sur la plus petite sphère, sans être minuscule.
-                polices_contrats = [
-                    round(10 + 8 * ((v / valeur_max) ** 0.5), 1) for v in tailles_base
-                ]
-                # Écartement horizontal entre sphères, ADAPTATIF à la taille de l'échantillon :
-                # un écart fixe (2.4) pensé pour de gros échantillons laissait un vide
-                # disproportionné entre de petites sphères (valeur max < 15, donc des cercles
-                # physiquement petits qui n'ont pas besoin d'autant d'espace pour ne pas se
-                # toucher) — réduit à 1.4 dans ce cas.
-                ecart_x = 2.4 if valeur_max >= 15 else 1.4
-                positions_x = [i * ecart_x for i in range(len(df_contrats_tri))]
-                fig_contrats = go.Figure(
-                    go.Scatter(
-                        x=positions_x,
-                        y=[0] * len(df_contrats_tri),
-                        mode="markers+text",
-                        marker=dict(
-                            # sizemode="area" rend l'AIRE du cercle proportionnelle à
-                            # nombre_offres — le diamètre cible maximal (150) fixe la taille de
-                            # la plus grande sphère. sizemin abaissé (38 -> 22) : un plancher trop
-                            # élevé écrasait la différence entre petites valeurs proches (ex: 3 et
-                            # 1 rendaient exactement la même taille, toutes deux plaquées au
-                            # plancher) — un plancher plus bas laisse leurs tailles naturellement
-                            # différenciées se refléter, au prix d'un texte plus serré dans les
-                            # toutes petites sphères (compensé par la police par sphère ci-dessous).
-                            size=tailles_base,
-                            sizemode="area",
-                            sizeref=2.0 * valeur_max / (150.0 ** 2),
-                            sizemin=22,
-                            color=couleurs_contrats,
-                            line=dict(width=2, color="white"),
-                        ),
-                        text=[
-                            # Intitulé en 2 mots (ex: "Profession commerciale") : saut de ligne
-                            # après le premier mot plutôt que de laisser le texte déborder à
-                            # l'horizontale hors de la sphère et chevaucher la voisine.
-                            f"{row.type_contrat.replace(' ', '<br>', 1)}<br>{row.nombre_offres}"
-                            for row in df_contrats_tri.itertuples()
-                        ],
-                        textposition="middle center",
-                        textfont=dict(size=polices_contrats, color="white"),
-                        hoverinfo="skip",
-                    )
-                )
-                fig_contrats.update_xaxes(visible=False, range=[-1.2, positions_x[-1] + 1.2 if positions_x else 1])
-                fig_contrats.update_yaxes(visible=False, range=[-1.3, 1.3])
-                fig_contrats.update_layout(
-                    height=320, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig_contrats, use_container_width=True)
-
-            st.divider()
-            st.divider()
-            st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
-            st.caption("De « Débutant accepté » à plusieurs années requises.")
-            if df_experience.empty:
-                st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
-            else:
-                # Catégorie "Expérience exigée" trop vague pour être affichée telle quelle
-                # (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit rien de la
-                # durée réellement demandée) — fusionnée dans "Non précisé" plutôt que
-                # retirée : la supprimer purement et simplement faisait perdre ces offres du
-                # total affiché, créant un écart avec le total de "Répartition par type de
-                # contrat" (qui, lui, compte bien TOUTES les offres). La fusion garde les deux
-                # totaux alignés.
-                df_experience_fusion = df_experience.copy()
-                df_experience_fusion["experience"] = df_experience_fusion["experience"].replace(
-                    {"Expérience exigée": "Non précisé"}
-                )
-                df_experience_tri = (
-                    df_experience_fusion.groupby("experience", as_index=False)["nombre_offres"]
-                    .sum()
-                    .sort_values("nombre_offres", ascending=False)
-                )
-                try:
-                    fig_experience = px.treemap(
-                        df_experience_tri,
-                        path=[px.Constant(""), "experience"],
-                        values="nombre_offres",
-                        color="nombre_offres",
-                        color_continuous_scale="Tealgrn",
-                    )
-                    fig_experience.update_traces(
-                        textinfo="label+value", texttemplate="%{label}<br>%{value}",
-                        marker=dict(line=dict(width=2, color="#0e1117")),
-                        # Infobulle réduite au strict nécessaire (libellé + nombre d'offres) —
-                        # par défaut, un treemap Plotly affiche aussi le % du parent, le % de
-                        # la racine et le chemin complet au survol, jugé trop chargé ici.
-                        hovertemplate="%{label}<br>%{value} offre(s)<extra></extra>",
-                    )
-                    fig_experience.update_layout(
-                        height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
-                        paper_bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(fig_experience, use_container_width=True)
-                except Exception:
-                    st.dataframe(
-                        df_experience_tri.rename(columns={"experience": "Expérience", "nombre_offres": "Nombre d'offres"}),
-                        use_container_width=True, hide_index=True,
-                    )
-
             st.divider()
             st.markdown("#### 💰 Fourchette de salaire proposée")
             st.caption("Les montants réellement affichés sur les offres CDI de cet échantillon.")
@@ -1529,6 +1401,132 @@ with tab_avance:
                     # qu'un indicateur de taille d'échantillon).
                     st.caption(
                         f"📎 Source : **{len(df_salaires_cdi)} offre(s) CDI** avec salaire indiqué."
+                    )
+            st.divider()
+            st.markdown("#### 📋 Répartition par type de contrat")
+            st.caption("Quels contrats sont réellement proposés — CDI, CDD, intérim...")
+            if df_contrats.empty:
+                st.info("Aucune donnée de type de contrat disponible pour ces critères.")
+            else:
+                df_contrats_tri = df_contrats.sort_values("nombre_offres", ascending=False).reset_index(drop=True)
+                # Palette distincte par type de contrat (au lieu d'un dégradé de bleu par
+                # volume, qui rendait les petites sphères ternes/grises) — une couleur vive
+                # propre à chaque type, cycle si plus de types que de couleurs prévues.
+                palette_contrats = ["#2E86DE", "#EE5A6F", "#10AC84", "#F9A826", "#8854D0", "#01A3A4"]
+                couleurs_contrats = [
+                    palette_contrats[i % len(palette_contrats)] for i in range(len(df_contrats_tri))
+                ]
+                # Taille proportionnelle à l'AIRE du nombre d'offres brut, SANS compression
+                # supplémentaire (une racine carrée avait été appliquée en plus du sizemode="area"
+                # déjà en place, ce qui écrasait trop l'écart entre les valeurs — un 50 rendait
+                # quasiment la même taille qu'un 20, un 10 la même taille qu'un 5). La lisibilité
+                # du texte dans les petites sphères est assurée autrement : un plancher de taille
+                # (sizemin) ET une police PAR SPHÈRE, plus petite pour les petites valeurs plutôt
+                # que de gonfler artificiellement leur taille.
+                tailles_base = df_contrats_tri["nombre_offres"]
+                valeur_max = tailles_base.max()
+                # Police entre 10 et 18 pt, sur la racine carrée du ratio à la valeur max (la
+                # racine carrée reflète le rayon, dimension realmente perçue visuellement, pas
+                # l'aire) — reste lisible même sur la plus petite sphère, sans être minuscule.
+                polices_contrats = [
+                    round(10 + 8 * ((v / valeur_max) ** 0.5), 1) for v in tailles_base
+                ]
+                # Écartement horizontal entre sphères, ADAPTATIF à la taille de l'échantillon :
+                # un écart fixe (2.4) pensé pour de gros échantillons laissait un vide
+                # disproportionné entre de petites sphères (valeur max < 15, donc des cercles
+                # physiquement petits qui n'ont pas besoin d'autant d'espace pour ne pas se
+                # toucher) — réduit à 1.4 dans ce cas.
+                ecart_x = 2.4 if valeur_max >= 15 else 1.4
+                positions_x = [i * ecart_x for i in range(len(df_contrats_tri))]
+                fig_contrats = go.Figure(
+                    go.Scatter(
+                        x=positions_x,
+                        y=[0] * len(df_contrats_tri),
+                        mode="markers+text",
+                        marker=dict(
+                            # sizemode="area" rend l'AIRE du cercle proportionnelle à
+                            # nombre_offres — le diamètre cible maximal (150) fixe la taille de
+                            # la plus grande sphère. sizemin abaissé (38 -> 22) : un plancher trop
+                            # élevé écrasait la différence entre petites valeurs proches (ex: 3 et
+                            # 1 rendaient exactement la même taille, toutes deux plaquées au
+                            # plancher) — un plancher plus bas laisse leurs tailles naturellement
+                            # différenciées se refléter, au prix d'un texte plus serré dans les
+                            # toutes petites sphères (compensé par la police par sphère ci-dessous).
+                            size=tailles_base,
+                            sizemode="area",
+                            sizeref=2.0 * valeur_max / (150.0 ** 2),
+                            sizemin=22,
+                            color=couleurs_contrats,
+                            line=dict(width=2, color="white"),
+                        ),
+                        text=[
+                            # Intitulé en 2 mots (ex: "Profession commerciale") : saut de ligne
+                            # après le premier mot plutôt que de laisser le texte déborder à
+                            # l'horizontale hors de la sphère et chevaucher la voisine.
+                            f"{row.type_contrat.replace(' ', '<br>', 1)}<br>{row.nombre_offres}"
+                            for row in df_contrats_tri.itertuples()
+                        ],
+                        textposition="middle center",
+                        textfont=dict(size=polices_contrats, color="white"),
+                        hoverinfo="skip",
+                    )
+                )
+                fig_contrats.update_xaxes(visible=False, range=[-1.2, positions_x[-1] + 1.2 if positions_x else 1])
+                fig_contrats.update_yaxes(visible=False, range=[-1.3, 1.3])
+                fig_contrats.update_layout(
+                    height=320, margin=dict(t=10, l=10, r=10, b=10), showlegend=False,
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_contrats, use_container_width=True)
+
+            st.divider()
+            st.divider()
+            st.markdown("#### 🎓 Répartition par niveau d'expérience demandé")
+            st.caption("De « Débutant accepté » à plusieurs années requises.")
+            if df_experience.empty:
+                st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
+            else:
+                # Catégorie "Expérience exigée" trop vague pour être affichée telle quelle
+                # (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit rien de la
+                # durée réellement demandée) — fusionnée dans "Non précisé" plutôt que
+                # retirée : la supprimer purement et simplement faisait perdre ces offres du
+                # total affiché, créant un écart avec le total de "Répartition par type de
+                # contrat" (qui, lui, compte bien TOUTES les offres). La fusion garde les deux
+                # totaux alignés.
+                df_experience_fusion = df_experience.copy()
+                df_experience_fusion["experience"] = df_experience_fusion["experience"].replace(
+                    {"Expérience exigée": "Non précisé"}
+                )
+                df_experience_tri = (
+                    df_experience_fusion.groupby("experience", as_index=False)["nombre_offres"]
+                    .sum()
+                    .sort_values("nombre_offres", ascending=False)
+                )
+                try:
+                    fig_experience = px.treemap(
+                        df_experience_tri,
+                        path=[px.Constant(""), "experience"],
+                        values="nombre_offres",
+                        color="nombre_offres",
+                        color_continuous_scale="Tealgrn",
+                    )
+                    fig_experience.update_traces(
+                        textinfo="label+value", texttemplate="%{label}<br>%{value}",
+                        marker=dict(line=dict(width=2, color="#0e1117")),
+                        # Infobulle réduite au strict nécessaire (libellé + nombre d'offres) —
+                        # par défaut, un treemap Plotly affiche aussi le % du parent, le % de
+                        # la racine et le chemin complet au survol, jugé trop chargé ici.
+                        hovertemplate="%{label}<br>%{value} offre(s)<extra></extra>",
+                    )
+                    fig_experience.update_layout(
+                        height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_experience, use_container_width=True)
+                except Exception:
+                    st.dataframe(
+                        df_experience_tri.rename(columns={"experience": "Expérience", "nombre_offres": "Nombre d'offres"}),
+                        use_container_width=True, hide_index=True,
                     )
 
             # --- Calcul silencieux expérience/salaire, PAS affiché ici (jauge ci-dessus
