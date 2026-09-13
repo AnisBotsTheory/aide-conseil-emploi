@@ -922,7 +922,6 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
         ("📧", libelles["email"], data.get("email")),
         ("📱", libelles["telephone"], data.get("telephone")),
         ("🏠", libelles["adresse"], data.get("adresse")),
-        ("🚗", libelles["permis"], data.get("permis")),
     ]:
         if valeur:
             p = cell_bandeau.add_paragraph()
@@ -933,6 +932,19 @@ def generer_cv_docx(data, theme_nom="🔵 Bleu classique", photo_bytes=None, aff
             run_label.font.color.rgb = RGBColor.from_string(bandeau_texte)
             run_val = p.add_run(valeur)
             run_val.font.size = _pt(10, echelle)
+
+    # Permis de conduire : sur UNE SEULE ligne avec son libellé ("🚗 Permis de
+    # conduire B"), contrairement aux autres champs de contact ci-dessus qui
+    # affichent le libellé et la valeur sur deux lignes — demande explicite.
+    if data.get("permis"):
+        p_permis = cell_bandeau.add_paragraph()
+        p_permis.paragraph_format.space_after = _pt(6, echelle)
+        run_label_permis = p_permis.add_run(f"🚗 {libelles['permis']} ")
+        run_label_permis.bold = True
+        run_label_permis.font.size = _pt(9, echelle)
+        run_label_permis.font.color.rgb = RGBColor.from_string(bandeau_texte)
+        run_val_permis = p_permis.add_run(data["permis"])
+        run_val_permis.font.size = _pt(10, echelle)
 
     # --- Langues ---
     if data.get("langues"):
@@ -1294,11 +1306,6 @@ def _section_suggestions_competences(fonction_analyse_competences):
 
     postes_choisis = st.session_state.get("cv_postes_recherche", [])
     if not postes_choisis:
-        st.info(
-            "👉 Renseigne un poste ci-dessus et choisis au moins une suggestion pour enrichir "
-            "automatiquement ces listes avec les compétences réellement demandées sur ce métier "
-            "(sinon, une liste générique de base reste disponible ci-dessous)."
-        )
         return
 
     departement_cv = st.session_state.get("cv_departement")
@@ -1440,8 +1447,6 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         col_apercu, _ = st.columns([1, 4])
         col_apercu.image(photo_uploadee, width=100)
 
-    afficher_drapeaux = st.checkbox("🏳️ Afficher un drapeau à côté des langues reconnues", value=True, key="cv_drapeaux")
-
     with st.expander("👤 Informations générales", expanded=True):
         c1, c2 = st.columns(2)
         prenom = c1.text_input("Prénom", key="cv_prenom")
@@ -1552,14 +1557,8 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
         )
 
     with st.expander("💡 Compétences"):
-        st.caption("ℹ️ Ces éléments apparaîtront sur votre CV, dans le bandeau latéral.")
         _section_suggestions_competences(fonction_analyse_competences)
 
-        st.markdown("###### 🧠 Compétences")
-        st.caption(
-            "Qualités et savoir-être valorisés pour ce poste (ex: esprit d'équipe, rigueur, "
-            "force de proposition...)."
-        )
         competences = _champ_liste_avec_ajout(
             "Sélectionne ou ajoute tes compétences", "cv_competences", _DEFAUTS_COMPETENCES
         )
@@ -1638,7 +1637,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "email": email,
                 "telephone": telephone,
                 "adresse": adresse,
-                "permis": ", ".join(permis_choisis) if permis_choisis else "",
+                "permis": ", ".join(f"Permis {p}" for p in permis_choisis) if permis_choisis else "",
                 "profil": profil,
                 "disponibilite": disponibilite,
                 "experiences": st.session_state.cv_experiences,
@@ -1660,7 +1659,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                     data,
                     theme_nom=theme_choisi,
                     photo_bytes=photo_bytes,
-                    afficher_drapeaux=afficher_drapeaux,
+                    afficher_drapeaux=True,
                     langue=langue_choisie,
                 )
             st.success("Votre CV est prêt !")
