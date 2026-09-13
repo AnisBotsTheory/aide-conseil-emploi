@@ -551,9 +551,11 @@ with tab_profil:
 
             with sous_tab_recruteurs:
                 st.markdown(
-                    "Découvrez les entreprises qui recrutent **actuellement** pour des "
-                    "candidatures ciblées, et celles avec un **fort potentiel de recrutement** "
-                    "sur les 6 prochains mois pour des candidatures spontanées."
+                    "**Gagnez en pertinence dans vos candidatures.** Découvrez les "
+                    "entreprises qui recrutent "
+                    "**actuellement** pour des candidatures ciblées, et celles avec un "
+                    "**fort potentiel de recrutement** sur les 6 prochains mois pour des "
+                    "candidatures spontanées."
                 )
                 with st.spinner("Récupération des recruteurs actifs..."):
                     _, total_echantillon_recruteurs, _, _, df_entreprises, _ = offres_par_ville_elargi(
@@ -678,9 +680,10 @@ with tab_profil:
 
             with sous_tab_certifs:
                 st.markdown(
-                    "Découvrez les **compétences**, **missions** et **certifications** les "
-                    "plus demandées pour ce métier, pour adapter votre CV et vos entretiens "
-                    "aux attentes réelles des recruteurs."
+                    "**Validez votre expertise face aux demandes des recruteurs "
+                    "actuels.** Découvrez les **compétences**, **missions** et "
+                    "**certifications** les plus demandées pour ce métier, pour adapter votre "
+                    "CV et vos entretiens aux attentes réelles des recruteurs."
                 )
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
@@ -765,9 +768,10 @@ with tab_profil:
 
             with sous_tab_villes:
                 st.markdown(
-                    "Visualisez où se concentrent les offres pour ce métier et si votre "
-                    "département est **économiquement dynamique**, pour orienter votre "
-                    "recherche vers les zones les plus favorables."
+                    "**Calibrez votre recherche et gagnez du temps.** Visualisez où se "
+                    "concentrent les offres pour ce "
+                    "métier et si votre département est **économiquement dynamique**, pour "
+                    "orienter votre recherche vers les zones les plus favorables."
                 )
 
                 # --- Classement des villes (remplace la carte) ---
@@ -1288,9 +1292,9 @@ with tab_avance:
         )
     else:
         st.caption(
-            "Détails complémentaires sur le même échantillon d'offres que l'onglet Analyse "
-            "principale : répartition par type de contrat, fourchette de salaire, niveau "
-            "d'expérience demandé."
+            "**Négociez en confiance.** Détails complémentaires sur le même échantillon "
+            "d'offres que l'onglet Analyse principale : répartition par type de contrat, "
+            "fourchette de salaire, niveau d'expérience demandé."
         )
         code_rome_actif = st.session_state["code_rome_choisi"]
         codes_rome_choisis_avance = st.session_state.get("codes_rome_choisis", [])
@@ -1657,9 +1661,9 @@ with tab_avance:
 # ---------------------------------------------------------------------------
 with tab_evenements:
     st.caption(
-        "Forums, salons, ateliers et job dating à venir (90 prochains jours), repérés via "
-        "l'API « Mes événements emploi » de France Travail — filtrés sur le grand domaine du "
-        "poste recherché et ton département."
+        "**Ne manquez rien.** Forums, salons, ateliers et job dating à venir (90 prochains "
+        "jours), repérés via l'API « Mes événements emploi » de France Travail — filtrés "
+        "sur le grand domaine du poste recherché et ton département."
     )
 
     postes_cv_evt = st.session_state.get("cv_postes_recherche", [])
