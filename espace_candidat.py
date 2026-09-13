@@ -995,17 +995,15 @@ with tab_profil:
                             unsafe_allow_html=True,
                         )
 
-                st.write("")
-                st.write("")
-                st.markdown("##### 🛠️ Tâches/missions")
-                st.caption("Tes expériences couvrent-elles les missions attendues ?")
                 # --- Les actions/missions les plus demandées apparaissent-elles dans le texte
                 # des expériences du CV ? ---
                 # Garde-fou : cette comparaison n'a de sens que si au moins une expérience a un
                 # intitulé de poste qui correspond (normalisé) au poste recherché — sinon on
                 # comparerait le texte d'un métier différent aux tâches demandées pour le poste
                 # ciblé, ce qui induirait en erreur (ex: viser "Chef de projet" avec une seule
-                # expérience de "Serveur" ne devrait pas signaler un manque de missions).
+                # expérience de "Serveur" ne devrait pas signaler un manque de missions). Calculé
+                # AVANT tout affichage : si la condition n'est pas remplie, TOUTE la section
+                # (titre et légende inclus) reste masquée, pas seulement son contenu.
                 postes_recherche_normalises_action = {_normaliser_texte(p) for p in postes_cv}
                 if titre_libre_cv:
                     postes_recherche_normalises_action.add(_normaliser_texte(titre_libre_cv))
@@ -1022,6 +1020,11 @@ with tab_profil:
                 # Matching approximatif (rapidfuzz), pas une recherche de phrase exacte : les
                 # candidats reformulent presque toujours avec leurs propres mots.
                 if experiences_alignees_action and df_comp_apercu is not None and not df_comp_apercu.empty:
+                    st.write("")
+                    st.write("")
+                    st.markdown("##### 🛠️ Tâches/missions")
+                    st.caption("Tes expériences couvrent-elles les missions attendues ?")
+
                     # Seul le texte des expériences ALIGNÉES avec le poste recherché est
                     # comparé — une expérience passée dans un métier différent n'a aucune
                     # raison de couvrir les tâches demandées pour le poste ciblé.
