@@ -54,10 +54,42 @@ st.markdown(
         max-width: 75% !important;
         margin: 0 !important;
         align-self: flex-start !important;
+        padding-top: 2rem !important;
     }
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+# La règle CSS ci-dessus (padding-top sur .block-container) ne suffit pas à elle
+# seule : la marge par défaut de Streamlit en haut du contenu est en réalité
+# posée sur un élément et/ou avec une spécificité qu'une simple règle externe
+# n'écrase pas de façon fiable selon les versions de Streamlit. On force donc la
+# valeur directement en JavaScript sur l'élément réellement rendu, ce qui
+# l'emporte quoi qu'il arrive (même technique que les autres ajustements visuels
+# de cette page, ex. l'effet lumineux sur l'onglet "Par où commencer").
+components.html(
+    """
+    <script>
+    (function() {
+        function reduireMargeHautContenu() {
+            const doc = window.parent.document;
+            const conteneur = doc.querySelector('.block-container');
+            if (conteneur) {
+                conteneur.style.setProperty('padding-top', '2rem', 'important');
+            }
+        }
+        reduireMargeHautContenu();
+        // Quelques recalculs différés : le conteneur peut ne pas encore exister au
+        // tout premier rendu, ou Streamlit peut réappliquer son style par défaut
+        // juste après (rerun, changement d'onglet...).
+        setTimeout(reduireMargeHautContenu, 300);
+        setTimeout(reduireMargeHautContenu, 1000);
+        setTimeout(reduireMargeHautContenu, 2500);
+    })();
+    </script>
+    """,
+    height=0,
 )
 
 # ---------------------------------------------------------------------------
@@ -125,7 +157,7 @@ if _CHEMIN_BANNIERE_DROITE.exists():
             const MARGE_HAUT = 70;             // réserve la barre d'outils Streamlit (Share/étoile/crayon)
             const MARGE_BAS = 70;              // réserve le bouton "Manage app" (Streamlit Community Cloud)
             const LARGEUR_MIN = 30;            // en dessous, pas assez de place : on masque plutôt que déformer
-            const HAUTEUR_BANNIERE_CIBLE = 260; // "taille réduite" cible, jamais dépassée même si la place ne manque pas
+            const HAUTEUR_BANNIERE_CIBLE = 620; // taille cible, jamais dépassée même si la place ne manque pas
 
             function positionnerBanniereDroite() {
                 const doc = window.parent.document;
@@ -183,28 +215,45 @@ if _CHEMIN_BANNIERE_DROITE.exists():
 
 st.title("🎯 Aide, Conseil, Emploi")
 st.markdown(
-    "<p style='margin-bottom: 0;'>Orientation des chercheurs d'emploi selon les tendances "
-    "du marché.</p>",
+    "<p style='margin: 0 0 0.3rem 0;'>Orientation des chercheurs d'emploi selon les "
+    "tendances du marché.</p>"
+    "<p style='margin: 0; font-size: 0.875rem; color: rgba(250,250,250,0.6);'>"
+    "Cette application est un outil de <b>conseil personnalisé</b>, qui s'appuie sur des "
+    "techniques de <b>Business Intelligence</b> et utilise les données de "
+    "<b>France Travail</b> afin d'analyser les besoins liés au poste et au département "
+    "sélectionnés, pour vous orienter et consolider votre stratégie de recherche "
+    "d'emploi.</p>",
     unsafe_allow_html=True,
 )
 
 with st.sidebar:
+    st.markdown("### ✨ Les *PLUS* de ACE!")
+    st.markdown("#### Les 4 essentiels")
     st.caption(
-        "<b>Le parcours complet de l'application :</b><br><br>"
-        "🧾 <b>Créer mon CV</b> — construisez votre CV et définissez le poste que vous visez "
-        "(renseignez d'abord votre département, puis le poste).<br><br>"
-        "🎯 <b>Analyse principale</b> — se lance automatiquement dès que votre poste est "
-        "renseigné : tes points d'attention comme point de départ, top recruteurs à "
-        "démarcher, compétences et tâches/missions les plus demandées, et dynamisme du "
-        "département.<br><br>"
-        "📊 <b>Compléments d'analyse</b> — pour aller plus loin : types de contrat, fourchette "
-        "de salaire, niveau d'expérience demandé.<br><br>"
-        "📅 <b>Événements</b> — forums, salons et job dating à venir sur votre métier et votre "
-        "département.",
+        "🧾 <b>Créer mon CV</b> — <b>un CV professionnel aligné sur les critères "
+        "Europass</b>, prêt en quelques minutes. Déjà un CV ? Renseignez quand même votre "
+        "département et le poste recherché : ce sont ces deux informations qui "
+        "déclenchent l'analyse personnalisée ci-dessous."
+        "<br><br>"
+        "🎯 <b>Analyse principale</b> — <b>sachez précisément où concentrer vos "
+        "efforts</b> : les entreprises qui recrutent près de chez vous, ce que les "
+        "recruteurs attendent vraiment, et si le marché est porteur dans votre "
+        "région.<br><br>"
+        "📊 <b>Compléments d'analyse</b> — <b>négociez en confiance</b> : découvrez les "
+        "salaires réellement proposés et les profils recherchés sur votre métier."
+        "<br><br>"
+        "📅 <b>Événements</b> — <b>ne manquez aucune occasion de rencontrer un recruteur "
+        "en direct</b>, forums et job dating près de chez vous.",
         unsafe_allow_html=True,
     )
 
-st.divider()
+# Séparateur compact fait main (au lieu de st.divider(), dont la marge par défaut est
+# plus large et créait un espace vide disproportionné maintenant que le haut de page a
+# été resserré) — marge réduite et contrôlée directement.
+st.markdown(
+    "<hr style='margin: 0.6rem 0; border-color: rgba(250,250,250,0.15);' />",
+    unsafe_allow_html=True,
+)
 
 tab_cv, tab_profil, tab_avance, tab_evenements = st.tabs(
     [
@@ -313,6 +362,24 @@ def _nom_ville_simplifie(libelle_brut):
     return nom
 
 
+def _lieu_evenement(evenement, departement):
+    """
+    Détermine le libellé de lieu utilisé pour filtrer les événements par ville :
+    la ville normalisée (même fonction que le classement des villes, pour
+    regrouper les variantes d'un même lieu) si l'événement en fournit une,
+    sinon le département de la recherche en repli (tous les événements sont de
+    toute façon déjà filtrés sur ce département côté API, donc ce repli reste
+    cohérent même pour un événement 100% en ligne sans ville précise).
+    Appliqué à TOUS les événements, présentiel ET distanciel — pertinent aussi
+    pour situer l'activité en ligne par rapport à une région/ville donnée.
+    """
+    ville_brute = (evenement.get("ville") or "").strip()
+    if ville_brute:
+        return _nom_ville_simplifie(ville_brute)
+    nom_departement = DEPARTEMENTS_VERS_NOM.get(departement, departement)
+    return f"{nom_departement} (département)"
+
+
 # ---------------------------------------------------------------------------
 # Onglet 0 : Créer mon CV (exécuté en premier : sa synchronisation vers
 # "Métier recherché" doit être en place avant que ce champ ne soit affiché)
@@ -330,26 +397,12 @@ with tab_profil:
         f"https://candidat.francetravail.fr/offres/recherche?motsCles={mots_cles_lien_ft}"
         if mots_cles_lien_ft else "https://candidat.francetravail.fr/offres/recherche"
     )
-    st.caption(
-        "Cette application est un outil de **conseil**, qui s'appuie sur des techniques de "
-        "**Business Intelligence** pour analyser les besoins liés au poste et au département "
-        "sélectionnés, et vous apporter des éléments de décision sur : les entreprises qui "
-        "recrutent près de chez vous, les compétences et le savoir-être demandés, et le "
-        "dynamisme économique de votre département — de quoi construire votre stratégie de "
-        "recherche d'emploi."
-    )
     with st.expander("ℹ️ À propos de cette analyse"):
         st.caption(
             "Cette application n'a pas vocation à être une plateforme de recrutement. Pour "
             "consulter et postuler aux offres correspondant à votre recherche, rendez-vous sur "
             f"[candidat.francetravail.fr]({lien_recherche_ft}) (pensez à filtrer par votre "
             "département une fois sur place)."
-        )
-        st.caption(
-            "📎 Les données utilisées proviennent des offres publiées sur France Travail. Le "
-            "total affiché peut toutefois différer de celui obtenu directement sur le site "
-            "(recherche par code ROME et fenêtre glissante ici, contre mots-clés libres et "
-            "offres actives en temps réel sur France Travail)."
         )
     # Réduit la taille du libellé de cet expander précis, pour qu'il reste visuellement en
     # retrait par rapport aux intitulés des sous-onglets ("Tes points d'attention", "Top
@@ -498,9 +551,11 @@ with tab_profil:
 
             with sous_tab_recruteurs:
                 st.markdown(
-                    "Deux façons de repérer une entreprise à contacter pour ce métier : celles "
-                    "qui recrutent **déjà actuellement**, et celles qui ont un **fort potentiel** "
-                    "d'embauche même sans offre publiée."
+                    "**Gagnez en pertinence dans vos candidatures.** Découvrez les "
+                    "entreprises qui recrutent "
+                    "**actuellement** pour des candidatures ciblées, et celles avec un "
+                    "**fort potentiel de recrutement** sur les 6 prochains mois pour des "
+                    "candidatures spontanées."
                 )
                 with st.spinner("Récupération des recruteurs actifs..."):
                     _, total_echantillon_recruteurs, _, _, df_entreprises, _ = offres_par_ville_elargi(
@@ -625,8 +680,10 @@ with tab_profil:
 
             with sous_tab_certifs:
                 st.markdown(
-                    "Besoin métier sur les offres identifiées : certifications, compétences "
-                    "et tâches/missions les plus citées dans les offres."
+                    "**Validez votre expertise face aux demandes des recruteurs "
+                    "actuels.** Découvrez les **compétences**, **missions** et "
+                    "**certifications** les plus demandées pour ce métier, pour adapter votre "
+                    "CV et vos entretiens aux attentes réelles des recruteurs."
                 )
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
@@ -634,39 +691,10 @@ with tab_profil:
                     df_comp, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
                     st.caption(
                         "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
-                        f"Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
+                        "Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
                         f"**{nb_total_suggestions} offre(s)**."
                     )
-                    if df_certifs.empty:
-                        st.info("Aucune certification identifiée dans les offres de cet échantillon.")
-                    else:
-                        st.dataframe(
-                            df_certifs.drop(columns=["pourcentage"]).rename(
-                                columns={"libelle": "Certification", "nombre_offres": "Occurrences"}
-                            ),
-                            use_container_width=True,
-                            hide_index=True,
-                        )
 
-                    with st.expander("🔧 Vérifier un résultat suspect (temporaire)"):
-                        st.caption(
-                            "Si une certification semble déplacée pour ce métier (ex: « ADR » sur "
-                            "un poste de management), tape son terme exact ci-dessous — affiche les "
-                            "extraits de texte réels où il matche, pour distinguer un vrai signal "
-                            "d'un faux positif (ex: « adr » à l'intérieur de « cadre »)."
-                        )
-                        terme_a_verifier = st.text_input(
-                            "Terme à vérifier (ex: adr)", key="terme_diagnostic_certif"
-                        )
-                        if st.button("Vérifier", key="btn_diagnostic_terme_certif") and terme_a_verifier.strip():
-                            with st.spinner("Recherche des occurrences en cours..."):
-                                resultats_verif = diagnostiquer_terme_certification(
-                                    terme_a_verifier.strip(), codes_resolus_cv, departement_actif,
-                                    mots_cles_libres=titre_libre_cv,
-                                )
-                            st.json(resultats_verif)
-
-                    st.divider()
                     st.markdown("##### 🧠 Compétences les plus demandées")
                     st.caption(
                         "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
@@ -702,10 +730,48 @@ with tab_profil:
                             hide_index=True,
                         )
 
+                    st.divider()
+                    st.markdown("##### 🎓 Certifications les plus demandées")
+                    st.caption(
+                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
+                        f"Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
+                        f"**{nb_total_suggestions} offre(s)**."
+                    )
+                    if df_certifs.empty:
+                        st.info("Aucune certification identifiée dans les offres de cet échantillon.")
+                    else:
+                        st.dataframe(
+                            df_certifs.drop(columns=["pourcentage"]).rename(
+                                columns={"libelle": "Certification", "nombre_offres": "Occurrences"}
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                    with st.expander("🔧 Vérifier un résultat suspect (temporaire)"):
+                        st.caption(
+                            "Si une certification semble déplacée pour ce métier (ex: « ADR » sur "
+                            "un poste de management), tape son terme exact ci-dessous — affiche les "
+                            "extraits de texte réels où il matche, pour distinguer un vrai signal "
+                            "d'un faux positif (ex: « adr » à l'intérieur de « cadre »)."
+                        )
+                        terme_a_verifier = st.text_input(
+                            "Terme à vérifier (ex: adr)", key="terme_diagnostic_certif"
+                        )
+                        if st.button("Vérifier", key="btn_diagnostic_terme_certif") and terme_a_verifier.strip():
+                            with st.spinner("Recherche des occurrences en cours..."):
+                                resultats_verif = diagnostiquer_terme_certification(
+                                    terme_a_verifier.strip(), codes_resolus_cv, departement_actif,
+                                    mots_cles_libres=titre_libre_cv,
+                                )
+                            st.json(resultats_verif)
+
             with sous_tab_villes:
                 st.markdown(
-                    "Où se trouvent les offres pour ce métier, et comment se porte "
-                    "économiquement votre département par rapport à d'autres."
+                    "**Calibrez votre recherche et gagnez du temps.** Visualisez où se "
+                    "concentrent les offres pour ce "
+                    "métier et si votre département est **économiquement dynamique**, pour "
+                    "orienter votre recherche vers les zones les plus favorables."
                 )
 
                 # --- Classement des villes (remplace la carte) ---
@@ -931,60 +997,8 @@ with tab_profil:
 
                 st.write("")
                 st.write("")
-                st.markdown("##### 🛠️ Tâches/missions")
-                st.caption("Tes expériences couvrent-elles les missions attendues ?")
-                # --- Les actions/missions les plus demandées apparaissent-elles dans le texte
-                # des expériences du CV ? ---
-                # Contrairement aux compétences (des tags courts, adaptés à une liste à cocher),
-                # les actions/missions du référentiel France Travail sont formulées comme des
-                # tâches concrètes ("Piloter un budget") — plus naturel de vérifier si elles
-                # transparaissent DANS le texte des expériences que de les cocher séparément.
-                # Matching approximatif (rapidfuzz), pas une recherche de phrase exacte : les
-                # candidats reformulent presque toujours avec leurs propres mots.
-                if df_comp_apercu is not None and not df_comp_apercu.empty:
-                    texte_experiences = " ".join(
-                        (exp.get("description") or "") for exp in st.session_state.get("cv_experiences", [])
-                    ).strip()
-
-                    nb_actions_affichees += 1
-                    if not texte_experiences:
-                        st.caption(
-                            "💡 Aucune expérience avec description de missions renseignée — "
-                            "impossible de vérifier si tu couvres les tâches/missions les plus "
-                            "demandées. <br>👉 Ajoute au moins une expérience avec ses missions dans "
-                            "l'onglet **🧾 Créer mon CV**, puis consulte l'onglet **🧠 Expertise** "
-                            "pour voir lesquelles sont les plus demandées.",
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        SEUIL_MATCH_FLOU = 55  # matching approximatif, pas une phrase exacte
-                        texte_experiences_normalise = texte_experiences.lower()
-                        top_actions = df_comp_apercu["libelle"].head(8).tolist()
-                        nb_identifiees = sum(
-                            1 for action in top_actions
-                            if fuzz.partial_ratio(action.lower(), texte_experiences_normalise) >= SEUIL_MATCH_FLOU
-                        )
-                        if nb_identifiees == len(top_actions):
-                            st.caption(
-                                "💡 Bravo, tes expériences couvrent déjà (au moins "
-                                "approximativement) les tâches/missions les plus demandées pour "
-                                "ce métier."
-                            )
-                        else:
-                            st.caption(
-                                f"💡 {nb_identifiees}/{len(top_actions)} des tâches/missions les "
-                                "plus demandées semblent déjà apparaître dans tes expériences "
-                                "(vérification approximative, par ressemblance de texte). <br>👉 "
-                                "Complète tes descriptions de mission dans l'onglet **🧾 Créer "
-                                "mon CV**, et consulte l'onglet **🧠 Expertise** pour voir la "
-                                "liste complète.",
-                                unsafe_allow_html=True,
-                            )
-
-                st.write("")
-                st.write("")
-                st.markdown("##### 🏢 Recruteurs")
-                st.caption("Des entreprises à contacter ?")
+                st.markdown("##### 🏢 Candidatures")
+                st.caption("Où postuler ?")
                 # Réutilise directement df_entreprises déjà récupéré dans le sous-onglet
                 # "Top Recruteurs" ci-dessus (même appel, mêmes paramètres) plutôt que de
                 # relancer un second appel identique. "Nom de l'entreprise anonymisé" exclu du
@@ -1209,9 +1223,9 @@ with tab_avance:
         )
     else:
         st.caption(
-            "Détails complémentaires sur le même échantillon d'offres que l'onglet Analyse "
-            "principale : répartition par type de contrat, fourchette de salaire, niveau "
-            "d'expérience demandé."
+            "**Négociez en confiance.** Détails complémentaires sur le même échantillon "
+            "d'offres que l'onglet Analyse principale : répartition par type de contrat, "
+            "fourchette de salaire, niveau d'expérience demandé."
         )
         code_rome_actif = st.session_state["code_rome_choisi"]
         codes_rome_choisis_avance = st.session_state.get("codes_rome_choisis", [])
@@ -1340,11 +1354,20 @@ with tab_avance:
             if df_experience.empty:
                 st.info("Aucune donnée de niveau d'expérience disponible pour ces critères.")
             else:
-                # Catégorie "Expérience exigée" retirée à la demande : trop vague pour être
-                # exploitable (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit
-                # rien de la durée réellement demandée).
+                # Catégorie "Expérience exigée" trop vague pour être affichée telle quelle
+                # (contrairement à "Débutant accepté" ou "2 An(s)", elle ne dit rien de la
+                # durée réellement demandée) — fusionnée dans "Non précisé" plutôt que
+                # retirée : la supprimer purement et simplement faisait perdre ces offres du
+                # total affiché, créant un écart avec le total de "Répartition par type de
+                # contrat" (qui, lui, compte bien TOUTES les offres). La fusion garde les deux
+                # totaux alignés.
+                df_experience_fusion = df_experience.copy()
+                df_experience_fusion["experience"] = df_experience_fusion["experience"].replace(
+                    {"Expérience exigée": "Non précisé"}
+                )
                 df_experience_tri = (
-                    df_experience[df_experience["experience"] != "Expérience exigée"]
+                    df_experience_fusion.groupby("experience", as_index=False)["nombre_offres"]
+                    .sum()
                     .sort_values("nombre_offres", ascending=False)
                 )
                 try:
@@ -1439,14 +1462,6 @@ with tab_avance:
                     if not toutes_valeurs:
                         st.info("Salaires indiqués dans un format non reconnu, jauge non disponible.")
                     else:
-                        if nb_valeurs_exclues:
-                            st.caption(
-                                f"ℹ️ {nb_valeurs_exclues} montant(s) hors de la plage "
-                                f"{SEUIL_SALAIRE_PLAUSIBLE_MIN:,.0f} € - {SEUIL_SALAIRE_PLAUSIBLE_MAX:,.0f} €/an "
-                                "exclu(s) de la jauge (probable indemnité d'alternance/stage, ou "
-                                "montant mal annualisé, plutôt qu'un salaire de poste réaliste)."
-                                .replace(",", " ")
-                            )
                         # Pas d'arrondi calé dynamiquement sur l'étendue réelle des valeurs,
                         # plutôt qu'un arrondi fixe au 5 000 € — avec beaucoup d'offres, un pas
                         # fixe pouvait produire des dizaines de graduations illisibles et
@@ -1513,11 +1528,7 @@ with tab_avance:
                     # d'un gros st.metric qui lui donnait plus de poids visuel que ce n'est
                     # qu'un indicateur de taille d'échantillon).
                     st.caption(
-                        f"📎 Source : **{nb_avec_salaire} offre(s)** sur {nb_total_offres} indiquent "
-                        "un salaire, tous types de contrat confondus — jauge ci-dessus calculée "
-                        "uniquement sur les offres CDI parmi elles, montants annualisés (un salaire "
-                        "mensuel est multiplié par 12 ; un salaire horaire est exclu, faute de "
-                        "pouvoir le convertir en annuel de façon fiable)."
+                        f"📎 Source : **{len(df_salaires_cdi)} offre(s) CDI** avec salaire indiqué."
                     )
 
             # --- Calcul silencieux expérience/salaire, PAS affiché ici (jauge ci-dessus
@@ -1578,9 +1589,9 @@ with tab_avance:
 # ---------------------------------------------------------------------------
 with tab_evenements:
     st.caption(
-        "Forums, salons, ateliers et job dating à venir (90 prochains jours), repérés via "
-        "l'API « Mes événements emploi » de France Travail — filtrés sur le grand domaine du "
-        "poste recherché et ton département."
+        "**Ne manquez rien.** Forums, salons, ateliers et job dating à venir (90 prochains "
+        "jours), repérés via l'API « Mes événements emploi » de France Travail — filtrés "
+        "sur le grand domaine du poste recherché et ton département."
     )
 
     postes_cv_evt = st.session_state.get("cv_postes_recherche", [])
@@ -1647,24 +1658,42 @@ with tab_evenements:
                     f"domaine du poste recherché en compte {total_grand_domaine} au total sur la "
                     "période, mais couvre bien d'autres métiers que celui recherché."
                 )
-            df_evenements = pd.DataFrame(
-                [
-                    {
-                        "Titre": e.get("titre") or "N/C",
-                        "Date": (e.get("dateEvenement") or "")[:10],
-                        "Ville": e.get("ville") or "N/C",
-                        "Type": e.get("type") or "N/C",
-                        "Modalités": ", ".join(e.get("modalites") or []) or "N/C",
-                        "Lien": e.get("urlDetailEvenement") or "",
-                    }
-                    for e in evenements
-                ]
+
+            # Filtre ville — appliqué à TOUS les événements (présentiel ET distanciel,
+            # cf. _lieu_evenement) : la liste déroulante ne propose que les lieux
+            # réellement présents dans les résultats de cette recherche, pas un
+            # référentiel générique de villes. Filtrage entièrement côté client, sur
+            # les événements déjà récupérés — pas de nouvel appel API.
+            for e in evenements:
+                e["_lieu_filtre"] = _lieu_evenement(e, departement_evt)
+            lieux_disponibles = sorted({e["_lieu_filtre"] for e in evenements})
+            ville_choisie = st.selectbox(
+                "Ville", ["Toutes les villes"] + lieux_disponibles, key="evt_ville",
             )
-            st.dataframe(
-                df_evenements,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Lien": st.column_config.LinkColumn("Lien", display_text="Voir la fiche")
-                },
-            )
+            if ville_choisie != "Toutes les villes":
+                evenements = [e for e in evenements if e["_lieu_filtre"] == ville_choisie]
+
+            if not evenements:
+                st.info(f"Aucun événement trouvé pour « {ville_choisie} » sur cette période.")
+            else:
+                df_evenements = pd.DataFrame(
+                    [
+                        {
+                            "Titre": e.get("titre") or "N/C",
+                            "Date": (e.get("dateEvenement") or "")[:10],
+                            "Ville": e.get("ville") or "N/C",
+                            "Type": e.get("type") or "N/C",
+                            "Modalités": ", ".join(e.get("modalites") or []) or "N/C",
+                            "Lien": e.get("urlDetailEvenement") or "",
+                        }
+                        for e in evenements
+                    ]
+                )
+                st.dataframe(
+                    df_evenements,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Lien": st.column_config.LinkColumn("Lien", display_text="Voir la fiche")
+                    },
+                )
