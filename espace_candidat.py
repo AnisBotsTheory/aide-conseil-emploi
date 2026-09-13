@@ -551,9 +551,9 @@ with tab_profil:
 
             with sous_tab_recruteurs:
                 st.markdown(
-                    "Deux façons de repérer une entreprise à contacter pour ce métier : celles "
-                    "qui recrutent **déjà actuellement**, et celles qui ont un **fort potentiel** "
-                    "d'embauche même sans offre publiée."
+                    "Découvrez les entreprises qui recrutent **actuellement** pour des "
+                    "candidatures ciblées, et celles avec un **fort potentiel de recrutement** "
+                    "sur les 6 prochains mois pour des candidatures spontanées."
                 )
                 with st.spinner("Récupération des recruteurs actifs..."):
                     _, total_echantillon_recruteurs, _, _, df_entreprises, _ = offres_par_ville_elargi(
@@ -678,8 +678,9 @@ with tab_profil:
 
             with sous_tab_certifs:
                 st.markdown(
-                    "Besoin métier sur les offres identifiées : certifications, compétences "
-                    "et tâches/missions les plus citées dans les offres."
+                    "Découvrez les **compétences**, **missions** et **certifications** les "
+                    "plus demandées pour ce métier, pour adapter votre CV et vos entretiens "
+                    "aux attentes réelles des recruteurs."
                 )
                 if "cv_suggestions_apercu" not in st.session_state:
                     st.info("Aucune suggestion disponible pour l'instant.")
@@ -687,39 +688,10 @@ with tab_profil:
                     df_comp, _, _, df_certifs, df_savoir_etre, nb_total_suggestions = st.session_state["cv_suggestions_apercu"]
                     st.caption(
                         "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
-                        f"Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
+                        "Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
                         f"**{nb_total_suggestions} offre(s)**."
                     )
-                    if df_certifs.empty:
-                        st.info("Aucune certification identifiée dans les offres de cet échantillon.")
-                    else:
-                        st.dataframe(
-                            df_certifs.drop(columns=["pourcentage"]).rename(
-                                columns={"libelle": "Certification", "nombre_offres": "Occurrences"}
-                            ),
-                            use_container_width=True,
-                            hide_index=True,
-                        )
 
-                    with st.expander("🔧 Vérifier un résultat suspect (temporaire)"):
-                        st.caption(
-                            "Si une certification semble déplacée pour ce métier (ex: « ADR » sur "
-                            "un poste de management), tape son terme exact ci-dessous — affiche les "
-                            "extraits de texte réels où il matche, pour distinguer un vrai signal "
-                            "d'un faux positif (ex: « adr » à l'intérieur de « cadre »)."
-                        )
-                        terme_a_verifier = st.text_input(
-                            "Terme à vérifier (ex: adr)", key="terme_diagnostic_certif"
-                        )
-                        if st.button("Vérifier", key="btn_diagnostic_terme_certif") and terme_a_verifier.strip():
-                            with st.spinner("Recherche des occurrences en cours..."):
-                                resultats_verif = diagnostiquer_terme_certification(
-                                    terme_a_verifier.strip(), codes_resolus_cv, departement_actif,
-                                    mots_cles_libres=titre_libre_cv,
-                                )
-                            st.json(resultats_verif)
-
-                    st.divider()
                     st.markdown("##### 🧠 Compétences les plus demandées")
                     st.caption(
                         "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
@@ -755,10 +727,47 @@ with tab_profil:
                             hide_index=True,
                         )
 
+                    st.divider()
+                    st.markdown("##### 🎓 Certifications les plus demandées")
+                    st.caption(
+                        "ℹ️ Résultat de la recherche sur des offres réelles publiées sur France "
+                        f"Travail pour le(s) poste(s) sélectionné(s). Échantillon : "
+                        f"**{nb_total_suggestions} offre(s)**."
+                    )
+                    if df_certifs.empty:
+                        st.info("Aucune certification identifiée dans les offres de cet échantillon.")
+                    else:
+                        st.dataframe(
+                            df_certifs.drop(columns=["pourcentage"]).rename(
+                                columns={"libelle": "Certification", "nombre_offres": "Occurrences"}
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                    with st.expander("🔧 Vérifier un résultat suspect (temporaire)"):
+                        st.caption(
+                            "Si une certification semble déplacée pour ce métier (ex: « ADR » sur "
+                            "un poste de management), tape son terme exact ci-dessous — affiche les "
+                            "extraits de texte réels où il matche, pour distinguer un vrai signal "
+                            "d'un faux positif (ex: « adr » à l'intérieur de « cadre »)."
+                        )
+                        terme_a_verifier = st.text_input(
+                            "Terme à vérifier (ex: adr)", key="terme_diagnostic_certif"
+                        )
+                        if st.button("Vérifier", key="btn_diagnostic_terme_certif") and terme_a_verifier.strip():
+                            with st.spinner("Recherche des occurrences en cours..."):
+                                resultats_verif = diagnostiquer_terme_certification(
+                                    terme_a_verifier.strip(), codes_resolus_cv, departement_actif,
+                                    mots_cles_libres=titre_libre_cv,
+                                )
+                            st.json(resultats_verif)
+
             with sous_tab_villes:
                 st.markdown(
-                    "Où se trouvent les offres pour ce métier, et comment se porte "
-                    "économiquement votre département par rapport à d'autres."
+                    "Visualisez où se concentrent les offres pour ce métier et si votre "
+                    "département est **économiquement dynamique**, pour orienter votre "
+                    "recherche vers les zones les plus favorables."
                 )
 
                 # --- Classement des villes (remplace la carte) ---
