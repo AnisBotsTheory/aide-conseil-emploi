@@ -218,10 +218,9 @@ st.markdown(
     "<p style='margin: 0 0 0.3rem 0;'>Orientation des chercheurs d'emploi selon les "
     "tendances du marché.</p>"
     "<p style='margin: 0; font-size: 0.875rem; color: rgba(250,250,250,0.6);'>"
-    "Cette application est un outil de <b>conseil personnalisé</b>, qui s'appuie sur des "
-    "techniques de <b>Business Intelligence</b> et utilise les données de "
-    "<b>France Travail</b> afin d'analyser les besoins liés au poste et au département "
-    "sélectionnés, pour vous orienter et consolider votre stratégie de recherche "
+    "Cette application est un outil de <b>conseil personnalisé</b>, combinant "
+    "<b>Business Intelligence</b> et données <b>France Travail</b> afin d'offrir des "
+    "éléments pertinents pour la définition de votre stratégie de recherche "
     "d'emploi.</p>",
     unsafe_allow_html=True,
 )
