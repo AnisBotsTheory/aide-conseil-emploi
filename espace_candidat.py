@@ -1391,7 +1391,8 @@ with tab_avance:
                                     if total_cdi_pour_pourcentage else 0
                                 )
                                 textes_survol.append(
-                                    f"{v:,.0f} € — {pourcentage_bloc}% — {niveaux_texte}".replace(",", " ")
+                                    f"{v:,.0f} € — représente {pourcentage_bloc}% des offres trouvées — "
+                                    f"{niveaux_texte}".replace(",", " ")
                                 )
                             fig_jauge = go.Figure(
                                 go.Bar(
