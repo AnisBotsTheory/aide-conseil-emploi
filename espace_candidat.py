@@ -1376,17 +1376,23 @@ with tab_avance:
                             ]
                             # Chaque bloc représente la tranche menant à sa graduation de DROITE
                             # (ex: le bloc entre 30 000 € et 50 000 € "mène" à 50 000 €) — au
-                            # survol, on affiche le montant, le nombre d'offres, et le(s) 2
-                            # niveaux d'expérience les plus fréquents parmi les offres qui
-                            # composent cette graduation.
+                            # survol, on affiche le montant, la part d'occurrence (% du nombre
+                            # total d'offres CDI avec salaire indiqué — cf. la mention de source
+                            # juste en dessous du graphique), et le(s) 2 niveaux d'expérience les
+                            # plus fréquents parmi les offres qui composent cette graduation.
+                            total_cdi_pour_pourcentage = len(df_salaires_cdi)
                             textes_survol = []
                             for v in valeurs_graduees[1:]:
                                 niveaux_principaux = [
                                     niveau for niveau, _ in experiences_par_graduation.get(v, Counter()).most_common(2)
                                 ]
                                 niveaux_texte = ", ".join(niveaux_principaux) if niveaux_principaux else "Non précisé"
+                                pourcentage_bloc = (
+                                    round(100 * compteur_valeurs[v] / total_cdi_pour_pourcentage, 1)
+                                    if total_cdi_pour_pourcentage else 0
+                                )
                                 textes_survol.append(
-                                    f"{v:,.0f} € — {compteur_valeurs[v]} offre(s) — {niveaux_texte}".replace(",", " ")
+                                    f"{v:,.0f} € — {pourcentage_bloc}% — {niveaux_texte}".replace(",", " ")
                                 )
                             fig_jauge = go.Figure(
                                 go.Bar(
@@ -1449,6 +1455,14 @@ with tab_avance:
                     .sum()
                     .sort_values("nombre_offres", ascending=False)
                 )
+                # Pourcentage plutôt que nombre d'offres brut sur le graphique — le total
+                # exact de l'échantillon reste disponible juste au-dessus ("Échantillon : X
+                # offre(s)"), donc pas besoin de le répéter ici tranche par tranche.
+                total_experience_pour_pourcentage = df_experience_tri["nombre_offres"].sum()
+                df_experience_tri["pourcentage"] = (
+                    (100 * df_experience_tri["nombre_offres"] / total_experience_pour_pourcentage).round(1)
+                    if total_experience_pour_pourcentage else 0
+                )
                 try:
                     fig_experience = px.treemap(
                         df_experience_tri,
@@ -1456,14 +1470,15 @@ with tab_avance:
                         values="nombre_offres",
                         color="nombre_offres",
                         color_continuous_scale="Tealgrn",
+                        custom_data=["pourcentage"],
                     )
                     fig_experience.update_traces(
-                        textinfo="label+value", texttemplate="%{label}<br>%{value}",
+                        texttemplate="%{label}<br>%{customdata[0]}%",
                         marker=dict(line=dict(width=2, color="#0e1117")),
-                        # Infobulle réduite au strict nécessaire (libellé + nombre d'offres) —
+                        # Infobulle réduite au strict nécessaire (libellé + pourcentage) —
                         # par défaut, un treemap Plotly affiche aussi le % du parent, le % de
                         # la racine et le chemin complet au survol, jugé trop chargé ici.
-                        hovertemplate="%{label}<br>%{value} offre(s)<extra></extra>",
+                        hovertemplate="%{label}<br>%{customdata[0]}%<extra></extra>",
                     )
                     fig_experience.update_layout(
                         height=280, margin=dict(t=10, l=10, r=10, b=10), coloraxis_showscale=False,
@@ -1472,7 +1487,9 @@ with tab_avance:
                     st.plotly_chart(fig_experience, use_container_width=True)
                 except Exception:
                     st.dataframe(
-                        df_experience_tri.rename(columns={"experience": "Expérience", "nombre_offres": "Nombre d'offres"}),
+                        df_experience_tri.rename(
+                            columns={"experience": "Expérience", "pourcentage": "Part d'occurrence"}
+                        )[["Expérience", "Part d'occurrence"]],
                         use_container_width=True, hide_index=True,
                     )
 
