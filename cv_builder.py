@@ -1390,9 +1390,9 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
 
     st.header("🧾 Créez votre CV")
     st.caption(
-        "**Comment ça marche ici :** renseignez vos informations ci-dessous (coordonnées, "
-        "expériences, formations, compétences...), choisissez un thème de couleur, puis "
-        "générez votre CV en un clic au format Word."
+        "**Comment ça marche ici :** choisissez un thème de couleur, une langue, "
+        "renseignez vos informations (coordonnées, expériences, formations, "
+        "compétences...), puis générez votre CV en un clic au format Word."
     )
     st.caption(
         "<div style='margin-bottom: 0;'>ℹ️ La structure de ce CV s'inspire du format "
