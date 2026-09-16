@@ -3103,6 +3103,55 @@ def _experience_en_annees(libelle_normalise):
     return None
 
 
+SEUIL_SALAIRE_SENIOR = 48000  # €/an — au-delà, on estime un profil "Senior" quand
+# l'offre ne précise aucune durée d'expérience (seuil fourni par l'utilisateur).
+
+
+def _classer_experience_offre(experience_libelle_brut, libelle_salaire):
+    """
+    Détermine la catégorie d'expérience "effective" d'une offre — utilisée à la
+    fois pour "Répartition par niveau d'expérience" et pour le survol du
+    graphique "Fourchette de salaire proposée", qui doivent refléter EXACTEMENT
+    la même logique de classement (sans ça, les deux graphiques pouvaient se
+    contredire, ex: une même offre comptée "Débutant accepté" d'un côté et
+    "2 An(s)" de l'autre).
+
+    Règles (définies avec l'utilisateur) :
+      1. Si l'offre précise une durée explicite (y compris "Débutant
+         accepté"), tout ce qui représente MOINS de 2 ans (Débutant accepté,
+         1 An(s), les "X Mois" en dessous de 24) est regroupé sous "Débutant
+         accepté" — seules les durées de 2 ans ou plus restent affichées
+         telles quelles (2 An(s), 3 An(s), 5 An(s)...). Une durée explicite
+         connue est TOUJOURS prioritaire sur l'estimation par le salaire
+         ci-dessous, jamais l'inverse.
+      2. Si l'offre NE précise AUCUNE durée d'expérience (champ absent/vide),
+         mais indique un salaire exploitable, le niveau est ESTIMÉ à partir du
+         salaire annualisé : strictement supérieur à SEUIL_SALAIRE_SENIOR
+         (48 000 €/an) -> "Senior (estimé)", sinon -> "Débutant accepté" (fondu
+         dans la même catégorie que les offres explicitement "Débutant
+         accepté" — l'estimation reflète la même réalité : un profil
+         junior/peu exigeant en expérience).
+      3. Si ni l'expérience ni le salaire ne sont exploitables, la catégorie
+         reste "Non précisé".
+    """
+    libelle_normalise = _normaliser_experience_libelle(experience_libelle_brut)
+    if libelle_normalise != "Non précisé":
+        annees = _experience_en_annees(libelle_normalise)
+        if annees is not None and annees < 2:
+            return "Débutant accepté"
+        return libelle_normalise
+
+    borne_min, borne_max = _extraire_bornes_salaire(libelle_salaire) if libelle_salaire else (None, None)
+    valeurs_plausibles = [v for v in (borne_min, borne_max) if v is not None and 15000 <= v <= 200000]
+    if valeurs_plausibles:
+        moyenne_salaire = sum(valeurs_plausibles) / len(valeurs_plausibles)
+        if moyenne_salaire > SEUIL_SALAIRE_SENIOR:
+            return "Senior (estimé)"
+        return "Débutant accepté"
+
+    return "Non précisé"
+
+
 @st.cache_data(ttl=1800)
 def _agreger_contrats_et_salaires(toutes_offres):
     """
@@ -3120,11 +3169,16 @@ def _agreger_contrats_et_salaires(toutes_offres):
         type_contrat = type_contrat_brut.split(" - ")[0].strip()
         compteur_contrats[type_contrat] += 1
 
-        experience_libelle = _normaliser_experience_libelle(offre.get("experienceLibelle"))
-        compteur_experience[experience_libelle] += 1
-
         salaire = offre.get("salaire", {})
         libelle_salaire = salaire.get("libelle") if salaire else None
+
+        # Catégorisation unifiée (cf. _classer_experience_offre) : priorité à une
+        # durée explicite, sinon estimation par le salaire — la même valeur
+        # alimente à la fois "Répartition par niveau" (compteur_experience) et le
+        # détail par offre utilisé pour le survol du graphique de salaire.
+        experience_libelle = _classer_experience_offre(offre.get("experienceLibelle"), libelle_salaire)
+        compteur_experience[experience_libelle] += 1
+
         if libelle_salaire:
             lignes_salaires.append(
                 {
