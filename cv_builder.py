@@ -1637,7 +1637,7 @@ def afficher_generateur_cv(fonction_analyse_competences=None):
                 "email": email,
                 "telephone": telephone,
                 "adresse": adresse,
-                "permis": ", ".join(f"Permis {p}" for p in permis_choisis) if permis_choisis else "",
+                "permis": ", ".join(permis_choisis) if permis_choisis else "",
                 "profil": profil,
                 "disponibilite": disponibilite,
                 "experiences": st.session_state.cv_experiences,
