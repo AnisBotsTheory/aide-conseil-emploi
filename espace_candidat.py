@@ -1492,6 +1492,7 @@ with tab_avance:
                         )[["Expérience", "Part d'occurrence"]],
                         use_container_width=True, hide_index=True,
                     )
+                st.caption(f"📎 Source : {nb_total_offres} offre(s) publiée(s) sur France Travail.")
 
             st.divider()
             st.markdown("#### 📋 Répartition par type de contrat")
@@ -1573,6 +1574,7 @@ with tab_avance:
                     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 )
                 st.plotly_chart(fig_contrats, use_container_width=True)
+                st.caption(f"📎 Source : {nb_total_offres} offre(s) publiée(s) sur France Travail.")
 
             # --- Calcul silencieux expérience/salaire, PAS affiché ici (jauge ci-dessus
             # conservée comme seule visualisation de salaire visible) — sert uniquement à
