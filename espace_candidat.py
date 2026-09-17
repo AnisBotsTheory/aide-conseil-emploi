@@ -1266,6 +1266,13 @@ with tab_avance:
             st.divider()
             st.markdown("#### 💰 Fourchette de salaire proposée")
             st.caption("Les montants réellement affichés sur les offres CDI de cet échantillon.")
+            st.caption(
+                "ℹ️ Remarque : les offres France Travail indiquent soit un intervalle de "
+                "salaire (montant minimum et maximum), soit un niveau unique. Ce graphique "
+                "consolide l'ensemble de ces valeurs, puis les regroupe en paliers arrondis "
+                "(calculés automatiquement pour rester lisibles, environ 9 au maximum) — le "
+                "nombre de blocs peut donc différer du nombre d'offres CDI de l'échantillon."
+            )
             if code_rome_actif != "MULTI" and code_rome_actif != "TOUS":
                 valeur_sal, nom_sal, periode_sal, erreur_sal = salaires_officiels_metier(
                     code_rome_actif, code_territoire=departement_actif, code_type_territoire="DEP",
