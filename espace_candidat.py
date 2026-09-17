@@ -1375,25 +1375,19 @@ with tab_avance:
                             ]
                             # Chaque bloc représente la tranche menant à sa graduation de DROITE
                             # (ex: le bloc entre 30 000 € et 50 000 € "mène" à 50 000 €) — au
-                            # survol, on affiche le montant, la part d'occurrence (% du nombre
+                            # survol, on affiche uniquement la part d'occurrence (% du nombre
                             # total d'offres CDI avec salaire indiqué — cf. la mention de source
-                            # juste en dessous du graphique), et le(s) 2 niveaux d'expérience les
-                            # plus fréquents parmi les offres qui composent cette graduation.
+                            # juste en dessous du graphique) — le montant lui-même reste lisible
+                            # sur l'axe des graduations, pas besoin de le répéter au survol, et
+                            # le niveau d'expérience associé est retiré à la demande.
                             total_cdi_pour_pourcentage = len(df_salaires_cdi)
                             textes_survol = []
                             for v in valeurs_graduees[1:]:
-                                niveaux_principaux = [
-                                    niveau for niveau, _ in experiences_par_graduation.get(v, Counter()).most_common(2)
-                                ]
-                                niveaux_texte = ", ".join(niveaux_principaux) if niveaux_principaux else "Non précisé"
                                 pourcentage_bloc = (
                                     round(100 * compteur_valeurs[v] / total_cdi_pour_pourcentage, 1)
                                     if total_cdi_pour_pourcentage else 0
                                 )
-                                textes_survol.append(
-                                    f"{v:,.0f} € — représente {pourcentage_bloc}% des offres trouvées — "
-                                    f"{niveaux_texte}".replace(",", " ")
-                                )
+                                textes_survol.append(f"représente {pourcentage_bloc}% des offres trouvées")
                             fig_jauge = go.Figure(
                                 go.Bar(
                                     x=segments_largeur,
